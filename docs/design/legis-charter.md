@@ -8,6 +8,7 @@ Legis is the planned fourth Loom product. It is responsible for project change p
 
 Legis owns:
 
+- project change provenance,
 - branch, commit, and pull request context,
 - CI/check context, and
 - governance and attestation context over project change.
