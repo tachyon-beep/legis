@@ -8,12 +8,71 @@ Legis is a **consumer** of Stable Entity Identity (SEI), not the authority.
 - Legis treats SEI as opaque.
 - Legis must never derive, parse, or reinterpret SEI structure.
 
-## Planned Legis responsibilities
+## Conformance obligations (SEI spec §5)
 
-- Attach governance or attestation facts to SEI when the subject is a code entity.
-- Preserve the distinction between identity state and content freshness rather than collapsing them.
-- Degrade honestly if Clarion does not advertise SEI capability.
+These are legis's formal §5 obligations — confirmed, not aspirational:
 
-## Possible future contribution to Clarion
+- **Attestations keyed on SEI.** Governance verdicts, sign-offs, and policy
+  decisions that concern a code entity are keyed on SEI — never on a locator.
+  A locator-keyed binding is legacy to migrate.
+- **Opaque treatment.** SEI is consumed as an opaque token. Legis never
+  inspects its internal structure.
+- **Lineage as audit spine.** `lineage(sei)` (born / locator_changed / moved /
+  orphaned / superseded) maps directly to legis governance lifecycle states.
+  Clarion's append-only lineage log is the authoritative source for identity
+  history that legis surfaces to human reviewers.
+- **Honest degrade.** When Clarion does not advertise the `sei` capability,
+  every verdict row receives an explicit `identity_stable: false` flag. Legis
+  does not silently fall back to locators as stable keys.
+- **Governance gap on orphan.** When `resolve_sei(sei)` returns `alive: false`,
+  legis surfaces a governance gap: the entity had an attestation; its identity
+  is now orphaned; the attestation is in limbo. This relies on the §4
+  `{ alive: false, lineage: [...] }` contract — recorded as legis's *reliance*
+  on existing behavior, not a new requirement.
+- **Two-axis status.** Legis preserves the identity axis (SEI alive / orphaned)
+  and content axis (content_hash fresh / stale) as distinct, never collapsed.
 
-Legis may later provide git-history and rename evidence that Clarion can consume during SEI re-binding, but that does not move identity authority out of Clarion.
+## Planned provider contribution to Clarion
+
+SEI spec §6 names a seam: "if/when `legis` ships a git interface, that signal
+can move behind it with no change to the SEI model." Legis **claims this seam**:
+once the git interface is built, legis will supply the git-rename and history
+events the §3 matcher consumes. This does not move identity authority out of
+Clarion.
+
+The provider interface design should be shaped with legis as the planned first
+implementer, so the seam does not calcify as Clarion-internal before legis ships.
+This is a sequencing request, not a wire-contract change.
+
+## Pre-lock requirements (SEI spec §0.5 intake)
+
+Legis's concrete emerging requirements, for the ratification window before SEI
+locks. See also `docs/superpowers/specs/2026-06-01-legis-roadmap-to-first-class.md`
+Appendix A for the full context.
+
+**REQ-L-01 — Lineage tamper-evidence approach (lock-blocking).**
+SEI §2.2 describes Clarion's lineage as tamper-evidence-**able** but does not
+specify *how*. Legis's protected cell is built on the custody axiom:
+integrity is re-established at the governance boundary, not assumed from the
+store. Before lock, Clarion must commit to one of:
+1. The `lineage(sei)` response carries a hash chain or signature the consumer
+   can verify.
+2. The lineage endpoint is served from an append-only store with no backfill
+   path; transport (TLS) is the custody seal.
+3. Out of scope for SEI v1; each consumer establishes its own integrity layer
+   over polled snapshots.
+
+Option 3 is acceptable to legis for v1 — legis will store a snapshot hash of
+the lineage at each governance decision and detect divergence on re-read. The
+ask is that the approach be *explicit*, not left ambiguous.
+
+**REQ-L-02 — §6 provider seam design (non-blocking; sequencing).**
+The SEI §3 matcher's git-rename detection should be designed as a typed
+provider interface (not Clarion-internal) before it ships, so legis can supply
+the event when its git interface is ready. No wire-contract change; sequencing
+only.
+
+**Informational — lineage push surface.**
+A push/event surface on lineage would let legis react to SEI lifecycle events
+without polling. Legis v1 will use pull-only polling and accept the latency.
+Flagged as a possible future SEI-vN consideration, not a lock-blocking demand.
