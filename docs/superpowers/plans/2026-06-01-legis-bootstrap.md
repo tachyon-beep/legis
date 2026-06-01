@@ -30,7 +30,7 @@
 - Create: `.gitignore`
 - Create: `CONTRIBUTING.md`
 
-- [ ] **Step 1: Create `README.md`**
+- [x] **Step 1: Create `README.md`**
 
 ```markdown
 # Legis
@@ -94,13 +94,13 @@ Legis consumes Stable Entity Identity (SEI) as an opaque identifier. Clarion is 
 This repo should stay explicit, narrow, and honest about what exists today.
 ```
 
-- [ ] **Step 2: Verify `README.md` coverage**
+- [x] **Step 2: Verify `README.md` coverage**
 
 Run: `rg -n "planned fourth Loom product|design-ready, not implemented|Clarion|Filigree|Wardline|SEI authority" README.md`
 
 Expected: Matches for status, all three sibling sections, and the SEI posture.
 
-- [ ] **Step 3: Create `LICENSE`**
+- [x] **Step 3: Create `LICENSE`**
 
 ```text
 MIT License
@@ -126,7 +126,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-- [ ] **Step 4: Create `.gitignore` and `CONTRIBUTING.md`**
+- [x] **Step 4: Create `.gitignore` and `CONTRIBUTING.md`**
 
 ```gitignore
 .DS_Store
@@ -149,13 +149,13 @@ Legis is currently a docs-first, design-ready repository. Please keep changes al
 - Prefer small, reviewable documentation changes over speculative scaffolding.
 ```
 
-- [ ] **Step 5: Verify root scaffolding**
+- [x] **Step 5: Verify root scaffolding**
 
 Run: `test -f README.md && test -f LICENSE && test -f .gitignore && test -f CONTRIBUTING.md && echo ok`
 
 Expected: `ok`
 
-- [ ] **Step 6: Commit the root scaffolding**
+- [x] **Step 6: Commit the root scaffolding**
 
 ```bash
 git add README.md LICENSE .gitignore CONTRIBUTING.md
@@ -170,7 +170,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - Create: `docs/federation/README.md`
 - Create: `docs/federation/sei-conformance.md`
 
-- [ ] **Step 1: Create `docs/federation/README.md`**
+- [x] **Step 1: Create `docs/federation/README.md`**
 
 ```markdown
 # Federation Notes
@@ -193,7 +193,7 @@ Legis does not replace sibling authorities. Clarion still owns code identity and
 - `sei-conformance.md` - how Legis relates to the Stable Entity Identity standard
 ```
 
-- [ ] **Step 2: Create `docs/federation/sei-conformance.md`**
+- [x] **Step 2: Create `docs/federation/sei-conformance.md`**
 
 ```markdown
 # Stable Entity Identity (SEI) Conformance Notes
@@ -217,13 +217,13 @@ Legis is a **consumer** of Stable Entity Identity (SEI), not the authority.
 Legis may later provide git-history and rename evidence that Clarion can consume during SEI re-binding, but that does not move identity authority out of Clarion.
 ```
 
-- [ ] **Step 3: Verify federation docs**
+- [x] **Step 3: Verify federation docs**
 
 Run: `rg -n "Clarion|Filigree|Wardline|opaque|SEI" docs/federation`
 
 Expected: Matches in both files covering Legis's bounded role and SEI posture.
 
-- [ ] **Step 4: Commit the federation docs**
+- [x] **Step 4: Commit the federation docs**
 
 ```bash
 git add docs/federation/README.md docs/federation/sei-conformance.md
@@ -238,7 +238,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - Create: `docs/design/README.md`
 - Create: `docs/design/legis-charter.md`
 
-- [ ] **Step 1: Create `docs/design/README.md`**
+- [x] **Step 1: Create `docs/design/README.md`**
 
 ```markdown
 # Design Notes
@@ -250,7 +250,7 @@ This directory holds Legis-specific design material.
 - `legis-charter.md` - product role, authority boundary, and near-term scope
 ```
 
-- [ ] **Step 2: Create `docs/design/legis-charter.md`**
+- [x] **Step 2: Create `docs/design/legis-charter.md`**
 
 ```markdown
 # Legis Charter
@@ -294,13 +294,13 @@ Legis becomes the common operating picture for project change and governance whi
 The initial repository is documentation-first. It should make the intended role reviewable before runtime implementation starts.
 ```
 
-- [ ] **Step 3: Verify design docs**
+- [x] **Step 3: Verify design docs**
 
 Run: `rg -n "Authority boundary|Solo mode|Pair mode|Suite mode" docs/design`
 
 Expected: Matches in `docs/design/legis-charter.md` for all four sections.
 
-- [ ] **Step 4: Commit the design docs**
+- [x] **Step 4: Commit the design docs**
 
 ```bash
 git add docs/design/README.md docs/design/legis-charter.md
@@ -316,7 +316,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 - Modify: `docs/design/README.md`
 - Modify: `docs/federation/README.md`
 
-- [ ] **Step 1: Add cross-links from the root README**
+- [x] **Step 1: Add cross-links from the root README**
 
 Append this section near the bottom of `README.md` if it is not already present:
 
@@ -329,7 +329,7 @@ Append this section near the bottom of `README.md` if it is not already present:
 - Federation notes: `docs/federation/README.md`
 ```
 
-- [ ] **Step 2: Add back-links from the doc indexes**
+- [x] **Step 2: Add back-links from the doc indexes**
 
 Add these lines to both `docs/design/README.md` and `docs/federation/README.md`:
 
@@ -340,13 +340,13 @@ Add these lines to both `docs/design/README.md` and `docs/federation/README.md`:
 - Plan: `../superpowers/plans/2026-06-01-legis-bootstrap.md`
 ```
 
-- [ ] **Step 3: Run consistency checks**
+- [x] **Step 3: Run consistency checks**
 
 Run: `git diff --check && ! rg -n "T[O]DO|TB[D]|stub[[:space:]]text|coming[[:space:]]soon" README.md CONTRIBUTING.md docs`
 
 Expected: no output from either command.
 
-- [ ] **Step 4: Commit the final polish**
+- [x] **Step 4: Commit the final polish**
 
 ```bash
 git add README.md docs/design/README.md docs/federation/README.md
