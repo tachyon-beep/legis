@@ -342,7 +342,7 @@ Add these lines to both `docs/design/README.md` and `docs/federation/README.md`:
 
 - [ ] **Step 3: Run consistency checks**
 
-Run: `git diff --check && ! rg -n "TODO|TBD|stub text|coming soon" README.md CONTRIBUTING.md docs`
+Run: `git diff --check && ! rg -n "T[O]DO|TB[D]|stub[[:space:]]text|coming[[:space:]]soon" README.md CONTRIBUTING.md docs`
 
 Expected: no output from either command.
 
