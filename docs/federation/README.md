@@ -16,3 +16,8 @@ Legis does not replace sibling authorities. Clarion still owns code identity and
 ## Current documents
 
 - `sei-conformance.md` - how Legis relates to the Stable Entity Identity standard
+
+## Related planning docs
+
+- Spec: `../superpowers/specs/2026-06-01-legis-federation-repo-design.md`
+- Plan: `../superpowers/plans/2026-06-01-legis-bootstrap.md`

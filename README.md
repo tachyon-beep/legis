@@ -56,4 +56,11 @@ Legis consumes Stable Entity Identity (SEI) as an opaque identifier. Clarion is 
 - `docs/federation/README.md`
 - `docs/federation/sei-conformance.md`
 
+## Working documents
+
+- Design spec: `docs/superpowers/specs/2026-06-01-legis-federation-repo-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-06-01-legis-bootstrap.md`
+- Product charter: `docs/design/legis-charter.md`
+- Federation notes: `docs/federation/README.md`
+
 This repo should stay explicit, narrow, and honest about what exists today.
