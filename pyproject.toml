@@ -1,0 +1,33 @@
+[project]
+name = "legis"
+version = "0.1.0"
+description = "Legis — the git/CI + governance layer of the Loom suite"
+authors = [
+    { name = "John Morrissey", email = "john@pgpl.net" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.2,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = [
+    "error",
+    # Third-party: Starlette's TestClient warns about its bundled httpx usage.
+    # Matched by message (category is StarletteDeprecationWarning, not DeprecationWarning).
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
