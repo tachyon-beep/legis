@@ -97,7 +97,7 @@ self-review overstates it as having "the same tamper-binding as a governance ver
 WP-6.1 routes the whole active-defect set through one configured cell, and only two of the four 2×2
 outcomes are reachable from the Wardline seam.
 
-**WP-A4 — 4th routing outcome: plain surface, no hard gate**
+**WP-A4 — 4th routing outcome: plain surface, no hard gate — ✅ done 2026-06-02**
 - Closes: R-2.2-08.
 - Category: A.
 - Dependencies: none.
@@ -105,7 +105,7 @@ outcomes are reachable from the Wardline seam.
   finding as surfaced without opening an override or sign-off; a test asserts no governance gate is
   created yet the finding is logged. (Confirm the 4 reachable outcomes map to the README 2×2.)
 
-**WP-A5 — Severity-driven cell selection**
+**WP-A5 — Severity-driven cell selection — ✅ done 2026-06-02**
 - Closes: R-2.2-05 + the coarse-routing Known Limitation.
 - Category: A.
 - Dependencies: A4 (uses the fuller cell set).
@@ -114,7 +114,7 @@ outcomes are reachable from the Wardline seam.
   ignored; a test routes a mixed-severity scan and asserts each finding lands in the right cell.
   One-cell-per-scan remains available as a degenerate map for back-compat.
 
-**WP-A6 — Coached Wardline path coverage**
+**WP-A6 — Coached Wardline path coverage — ✅ done 2026-06-02**
 - Closes: R-2.2-07.
 - Category: A.
 - Dependencies: none (test-only unless a defect surfaces).
