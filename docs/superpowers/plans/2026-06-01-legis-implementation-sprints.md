@@ -165,6 +165,9 @@ with no sibling present. Serves roadmap §1.1–§1.2.
 
 ## Sprint 2 — Simple tier: chill → coached *(autonomous)*
 
+**Status:** ✅ implemented 2026-06-02 (chill + coached, end-to-end; see
+`docs/superpowers/plans/2026-06-02-legis-sprint-2-simple-tier.md`).
+
 The casual-coder product, shippable on its own. The left column and top-right
 of the 2×2. Serves roadmap §1.3 (simple tier).
 
