@@ -18,15 +18,25 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from legis import __version__
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
+from legis.enforcement.engine import EnforcementEngine
 from legis.git.surface import GitError, GitSurface
+from legis.identity.entity_key import EntityKey
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
+DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
+
+
+class OverrideIn(BaseModel):
+    policy: str
+    entity: str  # a locator today (pre-SEI); identity_stable=False
+    rationale: str
+    agent_id: str
 
 
 class CheckRunIn(BaseModel):
@@ -52,9 +62,13 @@ def _check_to_dict(run: CheckRun) -> dict:
 def create_app(
     repo_path: str | Path | None = None,
     check_surface: CheckSurface | None = None,
+    enforcement: EnforcementEngine | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
-    state: dict[str, CheckSurface | None] = {"checks": check_surface}
+    state: dict[str, object | None] = {
+        "checks": check_surface,
+        "enforcement": enforcement,
+    }
 
     def git() -> GitSurface:
         return GitSurface(repo_path or os.getcwd())
@@ -63,6 +77,16 @@ def create_app(
         if state["checks"] is None:
             state["checks"] = CheckSurface(DEFAULT_CHECK_DB)
         return state["checks"]
+
+    def engine() -> EnforcementEngine:
+        if state["enforcement"] is None:
+            from legis.clock import SystemClock
+            from legis.store.audit_store import AuditStore
+
+            state["enforcement"] = EnforcementEngine(
+                AuditStore(DEFAULT_GOVERNANCE_DB), SystemClock()
+            )
+        return state["enforcement"]
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -104,5 +128,31 @@ def create_app(
     @app.get("/checks/pr/{pr}")
     def checks_for_pr(pr: int) -> list[dict]:
         return [_check_to_dict(r) for r in checks().for_pr(pr)]
+
+    # --- simple-tier enforcement surface (WP-2.1 chill / WP-2.2 coached) ---
+
+    @app.post("/overrides")
+    def post_override(body: OverrideIn, response: Response) -> dict:
+        result = engine().submit_override(
+            policy=body.policy,
+            entity_key=EntityKey.from_locator(body.entity),
+            rationale=body.rationale,
+            agent_id=body.agent_id,
+        )
+        # ACCEPTED → 201 (the override took effect); BLOCKED → 409 (it did not,
+        # the agent must correct or convince). Full body either way so the agent
+        # gets the judge's reasoning to revise.
+        response.status_code = 201 if result.accepted else 409
+        return {
+            "accepted": result.accepted,
+            "seq": result.seq,
+            "verdict": result.verdict.value if result.verdict else None,
+            "judge_model": result.judge_model,
+            "judge_rationale": result.judge_rationale,
+        }
+
+    @app.get("/overrides")
+    def get_overrides() -> list[dict]:
+        return engine().trail()
 
     return app
