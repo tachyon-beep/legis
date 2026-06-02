@@ -5,7 +5,7 @@ from legis.enforcement.verdict import SignoffState
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy, route_findings
-from legis.wardline.ingest import active_defects
+from legis.wardline.ingest import WardlineSeverity, active_defects
 
 
 def _scan():
@@ -107,3 +107,69 @@ def test_surface_only_needs_no_signoff_gate(tmp_path):
         agent_id="a", resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
         engine=eng, signoff=None)
     assert results[0]["mode"] == "surface_only"
+
+
+def _mixed_scan():
+    def fnd(rule, sev, fp):
+        return {"rule_id": rule, "message": "m", "severity": sev, "kind": "defect",
+                "fingerprint": fp, "qualname": "m.f", "properties": {}, "suppressed": "active"}
+    return {"findings": [fnd("R-CRIT", "CRITICAL", "c"),
+                         fnd("R-WARN", "WARN", "w"),
+                         fnd("R-INFO", "INFO", "i")]}
+
+
+def test_cell_map_routes_each_finding_by_severity(tmp_path):
+    eng = _engine(tmp_path)
+    gate = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
+                       FixedClock("2026-06-02T12:00:00+00:00"))
+    cell_map = {
+        WardlineSeverity.CRITICAL: WardlineCellPolicy.BLOCK_ESCALATE,
+        WardlineSeverity.WARN: WardlineCellPolicy.SURFACE_OVERRIDE,
+        WardlineSeverity.INFO: WardlineCellPolicy.SURFACE_ONLY,
+    }
+    results = route_findings(
+        active_defects(_mixed_scan()), cell_map=cell_map, agent_id="a",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng, signoff=gate)
+    by_fp = {r["fingerprint"]: r["mode"] for r in results}
+    assert by_fp == {"c": "block_escalate", "w": "surface_override", "i": "surface_only"}
+
+
+def test_unmapped_severity_falls_back_to_surface_override(tmp_path):
+    eng = _engine(tmp_path)
+    cell_map = {WardlineSeverity.CRITICAL: WardlineCellPolicy.SURFACE_ONLY}
+    results = route_findings(  # _scan() finding is ERROR — not in the map → fallback
+        active_defects(_scan()), cell_map=cell_map, agent_id="a",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}), engine=eng)
+    assert results[0]["mode"] == "surface_override"
+
+
+def test_exactly_one_of_policy_or_cell_map(tmp_path):
+    import pytest
+    eng = _engine(tmp_path)
+    # neither given → raises
+    with pytest.raises(ValueError, match="exactly one"):
+        route_findings(active_defects(_scan()), agent_id="a",
+                       resolve=lambda q: (EntityKey.from_locator("x"), {}), engine=eng)
+    # both given → raises
+    with pytest.raises(ValueError, match="exactly one"):
+        route_findings(active_defects(_scan()), policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+                       cell_map={WardlineSeverity.CRITICAL: WardlineCellPolicy.SURFACE_ONLY},
+                       agent_id="a",
+                       resolve=lambda q: (EntityKey.from_locator("x"), {}), engine=eng)
+
+
+def test_pre_loop_guard_prevents_partial_application(tmp_path):
+    # A heterogeneous cell_map needing block_escalate with no signoff gate must
+    # raise BEFORE any finding is written — no partial batch in the ledger.
+    import pytest
+    eng = _engine(tmp_path)
+    cell_map = {
+        WardlineSeverity.WARN: WardlineCellPolicy.SURFACE_OVERRIDE,
+        WardlineSeverity.CRITICAL: WardlineCellPolicy.BLOCK_ESCALATE,
+    }
+    with pytest.raises(ValueError, match="block_escalate cell requires a signoff gate"):
+        route_findings(active_defects(_mixed_scan()), cell_map=cell_map, agent_id="a",
+                       resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+                       engine=eng, signoff=None)
+    assert eng.trail() == []  # nothing written
