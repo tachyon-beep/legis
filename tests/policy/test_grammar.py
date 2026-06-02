@@ -85,3 +85,26 @@ def test_a_boundary_returning_garbage_fails_closed_to_unknown():
 
     g.register(Garbage())
     assert g.evaluate("garbage", {}).result is PolicyResult.UNKNOWN
+
+
+def test_exemption_turns_violation_into_clear():
+    from legis.policy.exemptions import Exemption, ExemptionRegistry
+    from legis.policy.grammar import AllowlistBoundary, PolicyGrammar, PolicyResult
+    reg = ExemptionRegistry([Exemption("import-allowlist", "requests", "ticket-123")])
+    g = PolicyGrammar(exemptions=reg)
+    g.register(AllowlistBoundary("import-allowlist", frozenset({"json"})))
+    ev = g.evaluate("import-allowlist", {"value": "requests"})
+    assert ev.result is PolicyResult.CLEAR
+    assert ev.provenance_gap is False
+    assert "ticket-123" in ev.detail
+    assert g.evaluate("import-allowlist", {"value": "pickle"}).result is PolicyResult.VIOLATION
+
+
+def test_exemption_never_rescues_unknown():
+    from legis.policy.exemptions import Exemption, ExemptionRegistry
+    from legis.policy.grammar import PolicyGrammar, PolicyResult
+    reg = ExemptionRegistry([Exemption("unregistered", "x", "r")])
+    g = PolicyGrammar(exemptions=reg)
+    ev = g.evaluate("unregistered", {"value": "x"})  # no boundary → UNKNOWN
+    assert ev.result is PolicyResult.UNKNOWN
+    assert ev.provenance_gap is True

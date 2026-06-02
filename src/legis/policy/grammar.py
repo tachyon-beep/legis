@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from legis.policy.exemptions import ExemptionRegistry
+
 
 class PolicyResult(str, Enum):
     CLEAR = "CLEAR"          # boundary proven satisfied
@@ -44,8 +46,9 @@ class PolicyConflictError(RuntimeError):
 
 
 class PolicyGrammar:
-    def __init__(self) -> None:
+    def __init__(self, exemptions: ExemptionRegistry | None = None) -> None:
         self._boundaries: dict[str, BoundaryType] = {}
+        self._exemptions = exemptions
 
     def register(self, boundary: BoundaryType) -> None:
         name = boundary.name
@@ -80,6 +83,17 @@ class PolicyGrammar:
                 f"boundary could not prove policy {policy!r}: {exc}",
                 True,
             )
+        if (
+            result is PolicyResult.VIOLATION
+            and self._exemptions is not None
+            and "value" in target
+        ):
+            ex = self._exemptions.is_exempt(policy, target["value"])
+            if ex is not None:
+                return PolicyEvaluation(
+                    policy, PolicyResult.CLEAR,
+                    f"exempted (one-off): {ex.reason}", False,
+                )
         return PolicyEvaluation(
             policy, result, str(detail), result is PolicyResult.UNKNOWN
         )
