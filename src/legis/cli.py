@@ -17,6 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail (exit 1) if the override-rate gate is FAIL — for CI",
     )
     rate.add_argument(
+        # Literal duplicates api.app.DEFAULT_GOVERNANCE_DB deliberately: importing it
+        # would pull FastAPI at CLI load time, defeating the deferred-import decoupling.
         "--db", default="sqlite:///legis-governance.db",
         help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
     )
