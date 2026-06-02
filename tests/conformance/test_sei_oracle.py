@@ -45,20 +45,29 @@ def test_identity_round_trip_and_opacity():
     assert res.alive is True and res.content_hash == "h"
 
 
-def test_rename_carries_sei_record_survives():
+def _attest(tmp_path, sei):
+    store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
+    store.append({"entity_key": {"value": sei, "identity_stable": True},
+                  "identity_stable": True, "extensions": {}})
+    return store
+
+
+def test_rename_carries_sei_record_survives(tmp_path):
     # The record was keyed on the SEI; after rename the SEI still resolves alive
-    # at the NEW locator. legis's record is untouched — identity carried.
+    # at the NEW locator. legis's consumer behaviour: NOT orphaned — carried.
     sei = "clarion:eid:ren"
+    store = _attest(tmp_path, sei)
     client = FakeClarion(sei={sei: {"sei": sei, "current_locator": "python:function:new.f",
                                     "content_hash": "h", "alive": True}})
-    assert client.resolve_sei(sei)["alive"] is True   # carry, not orphan
+    assert find_orphan_gaps(store.read_all(), client) == []   # carried, not orphaned
 
 
-def test_move_carries_sei():
+def test_move_carries_sei(tmp_path):
     sei = "clarion:eid:mov"
+    store = _attest(tmp_path, sei)
     client = FakeClarion(sei={sei: {"sei": sei, "current_locator": "python:function:b.f",
                                     "content_hash": "h", "alive": True}})
-    assert client.resolve_sei(sei)["alive"] is True
+    assert find_orphan_gaps(store.read_all(), client) == []   # carried, not orphaned
 
 
 def test_ambiguous_old_sei_orphaned_surfaces_gap(tmp_path):
