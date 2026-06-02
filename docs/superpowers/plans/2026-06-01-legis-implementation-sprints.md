@@ -257,6 +257,12 @@ tier). Builds **over** Sprint 2, not beside it.
 
 ## Sprint 4 — Agent-programmable policy grammar *(autonomous; may overlap Sprint 3)*
 
+**Status:** ✅ implemented 2026-06-02 (fail-closed grammar with builtins +
+agent-authored boundary types; UNKNOWN_POLICY honest events; in-code
+`@policy_boundary` decorator + fingerprint-drift honesty gate; see
+`docs/superpowers/plans/2026-06-02-legis-sprint-4-policy-grammar.md`). With this,
+**Half 1 is complete — legis is a first-class tool in its own right.**
+
 The highest-leverage un-gated item — the hinge between "standalone tool" and
 "first-class Loom citizen." Serves roadmap §1.4.
 
