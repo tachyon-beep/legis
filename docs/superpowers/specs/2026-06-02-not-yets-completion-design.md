@@ -53,7 +53,7 @@ Today only the simple-tier `/overrides` record carries the `clarion` two-axis + 
 block, and gap/integrity detection scans only the simple-tier engine trail. Protected and sign-off
 records key on the SEI but are not yet orphan-detectable.
 
-**WP-A1 — Carry the `clarion` block onto protected & sign-off records**
+**WP-A1 — Carry the `clarion` block onto protected & sign-off records — ✅ done 2026-06-02**
 - Closes: Sprint 5 Known Limitation ("extension carried on the simple-tier `/overrides` record only").
 - Category: A.
 - Dependencies: none.
@@ -64,7 +64,7 @@ records key on the SEI but are not yet orphan-detectable.
   recommendation: identity binding (`entity_key`) stays signed (already true); the two-axis/snapshot
   metadata rides as unsigned extension unless the per-WP plan justifies signing it.
 
-**WP-A2 — Point gap + lineage-integrity detection at the protected store**
+**WP-A2 — Point gap + lineage-integrity detection at the protected store — ✅ done 2026-06-02**
 - Closes: Sprint 5 Known Limitation ("gap detection reads the simple-tier engine trail only").
 - Category: A.
 - Dependencies: **A1** (needs the metadata A1 adds on protected records).

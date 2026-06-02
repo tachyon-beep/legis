@@ -92,6 +92,17 @@ being weaker than "same structure as a verdict."
    as unbuilt; they have source + green tests, and README:49–51 marks milestone-4/5/6
    capabilities "Live" (Sprint 5 / Sprint 6). Same stale forward-looking drift.
 
+## Update 2026-06-02
+
+Two Sprint-5 Known Limitations not captured as gap IDs above are now CLOSED by
+`docs/superpowers/plans/2026-06-02-not-yets-track-1-protected-tier-integrity.md` (WP-A1/A2):
+(1) the `clarion` two-axis + lineage-snapshot block was carried on the simple-tier `/overrides`
+record only — protected and sign-off records now also carry the block (unsigned extension;
+signed identity binding unchanged); (2) orphan-gap and lineage-integrity detection read the
+simple-tier engine trail only — `find_orphan_gaps` / `find_lineage_divergence` now consume
+`verified_governance_records()`, scanning the HMAC-verified protected trail as well.
+Full suite: 157 passed, 0 warnings.
+
 ## Suggested triage order
 
 1. **R-2.3-01c** (Filigree binding unsigned) and **R-1.3c-17** (override-rate gate not CI-wired)
