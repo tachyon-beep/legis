@@ -80,3 +80,30 @@ def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
     assert (
         record["extensions"]["signoff_state"] == SignoffState.PENDING.value
     )
+
+
+def test_surface_only_records_a_non_gating_event(tmp_path):
+    eng = _engine(tmp_path)
+    results = route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.SURFACE_ONLY,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng,
+    )
+    assert results[0]["mode"] == "surface_only"
+    assert results[0]["surfaced"] is True
+    assert "accepted" not in results[0] and "cleared" not in results[0]
+    trail = eng.trail()
+    assert trail[0]["kind"] == "wardline_surfaced"
+    assert trail[0]["policy"] == "PY-WL-101"
+    assert trail[0]["extensions"]["wardline"]["fingerprint"] == "fp1"
+
+
+def test_surface_only_needs_no_signoff_gate(tmp_path):
+    eng = _engine(tmp_path)
+    results = route_findings(
+        active_defects(_scan()), policy=WardlineCellPolicy.SURFACE_ONLY,
+        agent_id="a", resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng, signoff=None)
+    assert results[0]["mode"] == "surface_only"
