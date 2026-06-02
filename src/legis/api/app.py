@@ -38,7 +38,7 @@ from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 from legis.wardline.governor import WardlineCellPolicy, route_findings
-from legis.wardline.ingest import active_defects
+from legis.wardline.ingest import WardlineSeverity, active_defects
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
 DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
@@ -87,9 +87,10 @@ class PolicyEvalIn(BaseModel):
 
 
 class ScanResultsIn(BaseModel):
-    cell: str
     agent_id: str
     scan: dict
+    cell: str | None = None
+    cell_by_severity: dict[str, str] | None = None
 
 
 class BindIssueIn(BaseModel):
@@ -446,10 +447,9 @@ def create_app(
 
     @app.post("/wardline/scan-results")
     def wardline_scan_results(body: ScanResultsIn) -> dict:
-        try:
-            policy = WardlineCellPolicy(body.cell)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"unknown cell: {body.cell}")
+        if (body.cell is None) == (body.cell_by_severity is None):
+            raise HTTPException(status_code=422,
+                                detail="provide exactly one of cell or cell_by_severity")
 
         def resolve(qualname: str | None) -> tuple[EntityKey, dict]:
             # Use the one resolve-then-key boundary so a wardline-routed override
@@ -458,14 +458,35 @@ def create_app(
                 return resolve_for_record(qualname)
             return EntityKey.from_locator("unknown"), {}
 
-        routed = route_findings(
-            active_defects(body.scan),
-            policy=policy,
-            agent_id=body.agent_id,
-            resolve=resolve,
-            engine=engine() if policy is WardlineCellPolicy.SURFACE_OVERRIDE else None,
-            signoff=signoff_gate if policy is WardlineCellPolicy.BLOCK_ESCALATE else None,
-        )
+        try:
+            if body.cell_by_severity is not None:
+                cell_map = {WardlineSeverity[sev]: WardlineCellPolicy(cell)
+                            for sev, cell in body.cell_by_severity.items()}
+                # SURFACE_OVERRIDE is always reachable via the unmapped-severity fallback.
+                cells = set(cell_map.values()) | {WardlineCellPolicy.SURFACE_OVERRIDE}
+            else:
+                policy = WardlineCellPolicy(body.cell)
+                cells = {policy}
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=f"unknown cell/severity: {exc}")
+
+        # Only provision the governance store when a surface cell can actually run:
+        # engine() lazily creates legis-governance.db, so a pure block_escalate scan
+        # must not touch it. signoff_gate is an injected param (no side effect).
+        needs_engine = bool(cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
+                                     WardlineCellPolicy.SURFACE_ONLY})
+        kwargs: dict = {"agent_id": body.agent_id, "resolve": resolve,
+                        "engine": engine() if needs_engine else None,
+                        "signoff": signoff_gate}
+        if body.cell_by_severity is not None:
+            kwargs["cell_map"] = cell_map
+        else:
+            kwargs["policy"] = policy
+
+        try:
+            routed = route_findings(active_defects(body.scan), **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         return {"routed": routed}
 
     return app

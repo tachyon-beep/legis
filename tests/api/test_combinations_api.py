@@ -145,3 +145,78 @@ def test_binding_read_500_on_forged_record(tmp_path):
                   "binding_signature": "hmac-sha256:v1:deadbeef"})
     c = _client(tmp_path, binding_ledger=ledger)
     assert c.get("/signoff/1/binding").status_code == 500
+
+
+def test_scan_results_surface_only_records_non_gating(tmp_path):
+    c = _client(tmp_path)
+    body = {"cell": "surface_only", "agent_id": "agent-1", "scan": {"findings": [
+        {"rule_id": "PY-WL-101", "message": "m", "severity": "INFO", "kind": "defect",
+         "fingerprint": "fp1", "qualname": "m.f", "properties": {}, "suppressed": "active"}]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["routed"][0]["mode"] == "surface_only"
+    trail = c.get("/overrides").json()
+    assert trail[0]["kind"] == "wardline_surfaced"
+
+
+def test_scan_results_cell_by_severity_routes_per_finding(tmp_path):
+    from legis.clock import FixedClock
+    from legis.enforcement.signoff import SignoffGate
+    from legis.store.audit_store import AuditStore
+    sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
+                     FixedClock("2026-06-02T12:00:00+00:00"))
+    c = _client(tmp_path, signoff_gate=sg)
+    body = {"agent_id": "a",
+            "cell_by_severity": {"CRITICAL": "block_escalate", "INFO": "surface_only"},
+            "scan": {"findings": [
+                {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
+                 "fingerprint": "c", "qualname": "m.f", "properties": {}, "suppressed": "active"},
+                {"rule_id": "R-I", "message": "m", "severity": "INFO", "kind": "defect",
+                 "fingerprint": "i", "qualname": "m.g", "properties": {}, "suppressed": "active"}]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    modes = {r["fingerprint"]: r["mode"] for r in resp.json()["routed"]}
+    assert modes == {"c": "block_escalate", "i": "surface_only"}
+
+
+def test_scan_results_block_escalate_without_gate_is_409(tmp_path):
+    # cell_by_severity needing block_escalate but no signoff_gate wired → pre-loop guard → 409
+    c = _client(tmp_path)  # no signoff_gate
+    body = {"agent_id": "a", "cell_by_severity": {"CRITICAL": "block_escalate"},
+            "scan": {"findings": [
+                {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
+                 "fingerprint": "c", "qualname": "m.f", "properties": {}, "suppressed": "active"}]}}
+    assert c.post("/wardline/scan-results", json=body).status_code == 409
+
+
+def test_scan_results_rejects_both_or_neither_cell_form(tmp_path):
+    c = _client(tmp_path)
+    base = {"agent_id": "a", "scan": {"findings": []}}
+    assert c.post("/wardline/scan-results", json=base).status_code == 422  # neither
+    assert c.post("/wardline/scan-results",
+                  json={**base, "cell": "surface_only",
+                        "cell_by_severity": {"INFO": "surface_only"}}).status_code == 422  # both
+
+
+def test_scan_results_block_escalate_only_needs_no_engine(tmp_path):
+    # A pure block_escalate scan must route with only a signoff gate wired — no
+    # enforcement engine, so engine()'s lazy legis-governance.db is never created.
+    sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
+                     FixedClock("2026-06-02T12:00:00+00:00"))
+    c = TestClient(create_app(signoff_gate=sg))  # NOT _client: no enforcement injected
+    body = {"cell": "block_escalate", "agent_id": "a", "scan": {"findings": [
+        {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
+         "fingerprint": "c", "qualname": "m.f", "properties": {}, "suppressed": "active"}]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["routed"][0]["mode"] == "block_escalate"
+
+
+def test_scan_results_single_cell_still_works(tmp_path):
+    c = _client(tmp_path)
+    body = {"cell": "surface_override", "agent_id": "agent-1", "scan": {"findings": [
+        {"rule_id": "PY-WL-101", "message": "m", "severity": "ERROR", "kind": "defect",
+         "fingerprint": "fp1", "qualname": "m.f", "properties": {}, "suppressed": "active"}]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["routed"][0]["mode"] == "surface_override"
