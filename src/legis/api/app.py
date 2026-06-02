@@ -208,7 +208,10 @@ def create_app(
         pr = pull_requests.get(number)
         if pr is None:
             raise HTTPException(status_code=404, detail=f"no pull request {number}")
-        return asdict(pr)
+        # PR metadata AND the check outcomes associated with it (roadmap §1.1):
+        # join the recorded CI check runs for this PR onto the forge context.
+        return {**asdict(pr),
+                "checks": [_check_to_dict(r) for r in checks().for_pr(number)]}
 
     # --- CI/check surface (WP-1.2) ---
 
