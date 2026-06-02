@@ -1,6 +1,7 @@
 from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.signoff import SignoffGate
+from legis.enforcement.verdict import SignoffState
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy, route_findings
@@ -49,3 +50,13 @@ def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
     )
     assert results[0]["mode"] == "block_escalate"
     assert results[0]["cleared"] is False                # a human must sign off
+
+    # The stored side-effect: a PENDING_SIGNOFF request was written, not cleared.
+    req_seq = results[0]["seq"]
+    assert gate.is_cleared(req_seq) is False
+    record = store.read_all()[req_seq - 1].payload
+    assert record["policy"] == "PY-WL-101"
+    assert record["entity_key"]["value"] == "m.f"
+    assert (
+        record["extensions"]["signoff_state"] == SignoffState.PENDING.value
+    )

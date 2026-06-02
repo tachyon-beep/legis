@@ -4,8 +4,15 @@ One judge, not two: Wardline produced the finding; legis decides who answers.
 The cell is configured for the whole scan (surface+override or block+escalate).
 The finding's ``rule_id`` is the policy; its ``qualname`` is the entity to key
 on (resolved to an SEI via the same Sprint-5 resolver when available); its
-``message`` seeds the rationale. The trust tiers in ``properties`` are carried
-verbatim onto the record — the one shared vocabulary.
+``message`` seeds the rationale.
+
+* **surface+override** records an override carrying the finding's
+  ``fingerprint``, trust ``tiers`` (the one shared vocabulary, verbatim from
+  ``properties``), and ``severity`` in the record's ``extensions``.
+* **block+escalate** opens a sign-off request carrying ``rule_id`` (policy),
+  the resolved entity, and the seeded rationale. Carrying the Wardline tiers
+  onto the sign-off record is deferred: ``SignoffGate.request`` has no
+  ``extensions`` field yet.
 """
 
 from __future__ import annotations
@@ -34,28 +41,34 @@ def route_findings(
     engine: EnforcementEngine | None = None,
     signoff: SignoffGate | None = None,
 ) -> list[dict[str, Any]]:
+    if policy is WardlineCellPolicy.SURFACE_OVERRIDE and engine is None:
+        raise ValueError("surface_override cell requires an engine")
+    if policy is WardlineCellPolicy.BLOCK_ESCALATE and signoff is None:
+        raise ValueError("block_escalate cell requires a signoff gate")
+
     results: list[dict[str, Any]] = []
     for f in findings:
         entity_key = resolve(f.qualname)
         rationale = f"[wardline {f.rule_id}] {f.message}"
-        ext = {"wardline": {"fingerprint": f.fingerprint,
-                            "tiers": dict(f.properties), "severity": f.severity.value}}
         if policy is WardlineCellPolicy.SURFACE_OVERRIDE:
-            if engine is None:
-                raise ValueError("surface_override cell requires an engine")
-            res = engine.submit_override(
+            assert engine is not None  # guarded above
+            ext = {"wardline": {"fingerprint": f.fingerprint,
+                                "tiers": dict(f.properties),
+                                "severity": f.severity.value}}
+            override_res = engine.submit_override(
                 policy=f.rule_id, entity_key=entity_key,
                 rationale=rationale, agent_id=agent_id, extensions=ext,
             )
-            results.append({"mode": "surface_override", "fingerprint": f.fingerprint,
-                            "seq": res.seq, "accepted": res.accepted})
+            results.append({"mode": policy.value, "fingerprint": f.fingerprint,
+                            "seq": override_res.seq,
+                            "accepted": override_res.accepted})
         else:
-            if signoff is None:
-                raise ValueError("block_escalate cell requires a signoff gate")
-            res = signoff.request(
+            assert signoff is not None  # guarded above
+            escalate_res = signoff.request(
                 policy=f.rule_id, entity_key=entity_key,
                 rationale=rationale, agent_id=agent_id,
             )
-            results.append({"mode": "block_escalate", "fingerprint": f.fingerprint,
-                            "seq": res.seq, "cleared": res.cleared})
+            results.append({"mode": policy.value, "fingerprint": f.fingerprint,
+                            "seq": escalate_res.seq,
+                            "cleared": escalate_res.cleared})
     return results
