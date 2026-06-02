@@ -204,6 +204,10 @@ of the 2×2. Serves roadmap §1.3 (simple tier).
 
 ## Sprint 3 — Complex tier: structured → protected *(autonomous)*
 
+**Status:** ✅ implemented 2026-06-02 (structured + protected, end-to-end; HMAC
+tamper-binding, operator override, decay sweep, override-rate gate; see
+`docs/superpowers/plans/2026-06-02-legis-sprint-3-complex-tier.md` and ADR-0002).
+
 Completes the 2×2. The serious-coder product. Serves roadmap §1.3 (complex
 tier). Builds **over** Sprint 2, not beside it.
 
