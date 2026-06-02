@@ -7,8 +7,12 @@ never a transport error. (``resolve_for_record`` itself propagates no errors.)
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from legis.enforcement.protected import TamperError
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
+from legis.service.errors import AuditIntegrityError
 
 
 def resolve_for_record(
@@ -33,3 +37,28 @@ def resolve_for_record(
             "lineage_snapshot": res.lineage_snapshot,
         }
     return res.entity_key, ext
+
+
+def verified_records(
+    protected_gate,
+    trail_verifier,
+    engine_records: Callable[[], list],
+):
+    """The verified governance trail.
+
+    The protected gate (when wired) owns the governance trail; otherwise the
+    simple-tier engine does (read lazily via ``engine_records`` so a protected
+    deployment never initialises the engine store). Never mix the two stores.
+    Verification is fail-closed and applies to EVERY consumer of the protected
+    trail, so a tampered record is an honest integrity error
+    (``AuditIntegrityError``), never silently read or scored.
+    """
+    if protected_gate is not None:
+        records = protected_gate.records()
+        if trail_verifier is not None:
+            try:
+                trail_verifier.verify(records)
+            except TamperError as exc:
+                raise AuditIntegrityError(f"audit integrity failure: {exc}") from exc
+        return records
+    return engine_records()

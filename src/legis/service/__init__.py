@@ -12,7 +12,7 @@ from legis.service.errors import (
     NotFoundError,
     ServiceError,
 )
-from legis.service.governance import resolve_for_record
+from legis.service.governance import resolve_for_record, verified_records
 
 __all__ = [
     "ServiceError",
@@ -20,4 +20,5 @@ __all__ = [
     "NotEnabledError",
     "NotFoundError",
     "resolve_for_record",
+    "verified_records",
 ]

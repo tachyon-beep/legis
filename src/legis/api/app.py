@@ -26,7 +26,7 @@ from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.lifecycle import evaluate_override_rate
-from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
+from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
 from legis.git.surface import GitError, GitSurface
@@ -37,7 +37,9 @@ from legis.governance.binding_ledger import BindingError, BindingLedger
 from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
+from legis.service.errors import AuditIntegrityError
 from legis.service.governance import resolve_for_record as _resolve_for_record
+from legis.service.governance import verified_records as _verified_records
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 from legis.wardline.governor import WardlineCellPolicy, route_findings
 from legis.wardline.ingest import WardlineSeverity, active_defects
@@ -243,22 +245,12 @@ def create_app(
         }
 
     def verified_governance_records():
-        # The protected gate (when wired) owns the governance trail; otherwise
-        # the simple-tier engine does. Never mix the two stores. Verification is
-        # fail-closed and applies to EVERY consumer of the protected trail — the
-        # human read path AND the enforcement gates — so a tampered record is an
-        # honest integrity error, never silently read or scored.
-        if protected_gate is not None:
-            records = protected_gate.records()
-            if trail_verifier is not None:
-                try:
-                    trail_verifier.verify(records)
-                except TamperError as exc:
-                    raise HTTPException(
-                        status_code=500, detail=f"audit integrity failure: {exc}"
-                    )
-            return records
-        return engine().records()
+        try:
+            return _verified_records(
+                protected_gate, trail_verifier, lambda: engine().records()
+            )
+        except AuditIntegrityError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
     @app.get("/overrides")
     def get_overrides() -> list[dict]:
