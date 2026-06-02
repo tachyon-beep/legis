@@ -1,10 +1,14 @@
 import pytest
 
+from legis.clock import SystemClock
+from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.lifecycle import GateStatus
 from legis.enforcement.protected import TamperError
+from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
 from legis.service.errors import AuditIntegrityError
-from legis.service.governance import compute_override_rate, resolve_for_record, verified_records
+from legis.service.governance import compute_override_rate, resolve_for_record, submit_override, verified_records
+from legis.store.audit_store import AuditStore
 
 
 class _FakeResult:
@@ -117,3 +121,55 @@ def test_compute_override_rate_returns_status_rate_sample_below_min_sample():
     assert res.status == GateStatus.PASS_WITH_NOTICE
     assert res.rate == 0.0
     assert res.sample_size == 0
+
+
+def _sqlite_engine(tmp_path):
+    # file-backed sqlite store, no judge → chill cell
+    return EnforcementEngine(AuditStore(f"sqlite:///{tmp_path / 'gov.db'}"), SystemClock())
+
+
+def test_submit_override_chill_records_and_accepts(tmp_path):
+    engine = _sqlite_engine(tmp_path)
+    result = submit_override(
+        engine,
+        identity=None,
+        policy="no-direct-push",
+        entity="src/foo.py:bar",
+        rationale="generated file; lint N/A",
+        agent_id="agent-7",
+    )
+    assert result.accepted is True
+    # a fresh append-only store assigns seq 1 to its first record
+    assert result.seq == 1
+    trail = engine.trail()
+    assert len(trail) == 1
+    assert trail[0]["agent_id"] == "agent-7"
+    assert trail[0]["policy"] == "no-direct-push"
+
+
+class _BlockingJudge:
+    model_id = "stub-judge"
+
+    def evaluate(self, record):
+        return JudgeOpinion(
+            verdict=Verdict.BLOCKED, model="stub-judge", rationale="rationale insufficient"
+        )
+
+
+def test_submit_override_coached_blocks_on_negative_verdict(tmp_path):
+    engine = EnforcementEngine(
+        AuditStore(f"sqlite:///{tmp_path}/gov.db"), SystemClock(), judge=_BlockingJudge()
+    )
+    result = submit_override(
+        engine,
+        identity=None,
+        policy="no-direct-push",
+        entity="src/foo.py:bar",
+        rationale="trust me",
+        agent_id="agent-7",
+    )
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+    assert result.judge_model == "stub-judge"
+    # the BLOCKED attempt is still recorded (no silent path)
+    assert len(engine.trail()) == 1

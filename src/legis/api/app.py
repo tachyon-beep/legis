@@ -38,6 +38,7 @@ from legis.identity.resolver import IdentityResolver
 from legis.service.errors import AuditIntegrityError
 from legis.service.governance import compute_override_rate as _compute_override_rate
 from legis.service.governance import resolve_for_record as _resolve_for_record
+from legis.service.governance import submit_override as _submit_override
 from legis.service.governance import verified_records as _verified_records
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 from legis.wardline.governor import WardlineCellPolicy, route_findings
@@ -223,13 +224,13 @@ def create_app(
 
     @app.post("/overrides")
     def post_override(body: OverrideIn, response: Response) -> dict:
-        entity_key, ext = resolve_for_record(body.entity)
-        result = engine().submit_override(
+        result = _submit_override(
+            engine(),
+            identity=identity,
             policy=body.policy,
-            entity_key=entity_key,
+            entity=body.entity,
             rationale=body.rationale,
             agent_id=body.agent_id,
-            extensions=ext,
         )
         # ACCEPTED → 201 (the override took effect); BLOCKED → 409 (it did not,
         # the agent must correct or convince). Full body either way so the agent

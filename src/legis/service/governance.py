@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from legis.enforcement.engine import EnforcementEngine, EnforcementResult
 from legis.enforcement.lifecycle import evaluate_override_rate
 from legis.enforcement.protected import TamperError
 from legis.governance import params
@@ -77,4 +78,30 @@ def compute_override_rate(records: list):
         threshold=params.OVERRIDE_RATE_THRESHOLD,
         window=params.OVERRIDE_RATE_WINDOW,
         min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
+    )
+
+
+def submit_override(
+    engine: EnforcementEngine,
+    *,
+    identity: IdentityResolver | None,
+    policy: str,
+    entity: str,
+    rationale: str,
+    agent_id: str,
+) -> EnforcementResult:
+    """Resolve-then-key, then submit the override to the simple-tier engine.
+
+    Cell semantics live in the engine: judge absent → chill (always accepted);
+    judge present → coached (ACCEPTED records, BLOCKED records the attempt). The
+    adapter maps ``EnforcementResult.accepted`` to its transport's success/blocked
+    signal (HTTP 201/409; MCP ACCEPTED_*/BLOCKED).
+    """
+    entity_key, ext = resolve_for_record(identity, entity)
+    return engine.submit_override(
+        policy=policy,
+        entity_key=entity_key,
+        rationale=rationale,
+        agent_id=agent_id,
+        extensions=ext,
     )

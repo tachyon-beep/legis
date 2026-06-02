@@ -12,7 +12,7 @@ from legis.service.errors import (
     NotFoundError,
     ServiceError,
 )
-from legis.service.governance import compute_override_rate, resolve_for_record, verified_records
+from legis.service.governance import compute_override_rate, resolve_for_record, submit_override, verified_records
 
 __all__ = [
     "ServiceError",
@@ -21,5 +21,6 @@ __all__ = [
     "NotFoundError",
     "compute_override_rate",
     "resolve_for_record",
+    "submit_override",
     "verified_records",
 ]
