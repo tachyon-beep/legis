@@ -127,7 +127,7 @@ outcomes are reachable from the Wardline seam.
 Three of five decorator fields are enforced by the honesty gate; `source` and `invariant` are
 carried but never read. The YAML one-off-exemption companion does not exist.
 
-**WP-A7 — Enforce decorator `source` + `invariant`**
+**WP-A7 — Enforce decorator `source` + `invariant` — ✅ done 2026-06-02**
 - Closes: R-1.4-06, R-1.4-08.
 - Category: A.
 - Approved semantics: when a decorator suppresses a policy, the honesty gate **requires** both fields
@@ -139,13 +139,15 @@ carried but never read. The YAML one-off-exemption companion does not exist.
 - Exit: a decorator missing/empty `source` or `invariant` is rejected by the honesty gate with a
   test asserting the rejection; a well-formed pair passes and `invariant` appears on the record.
 
-**WP-A8 — YAML allowlist companion for one-off exemptions**
+**WP-A8 — YAML allowlist companion for one-off exemptions — ✅ done 2026-06-02**
 - Closes: R-1.4-11.
 - Category: A.
 - Dependencies: none.
 - Exit: a YAML-backed exemption surface (the decorator's documented companion for one-off
   exemptions) parsed into the existing `AllowlistBoundary` path; a test loads a YAML exemption file
   and asserts a listed entity is exempted, an unlisted one is not, and a malformed file fails closed.
+- Note: the roadmap names this a "YAML allowlist"; it was implemented as a TOML file via stdlib
+  `tomllib` to hold legis's no-new-dependency posture (substance-equivalent).
 
 ### Track 5 — Git/change & CI surface gaps (§1.1/§1.2/§1.3c)
 
