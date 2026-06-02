@@ -105,8 +105,10 @@ class ProtectedGate:
         judge_rationale: str | None,
         file_fingerprint: str,
         ast_path: str,
+        extensions: dict[str, Any] | None = None,
     ) -> ProtectedResult:
         ext: dict[str, Any] = {
+            **(extensions or {}),
             "judge_verdict": verdict.value,
             "judge_model": model,
             "judge_rationale": judge_rationale,
@@ -143,6 +145,7 @@ class ProtectedGate:
         agent_id: str,
         file_fingerprint: str,
         ast_path: str,
+        extensions: dict[str, Any] | None = None,
     ) -> ProtectedResult:
         proposed = OverrideRecord(
             policy=policy,
@@ -162,6 +165,7 @@ class ProtectedGate:
             judge_rationale=opinion.rationale,
             file_fingerprint=file_fingerprint,
             ast_path=ast_path,
+            extensions=extensions,
         )
 
     def operator_override(
@@ -173,6 +177,7 @@ class ProtectedGate:
         operator_id: str,
         file_fingerprint: str,
         ast_path: str,
+        extensions: dict[str, Any] | None = None,
     ) -> ProtectedResult:
         # A human uses authority to bypass the judge. No model is consulted; the
         # verdict is the distinct OVERRIDDEN_BY_OPERATOR signal, still tamper-bound.
@@ -186,6 +191,7 @@ class ProtectedGate:
             judge_rationale=None,
             file_fingerprint=file_fingerprint,
             ast_path=ast_path,
+            extensions=extensions,
         )
 
     def records(self):
