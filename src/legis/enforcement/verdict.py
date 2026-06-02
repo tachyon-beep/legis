@@ -13,6 +13,12 @@ from enum import Enum
 class Verdict(str, Enum):
     ACCEPTED = "ACCEPTED"
     BLOCKED = "BLOCKED"
+    OVERRIDDEN_BY_OPERATOR = "OVERRIDDEN_BY_OPERATOR"
+
+
+class SignoffState(str, Enum):
+    PENDING = "PENDING_SIGNOFF"
+    SIGNED_OFF = "SIGNED_OFF"
 
 
 @dataclass(frozen=True)
