@@ -12,10 +12,12 @@ from legis.service.errors import (
     NotFoundError,
     ServiceError,
 )
+from legis.service.governance import resolve_for_record
 
 __all__ = [
     "ServiceError",
     "AuditIntegrityError",
     "NotEnabledError",
     "NotFoundError",
+    "resolve_for_record",
 ]

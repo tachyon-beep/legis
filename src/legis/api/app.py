@@ -37,6 +37,7 @@ from legis.governance.binding_ledger import BindingError, BindingLedger
 from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
+from legis.service.governance import resolve_for_record as _resolve_for_record
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 from legis.wardline.governor import WardlineCellPolicy, route_findings
 from legis.wardline.ingest import WardlineSeverity, active_defects
@@ -162,23 +163,7 @@ def create_app(
         return state["grammar"]
 
     def resolve_for_record(locator: str) -> tuple[EntityKey, dict]:
-        # The one resolve-then-key boundary: every governance write path keys on
-        # the SEI when Clarion proves a stable identity, on the locator otherwise.
-        # When no resolver is wired legis runs standalone (locator-keyed). The
-        # `clarion` extension carries the two distinct axes (identity: alive,
-        # content: content_hash) plus the REQ-L-01 lineage snapshot, never
-        # collapsed — present only when a resolution decision was actually made.
-        if identity is None:
-            return EntityKey.from_locator(locator), {}
-        res = identity.resolve(locator)
-        ext: dict = {}
-        if res.alive is not None:
-            ext["clarion"] = {
-                "alive": res.alive,
-                "content_hash": res.content_hash,
-                "lineage_snapshot": res.lineage_snapshot,
-            }
-        return res.entity_key, ext
+        return _resolve_for_record(identity, locator)
 
     @app.get("/health")
     def health() -> dict[str, str]:
