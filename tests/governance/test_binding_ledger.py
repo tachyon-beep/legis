@@ -57,15 +57,31 @@ def test_forged_signature_is_rejected(tmp_path):
         ledger.get(1)
 
 
-def test_transplanted_signature_is_rejected(tmp_path):
+def _signed_payload(**overrides):
+    payload = {"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
+               "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
+               "content_hash": "h", "recorded_at": "t"}
+    payload["binding_signature"] = sign(binding_signing_fields(payload), KEY)
+    payload.update(overrides)
+    return payload
+
+
+def test_tampering_a_signed_field_is_rejected(tmp_path):
+    # Copy a legit signature onto a record whose now-signed fields were mutated:
+    # flip entity_key.identity_stable and backdate recorded_at. Proves both are
+    # in the signed set.
     ledger, store = _ledger(tmp_path)
-    good_sig = sign(binding_signing_fields(
-        {"signoff_seq": 1, "issue_id": "I", "content_hash": "ORIGINAL",
-         "entity_key": {"value": "clarion:eid:x"}}), KEY)
-    store.append({"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
-                  "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
-                  "content_hash": "TAMPERED", "recorded_at": "t",
-                  "binding_signature": good_sig})
+    store.append(_signed_payload(
+        entity_key={"value": "clarion:eid:x", "identity_stable": False},
+        recorded_at="2020-01-01T00:00:00+00:00",
+    ))
+    with pytest.raises(BindingError):
+        ledger.verify()
+
+
+def test_tampering_content_hash_is_rejected(tmp_path):
+    ledger, store = _ledger(tmp_path)
+    store.append(_signed_payload(content_hash="TAMPERED"))
     with pytest.raises(BindingError):
         ledger.verify()
 

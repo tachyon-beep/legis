@@ -29,8 +29,9 @@ def binding_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "signoff_seq": payload["signoff_seq"],
         "issue_id": payload["issue_id"],
-        "sei": payload["entity_key"]["value"],
+        "entity_key": payload["entity_key"],  # full dict: value + identity_stable
         "content_hash": payload["content_hash"],
+        "recorded_at": payload["recorded_at"],
     }
 
 
