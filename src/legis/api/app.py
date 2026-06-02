@@ -34,6 +34,8 @@ from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
+from legis.wardline.governor import WardlineCellPolicy, route_findings
+from legis.wardline.ingest import active_defects
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
 DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
@@ -79,6 +81,12 @@ class SignoffSignIn(BaseModel):
 class PolicyEvalIn(BaseModel):
     policy: str
     target: dict = {}
+
+
+class ScanResultsIn(BaseModel):
+    cell: str
+    agent_id: str
+    scan: dict
 
 
 class CheckRunIn(BaseModel):
@@ -376,5 +384,29 @@ def create_app(
             "detail": ev.detail,
             "provenance_gap": ev.provenance_gap,
         }
+
+    # --- wardline suite-combination surface (WP-6.1) ---
+
+    @app.post("/wardline/scan-results")
+    def wardline_scan_results(body: ScanResultsIn) -> dict:
+        try:
+            policy = WardlineCellPolicy(body.cell)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"unknown cell: {body.cell}")
+
+        def resolve(qualname: str | None) -> EntityKey:
+            if identity is not None and qualname:
+                return identity.resolve(qualname).entity_key
+            return EntityKey.from_locator(qualname or "unknown")
+
+        routed = route_findings(
+            active_defects(body.scan),
+            policy=policy,
+            agent_id=body.agent_id,
+            resolve=resolve,
+            engine=engine() if policy is WardlineCellPolicy.SURFACE_OVERRIDE else None,
+            signoff=signoff_gate if policy is WardlineCellPolicy.BLOCK_ESCALATE else None,
+        )
+        return {"routed": routed}
 
     return app
