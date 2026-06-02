@@ -31,6 +31,7 @@ from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitError, GitSurface
 from legis.governance import params
 from legis.identity.entity_key import EntityKey
+from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
@@ -107,6 +108,7 @@ def create_app(
     signoff_gate: SignoffGate | None = None,
     trail_verifier: TrailVerifier | None = None,
     grammar: PolicyGrammar | None = None,
+    identity: IdentityResolver | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     state: dict[str, object | None] = {
@@ -137,6 +139,14 @@ def create_app(
         if state["grammar"] is None:
             state["grammar"] = default_grammar()
         return state["grammar"]
+
+    def resolve_entity(locator: str) -> EntityKey:
+        # The one resolve-then-key boundary: every governance write path keys on
+        # the SEI when Clarion proves a stable identity, on the locator otherwise.
+        # When no resolver is wired legis runs standalone (locator-keyed).
+        if identity is None:
+            return EntityKey.from_locator(locator)
+        return identity.resolve(locator).entity_key
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -185,7 +195,7 @@ def create_app(
     def post_override(body: OverrideIn, response: Response) -> dict:
         result = engine().submit_override(
             policy=body.policy,
-            entity_key=EntityKey.from_locator(body.entity),
+            entity_key=resolve_entity(body.entity),
             rationale=body.rationale,
             agent_id=body.agent_id,
         )
@@ -231,7 +241,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="protected cell not enabled")
         result = protected_gate.submit(
             policy=body.policy,
-            entity_key=EntityKey.from_locator(body.entity),
+            entity_key=resolve_entity(body.entity),
             rationale=body.rationale,
             agent_id=body.agent_id,
             file_fingerprint=body.file_fingerprint,
@@ -253,7 +263,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="protected cell not enabled")
         result = protected_gate.operator_override(
             policy=body.policy,
-            entity_key=EntityKey.from_locator(body.entity),
+            entity_key=resolve_entity(body.entity),
             rationale=body.rationale,
             operator_id=body.operator_id,
             file_fingerprint=body.file_fingerprint,
@@ -272,7 +282,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="structured cell not enabled")
         result = signoff_gate.request(
             policy=body.policy,
-            entity_key=EntityKey.from_locator(body.entity),
+            entity_key=resolve_entity(body.entity),
             rationale=body.rationale,
             agent_id=body.agent_id,
         )
