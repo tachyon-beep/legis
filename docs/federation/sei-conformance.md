@@ -10,7 +10,19 @@ Legis is a **consumer** of Stable Entity Identity (SEI), not the authority.
 
 ## Conformance obligations (SEI spec §5)
 
-These are legis's formal §5 obligations — confirmed, not aspirational:
+These are legis's formal §5 obligations — confirmed, not aspirational.
+
+> **IMPLEMENTED (Sprint 5, 2026-06-02).** All six obligations are discharged and
+> proven by the SEI §8 conformance oracle (`tests/conformance/test_sei_oracle.py`,
+> six scenarios green). Map: keyed-on-SEI → `identity/resolver.py` +
+> `api/app.py:resolve_for_record`, wired into **every** governance write path
+> (`/overrides`, `/protected/overrides`, `/protected/operator-override`,
+> `/signoff/request`); opaque treatment → `EntityKey.from_sei` (value stored
+> verbatim, never parsed); lineage spine + two-axis + governance-gap →
+> `governance/gaps.py` and `GET /governance/identity-gaps`; honest degrade →
+> `IdentityResolver.resolve` (`identity_stable: false` on absent capability / no
+> client / not-alive / transport error). See Sprint 5 plan for the scope lines on
+> the lineage-snapshot extension and cross-store gap detection.
 
 - **Attestations keyed on SEI.** Governance verdicts, sign-offs, and policy
   decisions that concern a code entity are keyed on SEI — never on a locator.
@@ -65,6 +77,15 @@ store. Before lock, Clarion must commit to one of:
 Option 3 is acceptable to legis for v1 — legis will store a snapshot hash of
 the lineage at each governance decision and detect divergence on re-read. The
 ask is that the approach be *explicit*, not left ambiguous.
+
+> **RESOLVED (2026-06-02) — Clarion committed to Option 3.** Clarion ships **no**
+> lineage hash-chain or signature in v1 (`contracts.md` §legis governance
+> consumption: "Integrity is legis's boundary, not Clarion's"). legis establishes
+> prefix-hash custody at the governance boundary: it stores
+> `{length, hash(lineage[:length])}` at each decision and, on re-read, verifies
+> the snapshot is still a **prefix** of the current lineage — appends (rename/move)
+> are legitimate, a truncated or mutated prior event is divergence. Implemented in
+> `governance/gaps.py:find_lineage_divergence`; demonstrated by Sprint 5 Task 5.
 
 **REQ-L-02 — §6 provider seam design (non-blocking; sequencing).**
 The SEI §3 matcher's git-rename detection should be designed as a typed

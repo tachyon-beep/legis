@@ -302,6 +302,11 @@ The highest-leverage un-gated item — the hinge between "standalone tool" and
 
 ## Sprint 5 — SEI conformance *(GATED: Clarion ships SEI)*
 
+**Status:** ✅ implemented 2026-06-02 — WP-5.1 + WP-5.2 complete; SEI §8 oracle
+green (six scenarios); all four governance write paths key on SEI; gate cleared
+(Clarion shipped SEI + advertises `sei.supported`). Plan + scope lines:
+`docs/superpowers/plans/2026-06-02-legis-sprint-5-sei-conformance.md`.
+
 A consumer-layer change, thin and ready once Sprints 0–4 exist — but it
 **cannot start until SEI locks and Clarion ships it** (SEI spec §0.3: defer
 anything that pins a specific SEI shape). Serves roadmap §2.1 + Appendix A.
