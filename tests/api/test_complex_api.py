@@ -191,3 +191,42 @@ def test_identity_gaps_scan_the_protected_trail(tmp_path):
     assert c.post("/protected/overrides", json=PBODY).status_code == 201
     gaps = c.get("/governance/identity-gaps").json()
     assert [g["sei"] for g in gaps] == ["clarion:eid:abc123"]
+
+
+def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
+    from legis.identity.resolver import IdentityResolver
+
+    class ShrinkingClient:
+        def __init__(self):
+            self._calls = 0
+
+        def capability(self):
+            return True
+
+        def resolve_locator(self, locator):
+            return {"sei": "clarion:eid:abc123", "current_locator": locator,
+                    "content_hash": "h", "alive": True}
+
+        def resolve_sei(self, sei):
+            return {"sei": sei, "alive": True}
+
+        def lineage(self, sei):
+            self._calls += 1
+            # First call = snapshot at write time (length 2); later =
+            # truncated (prefix broken).
+            if self._calls == 1:
+                return [{"event": "born"}, {"event": "moved"}]
+            return [{"event": "born"}]
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    clock = FixedClock("2026-06-02T12:00:00+00:00")
+    pg = ProtectedGate(store, clock, judge=ScriptedJudge(
+        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
+    app = create_app(protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
+                     identity=IdentityResolver(ShrinkingClient()))
+    c = TestClient(app)
+    assert c.post("/protected/overrides", json=PBODY).status_code == 201
+    body = c.get("/governance/lineage-integrity").json()
+    assert [d["sei"] for d in body["divergences"]] == ["clarion:eid:abc123"]
+    assert body["divergences"][0]["recorded_length"] == 2
+    assert body["divergences"][0]["current_length"] == 1
