@@ -136,12 +136,21 @@ class GitSurface:
                 continue
             old_path, _, new_path = rest.partition("\t")
             similarity = int(status[1:]) if status[1:].isdigit() else 0
+            old_blob = self._blob(f"{current_sha}~1", old_path)
+            new_blob = self._blob(current_sha, new_path)
             evidence.append(
                 RenameEvidence(
                     commit_sha=current_sha,
                     old_path=old_path,
                     new_path=new_path,
                     similarity=similarity,
+                    old_blob=old_blob,
+                    new_blob=new_blob,
                 )
             )
         return evidence
+
+    def _blob(self, rev: str, path: str) -> str:
+        """The git object SHA of ``path`` at ``rev`` ("" if it cannot be resolved)."""
+        result = self._run_raw("rev-parse", f"{rev}:{path}")
+        return result.stdout.strip() if result.returncode == 0 else ""

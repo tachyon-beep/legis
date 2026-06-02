@@ -41,3 +41,5 @@ class RenameEvidence:
     old_path: str
     new_path: str
     similarity: int
+    old_blob: str = ""
+    new_blob: str = ""

@@ -85,3 +85,10 @@ def test_branch_reports_upstream_and_ahead_behind(git_repo):
     # An untracked branch degrades honestly — never a guessed 0/0.
     assert by["main"].upstream is None
     assert by["main"].ahead is None and by["main"].behind is None
+
+
+def test_renames_carry_pre_and_post_blob_shas(git_repo):
+    [ev] = GitSurface(str(git_repo)).renames("HEAD~1..HEAD")  # commit 3: a.txt -> renamed.txt
+    assert (ev.old_path, ev.new_path) == ("a.txt", "renamed.txt")
+    assert len(ev.old_blob) == 40 and len(ev.new_blob) == 40
+    assert ev.old_blob == ev.new_blob   # pure git mv → identical blob
