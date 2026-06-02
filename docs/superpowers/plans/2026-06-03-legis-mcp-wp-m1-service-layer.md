@@ -578,13 +578,27 @@ from legis.store.audit_store import AuditStore
 from legis.service.governance import submit_override
 
 
-def _mem_engine():
-    # in-memory sqlite store, no judge → chill cell
-    return EnforcementEngine(AuditStore("sqlite://"), SystemClock())
+from legis.enforcement.verdict import JudgeOpinion, Verdict
 
 
-def test_submit_override_chill_records_and_accepts():
-    engine = _mem_engine()
+def _sqlite_engine(tmp_path, *, judge=None):
+    # file-backed sqlite store (a bare "sqlite://" in-memory URL is incompatible
+    # with the project's NullPool — a fresh empty DB per connection). No judge →
+    # chill cell; a judge → coached cell.
+    return EnforcementEngine(
+        AuditStore(f"sqlite:///{tmp_path}/gov.db"), SystemClock(), judge=judge
+    )
+
+
+class _BlockingJudge:
+    model_id = "stub-judge"
+
+    def evaluate(self, record):
+        return JudgeOpinion(verdict=Verdict.BLOCKED, model="stub-judge", rationale="rationale insufficient")
+
+
+def test_submit_override_chill_records_and_accepts(tmp_path):
+    engine = _sqlite_engine(tmp_path)
     result = submit_override(
         engine,
         identity=None,
@@ -594,11 +608,29 @@ def test_submit_override_chill_records_and_accepts():
         agent_id="agent-7",
     )
     assert result.accepted is True
-    assert result.seq >= 0
+    assert result.seq == 1  # a fresh store's first append returns seq 1
     # The recorded payload keys on the locator and attributes the agent.
     trail = engine.trail()
-    assert trail[-1]["agent_id"] == "agent-7"
-    assert trail[-1]["policy"] == "no-direct-push"
+    assert len(trail) == 1
+    assert trail[0]["agent_id"] == "agent-7"
+    assert trail[0]["policy"] == "no-direct-push"
+
+
+def test_submit_override_coached_blocks_on_negative_verdict(tmp_path):
+    engine = _sqlite_engine(tmp_path, judge=_BlockingJudge())
+    result = submit_override(
+        engine,
+        identity=None,
+        policy="no-direct-push",
+        entity="src/foo.py:bar",
+        rationale="trust me",
+        agent_id="agent-7",
+    )
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+    assert result.judge_model == "stub-judge"
+    # the BLOCKED attempt is still recorded (no silent path)
+    assert len(engine.trail()) == 1
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -684,7 +716,7 @@ Replace the body of `post_override` so it calls the service function and keeps t
 - [ ] **Step 6: Run the whole suite**
 
 Run: `uv run pytest -q`
-Expected: PASS — 223 passed. The existing `/overrides` behavior tests (chill 201, coached ACCEPTED 201 / BLOCKED 409) pass unchanged through the new seam.
+Expected: PASS — 228 passed (214 baseline + 14 new service tests; Task 5 adds 2). The existing `/overrides` behavior tests (chill 201, coached ACCEPTED 201 / BLOCKED 409) pass unchanged through the new seam.
 
 - [ ] **Step 7: Commit**
 
@@ -702,7 +734,7 @@ git commit -m "refactor(service): extract submit_override seam for the MCP adapt
 - [ ] **Step 1: Run the full suite with warnings-as-errors (the project's pytest config sets `filterwarnings = error`)**
 
 Run: `uv run pytest -q`
-Expected: PASS — 223 passed, 0 warnings.
+Expected: PASS — 228 passed, 0 warnings.
 
 - [ ] **Step 2: Lint and type-check the touched files**
 
