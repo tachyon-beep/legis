@@ -93,6 +93,14 @@ provider interface (not Clarion-internal) before it ships, so legis can supply
 the event when its git interface is ready. No wire-contract change; sequencing
 only.
 
+> **RESOLVED (2026-06-02) — Clarion built the seam.** Clarion ships the typed
+> `GitRenameSource` trait + a `LegisGitRenameSource` consumer that pulls
+> `GET /git/renames` and owns the path→locator translation (legis stays
+> path-level). legis's provider half is contract-locked by
+> `tests/contract/test_git_renames_contract.py`. Operative enablement is jointly
+> gated on Clarion driving a committed rev-range (window-mismatch gap, surfaced
+> in clarion/docs/federation/contracts.md) — not a legis build item.
+
 **Informational — lineage push surface.**
 A push/event surface on lineage would let legis react to SEI lifecycle events
 without polling. Legis v1 will use pull-only polling and accept the latency.

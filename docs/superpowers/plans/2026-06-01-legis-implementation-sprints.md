@@ -341,6 +341,8 @@ anything that pins a specific SEI shape). Serves roadmap §2.1 + Appendix A.
 
 ## Sprint 6 — Suite combinations *(GATED: siblings)*
 
+**Status:** ✅ implemented 2026-06-02 — WP-6.1 (Wardline routing) + WP-6.2 (Filigree governed sign-off binding) + WP-6.3 (git-rename provider contract lock) complete, 144 tests green. WP-6.3 operative enablement is jointly gated on Clarion driving a committed rev-range (window-mismatch gap, surfaced in clarion/docs/federation/contracts.md).
+
 The combination-matrix cells light up. Each WP waits on its sibling **in
 addition to** legis Half 1. Serves roadmap §2.2–§2.4.
 

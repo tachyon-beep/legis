@@ -1,5 +1,7 @@
 # Legis Sprint 6 — Suite combinations Implementation Plan
 
+**Status:** ✅ implemented 2026-06-02 — WP-6.1 + WP-6.2 + WP-6.3 complete, 144 tests green. WP-6.3 ships the provider contract lock + disclosure; operative git-rename enablement is jointly gated on Clarion driving a committed rev-range.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Light up the three combination-matrix cells that pair legis with a sibling — **WP-6.1** Wardline analyses / legis governs (a Wardline finding routes through legis enforcement into the configured 2×2 cell, under one shared trust vocabulary); **WP-6.2** legis attaches tamper-bound, SEI-keyed governed sign-offs to Filigree issues without taking over issue-state semantics; **WP-6.3** lock legis's already-shipped git-rename provider half against Clarion's `LegisGitRenameSource` consumer and honestly disclose the operative window gap.

@@ -46,9 +46,9 @@ Loom's value is the *matrix* of its tools' combinations, not their sum. Each pai
 | **Wardline + Clarion** | Structure + trust posture in one view (the dossier) | **Live** |
 | **Wardline + Filigree** | Findings become tracked work | **Live** |
 | **Clarion + Filigree** | Issues bound to live code, surviving refactors | **Partial** — orphans on rename (SEI gap) |
-| **Wardline + Legis** | Agent-defined policy enforced at the CI/git boundary | **Future** |
-| **Clarion + Legis** | Governance attestations keyed to stable code identity | **Future** |
-| **Filigree + Legis** | Governed issue lifecycle — sign-offs, RTM, verification states | **Future** |
+| **Wardline + Legis** | Agent-defined policy enforced at the CI/git boundary | **Live** — findings route through legis enforcement into the configured 2×2 cell (Sprint 6 WP-6.1) |
+| **Clarion + Legis** | Governance attestations keyed to stable code identity | **Live** (SEI-keyed attestations, Sprint 5); git-rename provider **contract-locked**, operative pending Clarion committed-range driving (WP-6.3) |
+| **Filigree + Legis** | Governed issue lifecycle — sign-offs, RTM, verification states | **Live** — governed SEI-keyed sign-off binding; Filigree retains lifecycle authority (Sprint 6 WP-6.2) |
 
 Higher-order: **all four** closes the loop — the agent understands the code (Clarion) and its trust posture (Wardline), Legis governs what it may do and records overrides, and every decision and unit of work is tracked against stable identity (Filigree + Clarion).
 
