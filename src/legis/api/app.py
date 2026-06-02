@@ -32,6 +32,7 @@ from legis.git.surface import GitError, GitSurface
 from legis.governance import params
 from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
 from legis.filigree.client import FiligreeClient
+from legis.governance.binding_ledger import BindingError, BindingLedger
 from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
@@ -125,6 +126,7 @@ def create_app(
     grammar: PolicyGrammar | None = None,
     identity: IdentityResolver | None = None,
     filigree: FiligreeClient | None = None,
+    binding_ledger: BindingLedger | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     state: dict[str, object | None] = {
@@ -349,10 +351,23 @@ def create_app(
                 entity_key=entity_key,
                 content_hash=content_hash,
                 signoff_seq=request_seq,
+                ledger=binding_ledger,
             )
         except ValueError as exc:
             # A locator-keyed (non-SEI) sign-off can't be rename-stably bound.
             raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get("/signoff/{request_seq}/binding")
+    def get_binding(request_seq: int) -> dict:
+        if binding_ledger is None:
+            raise HTTPException(status_code=404, detail="binding ledger not enabled")
+        try:
+            binding = binding_ledger.get(request_seq)
+        except BindingError as exc:
+            raise HTTPException(status_code=500, detail=f"binding integrity failure: {exc}")
+        if binding is None:
+            raise HTTPException(status_code=404, detail="no binding at seq")
+        return binding
 
     @app.post("/signoff/{request_seq}/sign")
     def post_signoff_sign(request_seq: int, body: SignoffSignIn) -> dict:
