@@ -30,6 +30,7 @@ from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifie
 from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitError, GitSurface
 from legis.governance import params
+from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
@@ -330,6 +331,29 @@ def create_app(
             "rate": res.rate,
             "sample_size": res.sample_size,
         }
+
+    # --- SEI lineage-spine read surfaces (WP-5.2) ---
+    # Pull-only, on-demand: each held SEI is re-resolved against Clarion when the
+    # surface is hit. They consume the simple-tier engine trail; cross-store gap
+    # detection over the protected trail is a documented follow-up (protected
+    # records still key on SEI, so they remain orphan-detectable once pointed
+    # there). When no client is wired there is nothing stable to probe.
+
+    @app.get("/governance/identity-gaps")
+    def identity_gaps() -> list[dict]:
+        if identity is None or identity.client is None:
+            return []
+        gaps = find_orphan_gaps(engine().records(), identity.client)
+        return [{"sei": g.sei, "reason": g.reason, "lineage": g.lineage} for g in gaps]
+
+    @app.get("/governance/lineage-integrity")
+    def lineage_integrity() -> dict:
+        if identity is None or identity.client is None:
+            return {"divergences": []}
+        divs = find_lineage_divergence(engine().records(), identity.client)
+        return {"divergences": [
+            {"sei": d.sei, "recorded_length": d.recorded_length,
+             "current_length": d.current_length} for d in divs]}
 
     # --- agent-programmable policy grammar (WP-4.1) ---
 

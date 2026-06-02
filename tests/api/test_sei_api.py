@@ -120,3 +120,29 @@ def test_record_carries_clarion_two_axis_and_lineage_snapshot(tmp_path):
     assert clarion["alive"] is True
     assert clarion["content_hash"] == "blake3hash"
     assert clarion["lineage_snapshot"] == {"length": 2, "hash": content_hash(lineage)}
+
+
+def test_identity_gaps_endpoint_surfaces_orphans(tmp_path):
+    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+             "content_hash": "h", "alive": True}
+
+    class OrphanClient(FakeClient):
+        def resolve_sei(self, sei):
+            return {"sei": sei, "alive": False, "lineage": [{"event": "orphaned"}]}
+
+    c = _app(tmp_path, OrphanClient(alive, lineage=[{"event": "born"}]))
+    c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
+                               "rationale": "reviewed", "agent_id": "agent-1"})
+    gaps = c.get("/governance/identity-gaps").json()
+    assert gaps == [{"sei": "clarion:eid:abc123", "reason": "orphaned",
+                     "lineage": [{"event": "orphaned"}]}]
+
+
+def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
+    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+             "content_hash": "h", "alive": True}
+    c = _app(tmp_path, FakeClient(alive, lineage=[{"event": "born"}]))
+    c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
+                               "rationale": "reviewed", "agent_id": "agent-1"})
+    # FakeClient.lineage still returns the same [born]; snapshot matches → clean.
+    assert c.get("/governance/lineage-integrity").json() == {"divergences": []}
