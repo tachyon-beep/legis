@@ -383,23 +383,24 @@ def create_app(
 
     # --- SEI lineage-spine read surfaces (WP-5.2) ---
     # Pull-only, on-demand: each held SEI is re-resolved against Clarion when the
-    # surface is hit. They consume the simple-tier engine trail; cross-store gap
-    # detection over the protected trail is a documented follow-up (protected
-    # records still key on SEI, so they remain orphan-detectable once pointed
-    # there). When no client is wired there is nothing stable to probe.
+    # surface is hit. Detection consumes verified_governance_records() — the
+    # protected store (HMAC-verified, fail-closed) when a protected gate is wired,
+    # the engine store otherwise — so PROTECTED attestations are orphan-detectable.
+    # A tampered protected trail raises HTTP 500 before any scan is attempted.
+    # When no client is wired there is nothing stable to probe.
 
     @app.get("/governance/identity-gaps")
     def identity_gaps() -> list[dict]:
         if identity is None or identity.client is None:
             return []
-        gaps = find_orphan_gaps(engine().records(), identity.client)
+        gaps = find_orphan_gaps(verified_governance_records(), identity.client)
         return [{"sei": g.sei, "reason": g.reason, "lineage": g.lineage} for g in gaps]
 
     @app.get("/governance/lineage-integrity")
     def lineage_integrity() -> dict:
         if identity is None or identity.client is None:
             return {"divergences": []}
-        divs = find_lineage_divergence(engine().records(), identity.client)
+        divs = find_lineage_divergence(verified_governance_records(), identity.client)
         return {"divergences": [
             {"sei": d.sei, "recorded_length": d.recorded_length,
              "current_length": d.current_length} for d in divs]}

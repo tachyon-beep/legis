@@ -161,3 +161,33 @@ def test_override_rate_gate_fails_closed_on_a_tampered_trail(tmp_path):
     _tamper_first_record(str(tmp_path / "gov.db"), flip)
     assert store.verify_integrity() is True  # unkeyed chain fooled
     assert c.get("/governance/override-rate").status_code == 500
+
+
+def test_identity_gaps_scan_the_protected_trail(tmp_path):
+    from legis.identity.resolver import IdentityResolver
+
+    class OrphanClient:
+        def capability(self):
+            return True
+
+        def resolve_locator(self, locator):
+            return {"sei": "clarion:eid:abc123", "current_locator": locator,
+                    "content_hash": "h", "alive": True}
+
+        def resolve_sei(self, sei):
+            return {"sei": sei, "alive": False, "lineage": [{"event": "orphaned"}]}
+
+        def lineage(self, sei):
+            return [{"event": "born"}]
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    clock = FixedClock("2026-06-02T12:00:00+00:00")
+    pg = ProtectedGate(store, clock, judge=ScriptedJudge(
+        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
+    app = create_app(protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
+                     identity=IdentityResolver(OrphanClient()))
+    c = TestClient(app)
+    # A protected override keyed on an SEI Clarion now reports dead.
+    assert c.post("/protected/overrides", json=PBODY).status_code == 201
+    gaps = c.get("/governance/identity-gaps").json()
+    assert [g["sei"] for g in gaps] == ["clarion:eid:abc123"]
