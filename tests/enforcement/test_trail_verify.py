@@ -1,0 +1,124 @@
+import json
+import sqlite3
+
+from legis.canonical import canonical_json, content_hash
+from legis.clock import FixedClock
+from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
+from legis.enforcement.verdict import JudgeOpinion, Verdict
+from legis.identity.entity_key import EntityKey
+from legis.store.audit_store import GENESIS, AuditStore, _chain
+
+
+class ScriptedJudge:
+    def __init__(self, opinion):
+        self.opinion = opinion
+
+    def evaluate(self, record):
+        return self.opinion
+
+
+KEY = b"protected-key-1"
+PROTECTED = frozenset({"no-eval"})
+
+
+def _gate(db):
+    store = AuditStore(f"sqlite:///{db}")
+    g = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
+        key=KEY,
+    )
+    return g, store
+
+
+def _submit(g):
+    g.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("e"),
+        rationale="original",
+        agent_id="a",
+        file_fingerprint="fp",
+        ast_path="ap",
+    )
+
+
+def test_clean_protected_trail_verifies(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    TrailVerifier(KEY, PROTECTED).verify(store.read_all())  # no raise
+
+
+def test_missing_signature_on_protected_policy_is_tampering(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _strip_signature_and_rechain(tmp_path / "gov.db")
+    assert store.verify_integrity() is True  # Sprint 0 unkeyed chain fooled
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on missing signature")
+    except TamperError:
+        pass
+
+
+def test_hmac_catches_a_fully_rechained_edit(tmp_path):
+    # THE discriminating test: edit a protected record's rationale, recompute the
+    # content/chain hashes for it and every successor so verify_integrity()==True,
+    # then assert the keyed HMAC still rejects it.
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _edit_rationale_and_rechain(tmp_path / "gov.db", "FORGED")
+    assert store.verify_integrity() is True  # unkeyed chain fooled
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on forged rationale")
+    except TamperError:
+        pass
+
+
+# --- raw-sqlite tamper helpers (out-of-band edits the store API forbids) ---
+
+
+def _open_unlocked(db):
+    con = sqlite3.connect(db)
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
+    return con
+
+
+def _rechain(con):
+    rows = con.execute("SELECT seq, payload FROM audit_log ORDER BY seq ASC").fetchall()
+    prev = GENESIS
+    for seq, payload in rows:
+        c = content_hash(json.loads(payload))
+        ch = _chain(prev, c)
+        con.execute(
+            "UPDATE audit_log SET content_hash=?, prev_hash=?, chain_hash=? WHERE seq=?",
+            (c, prev, ch, seq),
+        )
+        prev = ch
+    con.commit()
+
+
+def _edit_rationale_and_rechain(db, new_rationale):
+    con = _open_unlocked(db)
+    seq, payload = con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
+    ).fetchone()
+    p = json.loads(payload)
+    p["rationale"] = new_rationale
+    con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
+    _rechain(con)
+    con.close()
+
+
+def _strip_signature_and_rechain(db):
+    con = _open_unlocked(db)
+    seq, payload = con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
+    ).fetchone()
+    p = json.loads(payload)
+    p["extensions"].pop("judge_metadata_signature", None)
+    con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
+    _rechain(con)
+    con.close()

@@ -55,6 +55,35 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class TrailVerifier:
+    """Load-time signature check. A record whose policy is protected MUST carry a
+    valid signature; a missing or mismatched signature is tampering.
+
+    The protected-policy set comes from config (ADR-0002), NOT from the record —
+    so stripping a signature and flipping an in-record flag cannot downgrade a
+    protected record to "unsigned, skip".
+    """
+
+    def __init__(self, key: bytes, protected_policies: frozenset[str]) -> None:
+        self._key = key
+        self._protected = protected_policies
+
+    def verify(self, records) -> None:
+        for rec in records:
+            if rec.payload.get("policy") not in self._protected:
+                continue
+            ext = rec.payload.get("extensions", {})
+            sig = ext.get("judge_metadata_signature")
+            if not sig:
+                raise TamperError(
+                    f"protected record seq={rec.seq} is missing its signature"
+                )
+            if not verify(signing_fields(rec.payload), sig, self._key):
+                raise TamperError(
+                    f"protected record seq={rec.seq} signature does not verify"
+                )
+
+
 class ProtectedGate:
     def __init__(
         self, store: AuditStore, clock: Clock, judge: Judge, key: bytes
