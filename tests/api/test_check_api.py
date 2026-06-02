@@ -52,3 +52,11 @@ def test_post_rejects_invalid_outcome(tmp_path):
     c = client(tmp_path)
     resp = c.post("/checks", json=a_run(outcome="exploded"))
     assert resp.status_code == 422
+
+
+def test_check_api_round_trips_rule_set_and_policy_version(tmp_path):
+    c = client(tmp_path)
+    assert c.post("/checks", json=a_run(rule_set="wardline@3", policy_version="pv-9")).status_code == 201
+    got = c.get(f"/checks/commit/{'a' * 40}").json()[0]
+    assert got["rule_set"] == "wardline@3"
+    assert got["policy_version"] == "pv-9"

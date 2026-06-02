@@ -67,3 +67,18 @@ def test_all_outcomes_round_trip(tmp_path):
                           outcome=oc))
     got = {r.check_name: r.outcome for r in s.for_commit("d" * 40)}
     assert set(got.values()) == set(CheckOutcome)
+
+
+def test_rule_set_and_policy_version_round_trip(tmp_path):
+    s = surface(tmp_path)
+    s.record(make_run(rule_set="wardline@3", policy_version="pv-9"))
+    r = s.for_commit("a" * 40)[0]
+    assert r.rule_set == "wardline@3"
+    assert r.policy_version == "pv-9"
+
+
+def test_none_provenance_round_trips_as_none(tmp_path):
+    s = surface(tmp_path)
+    s.record(make_run(run_id="r2", commit_sha="e" * 40, rule_set=None, policy_version=None))
+    r = s.for_commit("e" * 40)[0]
+    assert r.rule_set is None and r.policy_version is None
