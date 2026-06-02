@@ -6,6 +6,11 @@ governance binding survives rename/move. It does NOT mutate Filigree issue
 status — lifecycle transitions remain Filigree's authority (locked decision 5).
 A locator-keyed sign-off is rejected: an unstable binding would orphan on rename,
 defeating the point.
+
+When a ``ledger`` is supplied, the order is validate → attach → record: after a
+successful attach, a tamper-bound ``BindingRecord`` is appended to the ledger and
+its sequence number is returned to the caller as ``binding_seq``. The Filigree row
+stays an opaque pointer; the ledger is where the binding's integrity lives.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from legis.filigree.client import FiligreeClient
+from legis.governance.binding_ledger import BindingLedger
 from legis.identity.entity_key import EntityKey
 
 BINDING_ACTOR = "legis"
@@ -25,6 +31,7 @@ def bind_signoff_to_issue(
     entity_key: EntityKey,
     content_hash: str,
     signoff_seq: int,
+    ledger: BindingLedger | None = None,
 ) -> dict[str, Any]:
     if not entity_key.identity_stable:
         raise ValueError(
@@ -34,4 +41,16 @@ def bind_signoff_to_issue(
     result = filigree.attach(
         issue_id, entity_key.value, content_hash, actor=BINDING_ACTOR
     )
-    return {**result, "signoff_seq": signoff_seq}
+    out = {**result, "signoff_seq": signoff_seq}
+    if ledger is not None:
+        # Validate → attach → record. If this record() raises after attach() succeeded,
+        # Filigree already holds the pointer while legis has no local binding record;
+        # there is no compensating delete (accepted trade-off — a binding with no
+        # verifiable ledger entry is exactly what the ledger's verify() surfaces).
+        out["binding_seq"] = ledger.record(
+            signoff_seq=signoff_seq,
+            issue_id=issue_id,
+            entity_key=entity_key,
+            content_hash=content_hash,
+        )
+    return out
