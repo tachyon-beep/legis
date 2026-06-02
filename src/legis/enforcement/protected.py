@@ -135,6 +135,30 @@ class ProtectedGate:
             ast_path=ast_path,
         )
 
+    def operator_override(
+        self,
+        *,
+        policy: str,
+        entity_key: EntityKey,
+        rationale: str,
+        operator_id: str,
+        file_fingerprint: str,
+        ast_path: str,
+    ) -> ProtectedResult:
+        # A human uses authority to bypass the judge. No model is consulted; the
+        # verdict is the distinct OVERRIDDEN_BY_OPERATOR signal, still tamper-bound.
+        return self._record_signed(
+            policy=policy,
+            entity_key=entity_key,
+            rationale=rationale,
+            actor_id=operator_id,
+            verdict=Verdict.OVERRIDDEN_BY_OPERATOR,
+            model=None,
+            judge_rationale=None,
+            file_fingerprint=file_fingerprint,
+            ast_path=ast_path,
+        )
+
     def records(self):
         """The governance trail this gate writes to — for verified reads."""
         return self._store.read_all()
