@@ -43,17 +43,28 @@ class GitSurface:
         current = self._run("branch", "--show-current").strip()
         out = self._run(
             "for-each-ref",
-            "--format=%(refname:short)%09%(objectname)",
+            "--format=%(refname:short)%09%(objectname)%09%(upstream:short)",
             "refs/heads",
         )
         branches: list[BranchInfo] = []
         for line in out.splitlines():
             if not line.strip():
                 continue
-            name, _, sha = line.partition("\t")
-            branches.append(
-                BranchInfo(name=name, head_sha=sha, is_current=(name == current))
-            )
+            parts = (line.split("\t") + ["", "", ""])[:3]
+            name, sha, upstream = parts[0], parts[1], parts[2]
+            up = upstream or None
+            ahead = behind = None
+            if up:
+                # <behind>\t<ahead>  ==  left-right of <upstream>...<branch>
+                counts = self._run_raw("rev-list", "--left-right", "--count", f"{up}...{name}")
+                if counts.returncode == 0:
+                    left, _, right = counts.stdout.strip().partition("\t")
+                    if left.isdigit() and right.isdigit():
+                        behind, ahead = int(left), int(right)
+            branches.append(BranchInfo(
+                name=name, head_sha=sha, is_current=(name == current),
+                upstream=up, ahead=ahead, behind=behind,
+            ))
         return branches
 
     def commit(self, sha: str) -> CommitInfo:

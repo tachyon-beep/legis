@@ -1,6 +1,12 @@
+import subprocess
+
 import pytest
 
 from legis.git.surface import GitError, GitSurface
+
+
+def _g(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
 
 
 def test_branches_lists_all_with_current(git_repo):
@@ -68,3 +74,14 @@ def test_renames_detects_path_rename_with_similarity(git_repo):
     assert r.new_path == "renamed.txt"
     assert r.similarity == 100
     assert len(r.commit_sha) == 40
+
+
+def test_branch_reports_upstream_and_ahead_behind(git_repo):
+    _g(git_repo, "branch", "--set-upstream-to=main", "feature")  # local upstream
+    by = {b.name: b for b in GitSurface(str(git_repo)).branches()}
+    assert by["feature"].upstream == "main"
+    assert by["feature"].behind == 2   # main has 2 commits feature lacks (b.txt, rename)
+    assert by["feature"].ahead == 0
+    # An untracked branch degrades honestly — never a guessed 0/0.
+    assert by["main"].upstream is None
+    assert by["main"].ahead is None and by["main"].behind is None

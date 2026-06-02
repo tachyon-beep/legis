@@ -10,6 +10,9 @@ class BranchInfo:
     name: str
     head_sha: str
     is_current: bool
+    upstream: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
 
 
 @dataclass(frozen=True)
