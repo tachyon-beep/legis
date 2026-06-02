@@ -1,0 +1,71 @@
+from legis.policy.decorator import (
+    check_policy_boundary,
+    fingerprint,
+    policy_boundary,
+)
+
+
+# A real, resolvable "test" function the gate will fingerprint.
+def fake_boundary_test():
+    # references the decorated function name 'handler' and the policy 'no-eval'
+    handler_under_test = "handler exercises no-eval boundary"
+    assert "no-eval" in handler_under_test
+
+
+def resolver(ref):
+    return {"tests::fake": fake_boundary_test}.get(ref)
+
+
+def _decorate(test_fingerprint):
+    @policy_boundary(
+        source="external payload",
+        suppresses=("no-eval",),
+        invariant="rejects bad input",
+        test_ref="tests::fake",
+        test_fingerprint=test_fingerprint,
+    )
+    def handler(payload):
+        return payload
+
+    return handler
+
+
+def test_gate_passes_with_a_pinned_unmodified_test():
+    good = fingerprint(fake_boundary_test)
+    finding = check_policy_boundary(_decorate(good), resolver)
+    assert finding.ok is True, finding.reason
+
+
+def test_gate_fails_on_fingerprint_drift():
+    # THE discriminating test: a stale fingerprint means the test changed after
+    # review — behavioural evidence no longer pinned.
+    finding = check_policy_boundary(_decorate("stale-old-hash"), resolver)
+    assert finding.ok is False
+    assert "drift" in finding.reason.lower()
+
+
+def test_gate_rejects_missing_test_ref_as_vibe_justification():
+    @policy_boundary(source="s", suppresses=("no-eval",), invariant="i")
+    def handler(payload):
+        return payload
+
+    finding = check_policy_boundary(handler, resolver)
+    assert finding.ok is False
+    assert "test_ref" in finding.reason
+
+
+def test_gate_fails_when_test_ref_resolves_to_nothing():
+    good = fingerprint(fake_boundary_test)
+    h = _decorate(good)
+    finding = check_policy_boundary(h, lambda ref: None)
+    assert finding.ok is False
+
+
+def test_gate_fails_on_metadata_transplant():
+    # qualname mismatch = metadata copied onto a different function.
+    good = fingerprint(fake_boundary_test)
+    h = _decorate(good)
+    object.__setattr__(h.__policy_boundary__, "qualname", "some.other.func")
+    finding = check_policy_boundary(h, resolver)
+    assert finding.ok is False
+    assert "scope" in finding.reason.lower() or "qualname" in finding.reason.lower()
