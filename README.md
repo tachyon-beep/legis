@@ -1,10 +1,10 @@
 # Legis
 
-Legis is the planned fourth Loom product: the git/CI and governance side of the suite's common operating picture.
+Legis is the fourth Loom product: the git/CI and governance side of the suite's common operating picture.
 
 ## Status
 
-Legis is **design-ready, not implemented**. This repository exists so Clarion, Filigree, and Wardline can review the intended shape of Legis before runtime code lands.
+Legis is **implemented through Sprint 6**. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Clarion is contract-locked, operative pending Clarion's committed-range driving. See the combination matrix below for per-pairing status.
 
 ## The Loom suite
 

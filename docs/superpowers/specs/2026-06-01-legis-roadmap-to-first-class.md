@@ -55,18 +55,22 @@ The **protected cell** is the elspeth CI judge pattern re-expressed in Loom's
 vocabulary — the "thick version" that carries cryptographic guarantees. It
 builds on top of the coached cell, not beside it.
 
-Legis is currently **design-ready, not implemented**; every milestone in §1 is
-greenfield construction, not refinement of a shipped baseline.
+Legis is **implemented through Sprint 6**: every milestone in §1 (git/CI surface,
+the graded 2×2 enforcement engine, the agent-programmable policy grammar) is built
+and tested, and the Half-2 suite layers (§2) are live — except the git-rename
+provider to Clarion, which is contract-locked, operative pending Clarion's
+committed-range driving. The sections below describe the as-built shape; the
+"greenfield" framing is the original forecast, retained for its design rationale.
 
 ---
 
 ## 1. Half 1 — legis as a first-class tool in its own right
-*(the foundation; sibling-independent but not yet built)*
+*(the foundation; sibling-independent — built, Sprints 0–6)*
 
 This is where "first-class" starts for legis. None of this half is gated on a
-sibling tool, but none of it exists yet — legis is a greenfield build from
-charter and design docs. The near-term work is giving legis a thing to ship on
-its own before the Loom combination matrix can light up.
+sibling tool, and it is now built (Sprints 0–6) from charter and design docs —
+the git/CI surfaces, the enforcement engine, and the policy grammar are all live.
+This is what lets the Loom combination matrix light up.
 
 ### 1.1 Git/change surface *(greenfield; autonomous)*
 
@@ -332,11 +336,13 @@ a shipped baseline.
 | 6 | **Filigree + legis governed lifecycle** — sign-offs, RTM, governed verification states | Filigree compat + legis milestones 1–3 | waits on legis and sibling compatibility |
 | 7 | **Git-rename signal provider to Clarion** — legis supplies git-rename event to SEI matcher | SEI §6 provider seam + legis milestone 1 git interface | legis claims the §6 seam once the git surface is built |
 
-**Honest gating picture.** Milestones 1–3 are legis's to build alone — none
-are gated on a sibling, but none are built either. This is the correct
-characterisation: sibling-independent does not mean already-exists. Milestones
-4–7 wait on siblings *in addition to* legis milestones 1–3; the blocker is
-always legis-existing as much as any sibling.
+**Honest gating picture.** Milestones 1–3 were legis's to build alone — none
+gated on a sibling — and are now built (Sprints 0–6: the git/CI surface, the
+graded enforcement engine, the policy grammar). Milestones 4–6 are live
+(SEI-keyed attestations; the Wardline and Filigree combinations); milestone 7
+(git-rename provider) is contract-locked, operative pending Clarion's
+committed-range driving. The sibling-independence of 1–3 is why they could ship
+first; 4–7 layer on siblings in addition to legis's own engine.
 
 ---
 
