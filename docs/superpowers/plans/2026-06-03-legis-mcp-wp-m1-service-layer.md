@@ -326,14 +326,6 @@ from legis.service.errors import AuditIntegrityError
 from legis.service.governance import verified_records
 
 
-class _FakeEngine:
-    def __init__(self, records):
-        self._records = records
-
-    def records(self):
-        return self._records
-
-
 class _FakeProtectedGate:
     def __init__(self, records):
         self._records = records
@@ -352,27 +344,32 @@ class _TamperVerifier:
         raise TamperError("record 4 hash mismatch")
 
 
+def _boom():
+    raise AssertionError("engine fallback must not be called when a protected gate is wired")
+
+
 def test_verified_records_uses_engine_store_when_no_protected_gate():
-    engine = _FakeEngine(["r1", "r2"])
-    assert verified_records(None, None, engine) == ["r1", "r2"]
+    assert verified_records(None, None, lambda: ["r1", "r2"]) == ["r1", "r2"]
 
 
-def test_verified_records_uses_protected_store_when_gate_present():
-    engine = _FakeEngine(["engine"])
+def test_verified_records_uses_protected_store_and_skips_engine_fallback():
     gate = _FakeProtectedGate(["protected"])
-    assert verified_records(gate, _OkVerifier(), engine) == ["protected"]
+    assert verified_records(gate, _OkVerifier(), _boom) == ["protected"]
 
 
 def test_verified_records_skips_verification_when_no_verifier():
     gate = _FakeProtectedGate(["protected"])
-    assert verified_records(gate, None, engine=_FakeEngine([])) == ["protected"]
+    assert verified_records(gate, None, _boom) == ["protected"]
 
 
 def test_verified_records_raises_audit_integrity_error_on_tamper():
     gate = _FakeProtectedGate(["bad"])
-    with pytest.raises(AuditIntegrityError):
-        verified_records(gate, _TamperVerifier(), engine=_FakeEngine([]))
+    with pytest.raises(AuditIntegrityError) as exc_info:
+        verified_records(gate, _TamperVerifier(), _boom)
+    assert isinstance(exc_info.value.__cause__, TamperError)
 ```
+
+The engine fallback is a zero-arg callable (`engine_records`) invoked **only** in the no-protected-gate branch, so a protected deployment never initialises the engine store. `_boom` proves it is never called when a gate is wired.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -383,18 +380,25 @@ Expected: FAIL — `ImportError: cannot import name 'verified_records'`
 
 ```python
 # add to src/legis/service/governance.py
+from collections.abc import Callable
+
 from legis.enforcement.protected import TamperError
 from legis.service.errors import AuditIntegrityError
 
 
-def verified_records(protected_gate, trail_verifier, engine):
+def verified_records(
+    protected_gate,
+    trail_verifier,
+    engine_records: Callable[[], list],
+):
     """The verified governance trail.
 
     The protected gate (when wired) owns the governance trail; otherwise the
-    simple-tier engine does. Never mix the two stores. Verification is
-    fail-closed and applies to EVERY consumer of the protected trail, so a
-    tampered record is an honest integrity error (``AuditIntegrityError``),
-    never silently read or scored.
+    simple-tier engine does (read lazily via ``engine_records`` so a protected
+    deployment never initialises the engine store). Never mix the two stores.
+    Verification is fail-closed and applies to EVERY consumer of the protected
+    trail, so a tampered record is an honest integrity error
+    (``AuditIntegrityError``), never silently read or scored.
     """
     if protected_gate is not None:
         records = protected_gate.records()
@@ -404,8 +408,14 @@ def verified_records(protected_gate, trail_verifier, engine):
             except TamperError as exc:
                 raise AuditIntegrityError(f"audit integrity failure: {exc}") from exc
         return records
-    return engine.records()
+    return engine_records()
 ```
+
+> **Laziness invariant (why a callable, not the engine instance):** the original
+> closure called `engine()` (a lazy factory that creates `legis-governance.db`)
+> *only* in the no-protected-gate branch. Passing a zero-arg callable that the
+> service invokes only in that branch preserves that — passing `engine()` eagerly
+> would initialise the engine store on protected deployments that never use it.
 
 Add `verified_records` to `src/legis/service/__init__.py` imports and `__all__` (alongside `resolve_for_record`).
 
@@ -428,10 +438,15 @@ Replace the inline `def verified_governance_records(): ...` closure body with de
 ```python
     def verified_governance_records():
         try:
-            return _verified_records(protected_gate, trail_verifier, engine())
+            return _verified_records(
+                protected_gate, trail_verifier, lambda: engine().records()
+            )
         except AuditIntegrityError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 ```
+
+The `lambda: engine().records()` keeps `engine()` lazy — it is resolved only if
+the service reaches the no-protected-gate branch, exactly as the original closure did.
 
 - [ ] **Step 6: Run the whole suite**
 
