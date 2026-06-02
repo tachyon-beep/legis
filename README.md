@@ -4,7 +4,7 @@ Legis is the fourth Loom product: the git/CI and governance side of the suite's 
 
 ## Status
 
-Legis is **implemented through Sprint 6**. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Clarion is contract-locked, operative pending Clarion's committed-range driving. See the combination matrix below for per-pairing status.
+Legis is at **`1.0.0rc1`** — the first release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Clarion is contract-locked, operative pending Clarion's committed-range driving. The transport-agnostic service layer (WP-M1) underpinning the forthcoming agent-facing MCP surface has landed. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
 
 ## The Loom suite
 

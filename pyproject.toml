@@ -1,9 +1,9 @@
 [project]
 name = "legis"
-version = "0.1.0"
+version = "1.0.0rc1"
 description = "Legis — the git/CI + governance layer of the Loom suite"
 authors = [
-    { name = "John Morrissey", email = "john@pgpl.net" }
+    { name = "John Morrissey", email = "john@foundryside.dev" }
 ]
 requires-python = ">=3.12"
 dependencies = [

@@ -10,4 +10,4 @@ def test_health_returns_ok():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "legis"
-    assert body["version"] == "0.1.0"
+    assert body["version"] == "1.0.0rc1"
