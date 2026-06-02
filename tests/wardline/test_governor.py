@@ -1,0 +1,51 @@
+from legis.clock import FixedClock
+from legis.enforcement.engine import EnforcementEngine
+from legis.enforcement.signoff import SignoffGate
+from legis.identity.entity_key import EntityKey
+from legis.store.audit_store import AuditStore
+from legis.wardline.governor import WardlineCellPolicy, route_findings
+from legis.wardline.ingest import active_defects
+
+
+def _scan():
+    return {"findings": [
+        {"rule_id": "PY-WL-101", "message": "untrusted reaches trusted",
+         "severity": "ERROR", "kind": "defect", "fingerprint": "fp1",
+         "qualname": "m.f", "properties": {"actual_return": "UNKNOWN_RAW"},
+         "suppressed": "active"},
+    ]}
+
+
+def _engine(tmp_path):
+    return EnforcementEngine(AuditStore(f"sqlite:///{tmp_path / 'g.db'}"),
+                             FixedClock("2026-06-02T12:00:00+00:00"))
+
+
+def test_surface_override_cell_records_an_override(tmp_path):
+    eng = _engine(tmp_path)
+    results = route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+        agent_id="agent-1",
+        resolve=lambda q: EntityKey.from_locator(q or "unknown"),
+        engine=eng,
+    )
+    assert len(results) == 1 and results[0]["mode"] == "surface_override"
+    trail = eng.trail()
+    assert trail[0]["policy"] == "PY-WL-101"             # Wardline rule_id is the policy
+    assert trail[0]["entity_key"]["value"] == "m.f"      # routed on the finding's qualname
+    assert "untrusted reaches trusted" in trail[0]["rationale"]
+
+
+def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
+    store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
+    gate = SignoffGate(store, FixedClock("2026-06-02T12:00:00+00:00"))
+    results = route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.BLOCK_ESCALATE,
+        agent_id="agent-1",
+        resolve=lambda q: EntityKey.from_locator(q or "unknown"),
+        signoff=gate,
+    )
+    assert results[0]["mode"] == "block_escalate"
+    assert results[0]["cleared"] is False                # a human must sign off
