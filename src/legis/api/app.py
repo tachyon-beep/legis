@@ -28,6 +28,7 @@ from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.lifecycle import evaluate_override_rate
 from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
+from legis.git.pull_request import PullRequestSource
 from legis.git.surface import GitError, GitSurface
 from legis.governance import params
 from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
@@ -128,6 +129,7 @@ def create_app(
     identity: IdentityResolver | None = None,
     filigree: FiligreeClient | None = None,
     binding_ledger: BindingLedger | None = None,
+    pull_requests: PullRequestSource | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     state: dict[str, object | None] = {
@@ -198,6 +200,15 @@ def create_app(
     @app.get("/git/renames")
     def git_renames(rev_range: str = Query(...)) -> list[dict]:
         return [asdict(r) for r in git().renames(rev_range)]
+
+    @app.get("/git/pull-requests/{number}")
+    def get_pull_request(number: int) -> dict:
+        if pull_requests is None:
+            raise HTTPException(status_code=404, detail="pull-request source not enabled")
+        pr = pull_requests.get(number)
+        if pr is None:
+            raise HTTPException(status_code=404, detail=f"no pull request {number}")
+        return asdict(pr)
 
     # --- CI/check surface (WP-1.2) ---
 
