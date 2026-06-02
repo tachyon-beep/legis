@@ -52,6 +52,7 @@ class EnforcementEngine:
         entity_key: EntityKey,
         rationale: str,
         agent_id: str,
+        extensions: dict | None = None,
     ) -> EnforcementResult:
         record = OverrideRecord(
             policy=policy,
@@ -59,6 +60,7 @@ class EnforcementEngine:
             rationale=rationale,
             agent_id=agent_id,
             recorded_at=self._clock.now_iso(),
+            extensions=dict(extensions or {}),
         )
 
         if self._judge is None:

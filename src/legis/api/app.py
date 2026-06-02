@@ -140,13 +140,27 @@ def create_app(
             state["grammar"] = default_grammar()
         return state["grammar"]
 
-    def resolve_entity(locator: str) -> EntityKey:
+    def resolve_for_record(locator: str) -> tuple[EntityKey, dict]:
         # The one resolve-then-key boundary: every governance write path keys on
         # the SEI when Clarion proves a stable identity, on the locator otherwise.
-        # When no resolver is wired legis runs standalone (locator-keyed).
+        # When no resolver is wired legis runs standalone (locator-keyed). The
+        # `clarion` extension carries the two distinct axes (identity: alive,
+        # content: content_hash) plus the REQ-L-01 lineage snapshot, never
+        # collapsed — present only when a resolution decision was actually made.
         if identity is None:
-            return EntityKey.from_locator(locator)
-        return identity.resolve(locator).entity_key
+            return EntityKey.from_locator(locator), {}
+        res = identity.resolve(locator)
+        ext: dict = {}
+        if res.alive is not None:
+            ext["clarion"] = {
+                "alive": res.alive,
+                "content_hash": res.content_hash,
+                "lineage_snapshot": res.lineage_snapshot,
+            }
+        return res.entity_key, ext
+
+    def resolve_entity(locator: str) -> EntityKey:
+        return resolve_for_record(locator)[0]
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -193,11 +207,13 @@ def create_app(
 
     @app.post("/overrides")
     def post_override(body: OverrideIn, response: Response) -> dict:
+        entity_key, ext = resolve_for_record(body.entity)
         result = engine().submit_override(
             policy=body.policy,
-            entity_key=resolve_entity(body.entity),
+            entity_key=entity_key,
             rationale=body.rationale,
             agent_id=body.agent_id,
+            extensions=ext,
         )
         # ACCEPTED → 201 (the override took effect); BLOCKED → 409 (it did not,
         # the agent must correct or convince). Full body either way so the agent

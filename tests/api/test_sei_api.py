@@ -106,3 +106,17 @@ def test_signoff_request_keys_on_sei_when_alive(tmp_path):
     assert resp.status_code == 202
     trail = c.get("/overrides").json()
     assert trail[0]["entity_key"] == {"value": "clarion:eid:abc123", "identity_stable": True}
+
+
+def test_record_carries_clarion_two_axis_and_lineage_snapshot(tmp_path):
+    from legis.canonical import content_hash
+    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+             "content_hash": "blake3hash", "alive": True}
+    lineage = [{"event": "born"}, {"event": "locator_changed"}]
+    c = _app(tmp_path, FakeClient(alive, lineage=lineage))
+    c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
+                               "rationale": "reviewed", "agent_id": "agent-1"})
+    clarion = c.get("/overrides").json()[0]["extensions"]["clarion"]
+    assert clarion["alive"] is True
+    assert clarion["content_hash"] == "blake3hash"
+    assert clarion["lineage_snapshot"] == {"length": 2, "hash": content_hash(lineage)}
