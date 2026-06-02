@@ -31,6 +31,8 @@ from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitError, GitSurface
 from legis.governance import params
 from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
+from legis.filigree.client import FiligreeClient
+from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
@@ -89,6 +91,12 @@ class ScanResultsIn(BaseModel):
     scan: dict
 
 
+class BindIssueIn(BaseModel):
+    issue_id: str
+    sei: str
+    content_hash: str
+
+
 class CheckRunIn(BaseModel):
     check_name: str
     run_id: str
@@ -118,6 +126,7 @@ def create_app(
     trail_verifier: TrailVerifier | None = None,
     grammar: PolicyGrammar | None = None,
     identity: IdentityResolver | None = None,
+    filigree: FiligreeClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     state: dict[str, object | None] = {
@@ -312,6 +321,18 @@ def create_app(
             agent_id=body.agent_id,
         )
         return {"seq": result.seq, "cleared": result.cleared}
+
+    @app.post("/signoff/{request_seq}/bind-issue", status_code=201)
+    def bind_issue(request_seq: int, body: BindIssueIn) -> dict:
+        if filigree is None:
+            raise HTTPException(status_code=404, detail="filigree binding not enabled")
+        return bind_signoff_to_issue(
+            filigree,
+            issue_id=body.issue_id,
+            entity_key=EntityKey.from_sei(body.sei),
+            content_hash=body.content_hash,
+            signoff_seq=request_seq,
+        )
 
     @app.post("/signoff/{request_seq}/sign")
     def post_signoff_sign(request_seq: int, body: SignoffSignIn) -> dict:
