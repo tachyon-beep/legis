@@ -37,7 +37,7 @@ def route_findings(
     *,
     policy: WardlineCellPolicy,
     agent_id: str,
-    resolve: Callable[[str | None], EntityKey],
+    resolve: Callable[[str | None], tuple[EntityKey, dict[str, Any]]],
     engine: EnforcementEngine | None = None,
     signoff: SignoffGate | None = None,
 ) -> list[dict[str, Any]]:
@@ -48,11 +48,15 @@ def route_findings(
 
     results: list[dict[str, Any]] = []
     for f in findings:
-        entity_key = resolve(f.qualname)
+        entity_key, clarion_ext = resolve(f.qualname)
         rationale = f"[wardline {f.rule_id}] {f.message}"
         if policy is WardlineCellPolicy.SURFACE_OVERRIDE:
             assert engine is not None  # guarded above
-            ext = {"wardline": {"fingerprint": f.fingerprint,
+            # Merge the clarion lineage ext (REQ-L-01) alongside the wardline ext
+            # so a wardline-routed override carries the same lineage snapshot a
+            # /overrides override would.
+            ext = {**clarion_ext,
+                   "wardline": {"fingerprint": f.fingerprint,
                                 "tiers": dict(f.properties),
                                 "severity": f.severity.value}}
             override_res = engine.submit_override(

@@ -432,10 +432,12 @@ def create_app(
         except ValueError:
             raise HTTPException(status_code=422, detail=f"unknown cell: {body.cell}")
 
-        def resolve(qualname: str | None) -> EntityKey:
-            if identity is not None and qualname:
-                return identity.resolve(qualname).entity_key
-            return EntityKey.from_locator(qualname or "unknown")
+        def resolve(qualname: str | None) -> tuple[EntityKey, dict]:
+            # Use the one resolve-then-key boundary so a wardline-routed override
+            # captures the clarion lineage snapshot like every other write path.
+            if qualname:
+                return resolve_for_record(qualname)
+            return EntityKey.from_locator("unknown"), {}
 
         routed = route_findings(
             active_defects(body.scan),

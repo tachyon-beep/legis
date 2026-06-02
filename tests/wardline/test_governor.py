@@ -28,7 +28,7 @@ def test_surface_override_cell_records_an_override(tmp_path):
         active_defects(_scan()),
         policy=WardlineCellPolicy.SURFACE_OVERRIDE,
         agent_id="agent-1",
-        resolve=lambda q: EntityKey.from_locator(q or "unknown"),
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
         engine=eng,
     )
     assert len(results) == 1 and results[0]["mode"] == "surface_override"
@@ -38,6 +38,26 @@ def test_surface_override_cell_records_an_override(tmp_path):
     assert "untrusted reaches trusted" in trail[0]["rationale"]
 
 
+def test_surface_override_captures_clarion_lineage_alongside_wardline(tmp_path):
+    # A SEI-keyed wardline-routed override must carry the REQ-L-01 clarion
+    # lineage snapshot (alive/content_hash/lineage_snapshot) merged ALONGSIDE the
+    # wardline ext — same as the same override taken via /overrides.
+    eng = _engine(tmp_path)
+    clarion_ext = {"clarion": {"alive": True, "content_hash": "h",
+                               "lineage_snapshot": {"length": 1, "hash": "z"}}}
+    results = route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_sei("clarion:eid:x"), clarion_ext),
+        engine=eng,
+    )
+    assert results[0]["mode"] == "surface_override"
+    ext = eng.trail()[0]["extensions"]
+    assert ext["clarion"] == clarion_ext["clarion"]      # lineage snapshot captured
+    assert ext["wardline"]["fingerprint"] == "fp1"       # wardline ext still present
+
+
 def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
     gate = SignoffGate(store, FixedClock("2026-06-02T12:00:00+00:00"))
@@ -45,7 +65,7 @@ def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
         active_defects(_scan()),
         policy=WardlineCellPolicy.BLOCK_ESCALATE,
         agent_id="agent-1",
-        resolve=lambda q: EntityKey.from_locator(q or "unknown"),
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
         signoff=gate,
     )
     assert results[0]["mode"] == "block_escalate"
