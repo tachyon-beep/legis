@@ -9,6 +9,7 @@ suppression at all).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from legis.enforcement.judge import Judge
 from legis.enforcement.verdict import Verdict
@@ -50,3 +51,52 @@ def decay_sweep(records, judge: Judge) -> list[DecayFlag]:
                 )
             )
     return flags
+
+
+class GateStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    PASS_WITH_NOTICE = "PASS_WITH_NOTICE"
+
+
+@dataclass(frozen=True)
+class GateResult:
+    status: GateStatus
+    rate: float
+    sample_size: int
+
+
+# Denominator = kept-suppression decisions; BLOCKED is not a kept suppression.
+_FINAL = {Verdict.ACCEPTED.value, Verdict.OVERRIDDEN_BY_OPERATOR.value}
+
+
+def evaluate_override_rate(
+    records, *, threshold: float, window: int, min_sample: int
+) -> GateResult:
+    """Share of kept suppressions forced past the judge by an operator.
+
+    rate = OVERRIDDEN_BY_OPERATOR / (ACCEPTED + OVERRIDDEN_BY_OPERATOR) over the
+    most recent ``window`` final-disposition records. Below ``min_sample`` →
+    PASS_WITH_NOTICE so small corpora don't trip mechanically.
+    """
+    finals = [
+        r
+        for r in records
+        if r.payload.get("extensions", {}).get("judge_verdict") in _FINAL
+    ]
+    finals = finals[-window:]
+    n = len(finals)
+    overrides = sum(
+        1
+        for r in finals
+        if r.payload["extensions"]["judge_verdict"]
+        == Verdict.OVERRIDDEN_BY_OPERATOR.value
+    )
+    rate = (overrides / n) if n else 0.0
+    if n < min_sample:
+        status = GateStatus.PASS_WITH_NOTICE
+    elif rate > threshold:
+        status = GateStatus.FAIL
+    else:
+        status = GateStatus.PASS
+    return GateResult(status=status, rate=rate, sample_size=n)
