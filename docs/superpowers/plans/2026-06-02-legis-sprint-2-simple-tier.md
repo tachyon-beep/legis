@@ -927,3 +927,33 @@ git commit -m "docs: mark Sprint 2 simple tier complete"
 | SEI-shape independence | pre-SEI records carry `identity_stable: false` | Task 4, Task 7 assertions |
 
 All judge LLM calls are behind the injected `LLMClient` seam — no network in tests, real client wired in production.
+
+---
+
+## Scope boundary & known limitations (honest disclosure)
+
+The coached **mechanism** is built and tested behind the judge-injection flag.
+It is *not yet a deployable coached service*, by deliberate deferral:
+
+1. **No concrete `LLMClient` ships.** Only the `Protocol` exists; every coached
+   test injects a `ScriptedJudge`/`FakeClient`. Filling the seam (which model,
+   how it authenticates) is **Open Decision #3 — judge-model identity** in the
+   sprint breakdown, explicitly left for the production port. The default
+   `create_app()` therefore runs **chill-only**: turning coaching on today means
+   constructing a judge in code and injecting it, not flipping an env value.
+   Wiring a real client + a `LEGIS_JUDGE`-style env flag is the first task of
+   the production-port / Sprint-3 work, not a gap in Sprint 2's scope.
+
+2. **BLOCKED records share the accepted record's shape** (distinguished only by
+   `judge_verdict`). Any future consumer that reads the trail as *active
+   suppressions* — the Sprint 3 decay sweep above all — MUST filter
+   `judge_verdict != "BLOCKED"`. Same root as the override-rate-denominator note
+   in decision (1) of "Deliberate design decisions": record-both means every
+   downstream reader carries a filter obligation.
+
+3. **`parse_verdict` prose edge (low severity, simple-tier-acceptable).** A
+   response containing the bare token `ACCEPTED` and no `BLOCKED` token (e.g.
+   "this should not be ACCEPTED") parses as ACCEPTED. The first-line-verdict
+   prompt constrains this in practice and the simple tier explicitly trades
+   rigor for a single flag; harden in the protected-tier pass (Sprint 3), where
+   the HMAC-bound verdict already demands a stricter parse.
