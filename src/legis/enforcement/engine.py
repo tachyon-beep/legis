@@ -97,3 +97,13 @@ class EnforcementEngine:
     def records(self):
         """The raw audit records (with seq/hashes) — for lifecycle gates."""
         return self._store.read_all()
+
+    def record_event(self, payload: dict) -> int:
+        """Append a raw governance event (e.g. UNKNOWN_POLICY) to the trail.
+
+        Stamps ``recorded_at`` from the injected clock when the caller omits it,
+        so non-override governance events share the one append-only trail.
+        """
+        body = {**payload}
+        body.setdefault("recorded_at", self._clock.now_iso())
+        return self._store.append(body)

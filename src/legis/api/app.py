@@ -31,6 +31,7 @@ from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitError, GitSurface
 from legis.governance import params
 from legis.identity.entity_key import EntityKey
+from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
 DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
@@ -73,6 +74,11 @@ class SignoffSignIn(BaseModel):
     rationale: str = ""
 
 
+class PolicyEvalIn(BaseModel):
+    policy: str
+    target: dict = {}
+
+
 class CheckRunIn(BaseModel):
     check_name: str
     run_id: str
@@ -100,11 +106,13 @@ def create_app(
     protected_gate: ProtectedGate | None = None,
     signoff_gate: SignoffGate | None = None,
     trail_verifier: TrailVerifier | None = None,
+    grammar: PolicyGrammar | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     state: dict[str, object | None] = {
         "checks": check_surface,
         "enforcement": enforcement,
+        "grammar": grammar,
     }
 
     def git() -> GitSurface:
@@ -124,6 +132,11 @@ def create_app(
                 AuditStore(DEFAULT_GOVERNANCE_DB), SystemClock()
             )
         return state["enforcement"]
+
+    def grammar_() -> PolicyGrammar:
+        if state["grammar"] is None:
+            state["grammar"] = default_grammar()
+        return state["grammar"]
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -290,6 +303,28 @@ def create_app(
             "status": res.status.value,
             "rate": res.rate,
             "sample_size": res.sample_size,
+        }
+
+    # --- agent-programmable policy grammar (WP-4.1) ---
+
+    @app.post("/policy/evaluate")
+    def policy_evaluate(body: PolicyEvalIn) -> dict:
+        ev = grammar_().evaluate(body.policy, body.target)
+        if ev.result is PolicyResult.UNKNOWN:
+            # Honest event + provenance gap — never a silent false-green.
+            engine().record_event(
+                {
+                    "event": "UNKNOWN_POLICY",
+                    "policy": ev.policy,
+                    "detail": ev.detail,
+                    "provenance_gap": True,
+                }
+            )
+        return {
+            "policy": ev.policy,
+            "result": ev.result.value,
+            "detail": ev.detail,
+            "provenance_gap": ev.provenance_gap,
         }
 
     return app
