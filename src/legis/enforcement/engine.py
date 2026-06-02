@@ -93,3 +93,7 @@ class EnforcementEngine:
     def trail(self) -> list[dict]:
         """The append-only governance trail, decoded — for async human review."""
         return [rec.payload for rec in self._store.read_all()]
+
+    def records(self):
+        """The raw audit records (with seq/hashes) — for lifecycle gates."""
+        return self._store.read_all()
