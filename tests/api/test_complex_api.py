@@ -119,3 +119,45 @@ def test_override_rate_endpoint_uses_policy_constants(tmp_path):
     body = r.json()
     assert set(body) == {"status", "rate", "sample_size"}
     assert body["status"] == "PASS_WITH_NOTICE"  # empty trail < min_sample
+
+
+def _tamper_first_record(db, mutate):
+    """Apply ``mutate(payload_dict)`` to the first record and fully re-chain so
+    the unkeyed Sprint 0 integrity check still passes."""
+    con = sqlite3.connect(db)
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
+    seq, payload = con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
+    ).fetchone()
+    p = json.loads(payload)
+    mutate(p)
+    con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
+    prev = GENESIS
+    for s, pl in con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC"
+    ).fetchall():
+        ch = content_hash(json.loads(pl))
+        con.execute(
+            "UPDATE audit_log SET content_hash=?, prev_hash=?, chain_hash=? WHERE seq=?",
+            (ch, prev, _chain(prev, ch), s),
+        )
+        prev = _chain(prev, ch)
+    con.commit()
+    con.close()
+
+
+def test_override_rate_gate_fails_closed_on_a_tampered_trail(tmp_path):
+    # The enforcement gate must not trust the store blind: flipping an
+    # OVERRIDDEN_BY_OPERATOR to ACCEPTED to lower the apparent rate must be
+    # caught, not silently scored.
+    c, store = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
+    body = {**PBODY, "operator_id": "op-1"}
+    del body["agent_id"]
+    c.post("/protected/operator-override", json=body)
+
+    def flip(p):
+        p["extensions"]["judge_verdict"] = "ACCEPTED"
+
+    _tamper_first_record(str(tmp_path / "gov.db"), flip)
+    assert store.verify_integrity() is True  # unkeyed chain fooled
+    assert c.get("/governance/override-rate").status_code == 500

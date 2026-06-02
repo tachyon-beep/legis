@@ -188,17 +188,12 @@ def create_app(
             "judge_rationale": result.judge_rationale,
         }
 
-    def governance_records():
+    def verified_governance_records():
         # The protected gate (when wired) owns the governance trail; otherwise
-        # the simple-tier engine does. Never mix the two stores.
-        if protected_gate is not None:
-            return protected_gate.records()
-        return engine().records()
-
-    @app.get("/overrides")
-    def get_overrides() -> list[dict]:
-        # Protected reads are verified on the load path: a tampered protected
-        # record is an honest 500, never silently served.
+        # the simple-tier engine does. Never mix the two stores. Verification is
+        # fail-closed and applies to EVERY consumer of the protected trail — the
+        # human read path AND the enforcement gates — so a tampered record is an
+        # honest integrity error, never silently read or scored.
         if protected_gate is not None:
             records = protected_gate.records()
             if trail_verifier is not None:
@@ -208,8 +203,12 @@ def create_app(
                     raise HTTPException(
                         status_code=500, detail=f"audit integrity failure: {exc}"
                     )
-            return [r.payload for r in records]
-        return engine().trail()
+            return records
+        return engine().records()
+
+    @app.get("/overrides")
+    def get_overrides() -> list[dict]:
+        return [r.payload for r in verified_governance_records()]
 
     # --- complex-tier enforcement surface (WP-3.1 structured / WP-3.2 protected) ---
 
@@ -282,7 +281,7 @@ def create_app(
         # Threshold/window/floor come from ADR-0002 policy constants — NOT query
         # params — so the gate an agent is measured against cannot be tuned by it.
         res = evaluate_override_rate(
-            governance_records(),
+            verified_governance_records(),
             threshold=params.OVERRIDE_RATE_THRESHOLD,
             window=params.OVERRIDE_RATE_WINDOW,
             min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,

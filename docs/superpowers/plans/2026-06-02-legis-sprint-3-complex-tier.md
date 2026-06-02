@@ -34,6 +34,19 @@
 - **No authz on `operator_id` / signer identity yet.** The structured/protected sign-off trusts the supplied operator id; binding it to an authenticated principal is deferred, consistent with the no-auth-yet posture (same as the agent_id trust in Sprint 2).
 - **Judge seam still unfilled** (Open Decision #3). Decay sweep and `ProtectedGate` both consume an injected judge; tests use scripted judges. No concrete `LLMClient` ships.
 - **HMAC key provisioning mechanism** (Open Decision #4) is ADR-recorded but the production env-var/rotation wiring is deferred.
+- **`sign_off` does not validate that `request_seq` points at a real PENDING request** — it copies whatever record sits at that index (and `IndexError`s if out of range). Consistent with the no-authz posture; harden when sign-off gets a real workflow state machine.
+- **`signing_fields` reads `ext["judge_verdict"]` by bracket** — a record tampered to drop `judge_verdict` while keeping a signature raises `KeyError` (→ unhandled 500) rather than a clean `TamperError`. Low-severity hardening for the protected-tier pass; the integrity failure is still surfaced, just not with the tidy message.
+- **Mixed-store composition:** when a simple engine *and* a protected gate are wired to different stores, `GET /overrides` reads only the protected store. A composition wrinkle for the future cell-router, not Sprint 3 (today a deployment wires one governance store).
+
+## Post-implementation hardening (advisor-caught, fixed in-sprint)
+
+The override-rate gate originally read the trail **without** signature
+verification while `GET /overrides` verified — meaning the enforcement gate with
+teeth trusted the store blind. An attacker flipping `OVERRIDDEN_BY_OPERATOR` →
+`ACCEPTED` could lower the apparent rate and slip the gate. Fixed: both the human
+read path and the rate gate now route through `verified_governance_records()`,
+fail-closed (a tampered protected trail yields HTTP 500, never a PASS/FAIL).
+Proven by `test_override_rate_gate_fails_closed_on_a_tampered_trail`.
 
 ---
 
