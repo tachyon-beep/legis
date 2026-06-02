@@ -151,7 +151,7 @@ carried but never read. The YAML one-off-exemption companion does not exist.
 
 ### Track 5 — Git/change & CI surface gaps (§1.1/§1.2/§1.3c)
 
-**WP-A9 — Branch upstream status, PR context, pre/post-rename content**
+**WP-A9 — Branch upstream status, PR context, pre/post-rename content — ✅ done 2026-06-02**
 - Closes: R-1.1-04, R-1.1-10, R-1.1-14.
 - Category: A.
 - Dependencies: none.
@@ -160,17 +160,19 @@ carried but never read. The YAML one-off-exemption companion does not exist.
     with a configured upstream.
   - A PR-context surface (model + `/git/...` endpoint) exposing title/base/head/state, distinct from
     the `CheckRun.pr` FK; test asserts the shape. (If PR metadata has no local git source, the per-WP
-    plan defines where it comes from — explicit, not invented.)
+    plan defines where it comes from — explicit, not invented.) PR context is delivered via the
+    injectable `PullRequestSource` seam; forge fetch is the deployment's responsibility.
   - Rename evidence captures pre/post content (or blob refs); test asserts both states on a
     fabricated rename. This must not break the `/git/renames` Clarion contract (A9 is additive).
+    Rename pre/post state is represented as git blob SHAs (`old_blob`/`new_blob`, additive).
 
-**WP-A10 — `rule_set` / `policy_version` round-trip tests**
+**WP-A10 — `rule_set` / `policy_version` round-trip tests — ✅ done 2026-06-02**
 - Closes: R-1.2-04, R-1.2-05.
 - Category: A. Cheap — no production change expected.
 - Exit: tests assert both fields survive write→readback through the check-run store; a write-path bug
   nulling either now fails a test.
 
-**WP-A11 — Override-rate gate CI wiring**
+**WP-A11 — Override-rate gate CI wiring — ✅ done 2026-06-02**
 - Closes: R-1.3c-17.
 - Category: A.
 - Dependencies: none.
