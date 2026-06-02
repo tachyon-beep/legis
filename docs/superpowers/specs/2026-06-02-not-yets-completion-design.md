@@ -79,7 +79,7 @@ The binding sent to Filigree is an unsigned `{entity_id, content_hash, actor}` p
 self-review overstates it as having "the same tamper-binding as a governance verdict," and
 `signoff_seq` is returned but never persisted/transmitted (R-2.3-02).
 
-**WP-A3 — legis-side signed `BindingRecord` + persist `signoff_seq` + doc correction**
+**WP-A3 — legis-side signed `BindingRecord` + persist `signoff_seq` + doc correction — ✅ done 2026-06-02**
 - Closes: R-2.3-01c (legis half), R-2.3-02; the §6.2 overstatement.
 - Category: A.
 - Dependencies: none.
