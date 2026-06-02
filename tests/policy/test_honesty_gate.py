@@ -18,7 +18,7 @@ def resolver(ref):
 
 def _decorate(test_fingerprint):
     @policy_boundary(
-        source="external payload",
+        source="src/legis/handlers.py:42",
         suppresses=("no-eval",),
         invariant="rejects bad input",
         test_ref="tests::fake",
@@ -45,7 +45,7 @@ def test_gate_fails_on_fingerprint_drift():
 
 
 def test_gate_rejects_missing_test_ref_as_vibe_justification():
-    @policy_boundary(source="s", suppresses=("no-eval",), invariant="i")
+    @policy_boundary(source="src/legis/x.py:1", suppresses=("no-eval",), invariant="rejects bad input")
     def handler(payload):
         return payload
 
@@ -69,3 +69,47 @@ def test_gate_fails_on_metadata_transplant():
     finding = check_policy_boundary(h, resolver)
     assert finding.ok is False
     assert "scope" in finding.reason.lower() or "qualname" in finding.reason.lower()
+
+
+def _decorate_src(source, invariant="rejects bad input"):
+    good = fingerprint(fake_boundary_test)
+
+    @policy_boundary(source=source, suppresses=("no-eval",), invariant=invariant,
+                     test_ref="tests::fake", test_fingerprint=good)
+    def handler(payload):
+        return payload
+
+    return handler
+
+
+def test_gate_rejects_empty_source():
+    finding = check_policy_boundary(_decorate_src(""), resolver)
+    assert finding.ok is False
+    assert "source" in finding.reason.lower()
+
+
+def test_gate_rejects_vibe_source_that_is_not_a_citation():
+    finding = check_policy_boundary(_decorate_src("because I tested it"), resolver)
+    assert finding.ok is False
+    assert "citation" in finding.reason.lower()
+
+
+def test_gate_accepts_url_sha_and_repo_path_citations():
+    for src in ("https://github.com/o/r/pull/9",
+                "https://github.com/o/r/blob/main/x.py?ts=1#L42",
+                "a1b2c3d",
+                "0123456789abcdef0123456789abcdef01234567",  # full 40-char SHA
+                "src/legis/x.py:42", "README.md"):
+        assert check_policy_boundary(_decorate_src(src), resolver).ok is True, src
+
+
+def test_gate_rejects_empty_invariant():
+    finding = check_policy_boundary(_decorate_src("src/legis/x.py:1", invariant=""), resolver)
+    assert finding.ok is False
+    assert "invariant" in finding.reason.lower()
+
+
+def test_passing_finding_surfaces_the_invariant():
+    finding = check_policy_boundary(_decorate_src("src/legis/x.py:1", invariant="rejects bad input"), resolver)
+    assert finding.ok is True
+    assert "rejects bad input" in finding.reason

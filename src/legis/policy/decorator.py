@@ -5,18 +5,38 @@ govern. The decorator is a strict passthrough; its frozen metadata
 (``__policy_boundary__``) carries behavioural *evidence* — ``source``,
 ``suppresses``, ``invariant``, ``test_ref``, ``test_fingerprint`` — not
 vibe-justification. The honesty gate (``check_policy_boundary``) is what gives
-the evidence teeth. Decoration-time checks catch misuse at the decoration site.
+the evidence teeth: it enforces that ``source`` is a well-formed citation
+(URL, git SHA, or in-repo path), ``invariant`` is non-empty, ``test_ref``
+resolves to a real test, and the test fingerprint matches.
+Decoration-time checks catch misuse at the decoration site.
 """
 
 from __future__ import annotations
 
 import functools
 import inspect
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from legis.canonical import content_hash
+
+# A well-formed source citation: a URL, a git SHA (short..full), or an in-repo
+# path with an extension and optional :line. Shape-checked, not filesystem-resolved.
+#
+# The path arm is POSIX-style: a Windows ``C:\...`` path is intentionally not
+# matched (the backslash and drive-colon fall outside the character class). A
+# bare ``filename.ext`` (e.g. ``README.md``) is intentionally accepted — because
+# the gate shape-checks rather than resolving against the filesystem, it cannot
+# distinguish a real root-level file from a coincidental ``word.ext``. The bar
+# this enforces is rejecting multi-word / whitespace vibe strings, not proving
+# the path exists.
+_CITATION_RE = re.compile(r"^(https?://\S+|[0-9a-f]{7,40}|[\w./-]+\.[A-Za-z0-9]+(:\d+)?)$")
+
+
+def _is_citation(source: str) -> bool:
+    return bool(_CITATION_RE.match(source))
 
 
 @dataclass(frozen=True)
@@ -94,6 +114,15 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
     # Scope / metadata-integrity: the record must belong to this function.
     if meta.qualname != func.__qualname__:
         return GateFinding(False, f"scope/qualname mismatch: {meta.qualname!r}")
+    if not meta.source:
+        return GateFinding(False, "no source citation: source is required")
+    if not _is_citation(meta.source):
+        return GateFinding(
+            False,
+            f"source is not a resolvable citation (URL, git SHA, or repo path): {meta.source!r}",
+        )
+    if not meta.invariant:
+        return GateFinding(False, "no invariant: a non-empty invariant statement is required")
     if not meta.test_ref:
         return GateFinding(False, "no behavioural evidence: test_ref is required")
     if not meta.test_fingerprint:
@@ -108,4 +137,4 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
         return GateFinding(False, "test does not appear to exercise the boundary")
     if not any(p in src for p in meta.suppresses):
         return GateFinding(False, "test does not assert any suppressed policy")
-    return GateFinding(True, "ok")
+    return GateFinding(True, f"ok (invariant: {meta.invariant})")
