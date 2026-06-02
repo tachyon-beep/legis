@@ -93,8 +93,6 @@ class ScanResultsIn(BaseModel):
 
 class BindIssueIn(BaseModel):
     issue_id: str
-    sei: str
-    content_hash: str
 
 
 class CheckRunIn(BaseModel):
@@ -326,13 +324,32 @@ def create_app(
     def bind_issue(request_seq: int, body: BindIssueIn) -> dict:
         if filigree is None:
             raise HTTPException(status_code=404, detail="filigree binding not enabled")
-        return bind_signoff_to_issue(
-            filigree,
-            issue_id=body.issue_id,
-            entity_key=EntityKey.from_sei(body.sei),
-            content_hash=body.content_hash,
-            signoff_seq=request_seq,
-        )
+        if signoff_gate is None:
+            raise HTTPException(status_code=404, detail="structured cell not enabled")
+        req = signoff_gate.request_record(request_seq)
+        if req is None:
+            raise HTTPException(
+                status_code=404, detail="no sign-off request at seq"
+            )
+        if not signoff_gate.is_cleared(request_seq):
+            raise HTTPException(status_code=409, detail="sign-off not cleared")
+        # The SEI and content_hash come from the recorded request, never the
+        # caller — binding only what was actually signed off.
+        entity_key = EntityKey.from_dict(req["entity_key"])
+        content_hash = req.get("extensions", {}).get("clarion", {}).get(
+            "content_hash"
+        ) or ""
+        try:
+            return bind_signoff_to_issue(
+                filigree,
+                issue_id=body.issue_id,
+                entity_key=entity_key,
+                content_hash=content_hash,
+                signoff_seq=request_seq,
+            )
+        except ValueError as exc:
+            # A locator-keyed (non-SEI) sign-off can't be rename-stably bound.
+            raise HTTPException(status_code=409, detail=str(exc))
 
     @app.post("/signoff/{request_seq}/sign")
     def post_signoff_sign(request_seq: int, body: SignoffSignIn) -> dict:
