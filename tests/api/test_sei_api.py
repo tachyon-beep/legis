@@ -146,3 +146,49 @@ def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
                                "rationale": "reviewed", "agent_id": "agent-1"})
     # FakeClient.lineage still returns the same [born]; snapshot matches → clean.
     assert c.get("/governance/lineage-integrity").json() == {"divergences": []}
+
+
+def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):
+    from legis.clock import FixedClock
+    from legis.enforcement.protected import ProtectedGate, TrailVerifier
+    from legis.enforcement.signoff import SignoffGate
+    from legis.enforcement.verdict import JudgeOpinion, Verdict
+    from legis.store.audit_store import AuditStore
+
+    class _Judge:
+        def evaluate(self, record):
+            return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
+
+    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+             "content_hash": "blake3hash", "alive": True}
+    key = b"k"
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    clock = FixedClock("2026-06-02T12:00:00+00:00")
+    pg = ProtectedGate(store, clock, judge=_Judge(), key=key)
+    sg = SignoffGate(store, clock)
+    app = create_app(
+        protected_gate=pg, signoff_gate=sg,
+        trail_verifier=TrailVerifier(key, frozenset({"no-eval"})),
+        identity=IdentityResolver(FakeClient(alive, lineage=[{"event": "born"}])),
+    )
+    c = TestClient(app)
+
+    pr = c.post("/protected/overrides", json={
+        "policy": "no-eval", "entity": "python:function:m.f", "rationale": "r",
+        "agent_id": "agent-1", "file_fingerprint": "fp", "ast_path": "ap"})
+    assert pr.status_code == 201
+    protected_rec = c.get("/overrides").json()[0]
+    assert protected_rec["entity_key"]["value"] == "clarion:eid:abc123"
+    assert protected_rec["extensions"]["clarion"]["content_hash"] == "blake3hash"
+    # The signed identity binding survived the added extension.
+    assert protected_rec["extensions"]["judge_metadata_signature"].startswith("hmac-sha256:")
+
+    # Use a non-protected policy for the sign-off request so the trail verifier
+    # (which requires judge_metadata_signature on every protected-policy record)
+    # does not reject the unsigned PENDING_SIGNOFF record.
+    sr = c.post("/signoff/request", json={
+        "policy": "prod-deploy", "entity": "python:function:m.f", "rationale": "r",
+        "agent_id": "agent-1"})
+    assert sr.status_code == 202
+    signoff_rec = c.get("/overrides").json()[1]
+    assert signoff_rec["extensions"]["clarion"]["content_hash"] == "blake3hash"

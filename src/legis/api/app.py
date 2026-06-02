@@ -175,9 +175,6 @@ def create_app(
             }
         return res.entity_key, ext
 
-    def resolve_entity(locator: str) -> EntityKey:
-        return resolve_for_record(locator)[0]
-
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": "legis", "version": __version__}
@@ -271,13 +268,15 @@ def create_app(
     def post_protected_override(body: ProtectedIn, response: Response) -> dict:
         if protected_gate is None:
             raise HTTPException(status_code=404, detail="protected cell not enabled")
+        entity_key, ext = resolve_for_record(body.entity)
         result = protected_gate.submit(
             policy=body.policy,
-            entity_key=resolve_entity(body.entity),
+            entity_key=entity_key,
             rationale=body.rationale,
             agent_id=body.agent_id,
             file_fingerprint=body.file_fingerprint,
             ast_path=body.ast_path,
+            extensions=ext,
         )
         response.status_code = 201 if result.accepted else 409
         return {
@@ -293,13 +292,15 @@ def create_app(
     def post_operator_override(body: OperatorOverrideIn) -> dict:
         if protected_gate is None:
             raise HTTPException(status_code=404, detail="protected cell not enabled")
+        entity_key, ext = resolve_for_record(body.entity)
         result = protected_gate.operator_override(
             policy=body.policy,
-            entity_key=resolve_entity(body.entity),
+            entity_key=entity_key,
             rationale=body.rationale,
             operator_id=body.operator_id,
             file_fingerprint=body.file_fingerprint,
             ast_path=body.ast_path,
+            extensions=ext,
         )
         return {
             "accepted": result.accepted,
@@ -312,11 +313,13 @@ def create_app(
     def post_signoff_request(body: SignoffRequestIn) -> dict:
         if signoff_gate is None:
             raise HTTPException(status_code=404, detail="structured cell not enabled")
+        entity_key, ext = resolve_for_record(body.entity)
         result = signoff_gate.request(
             policy=body.policy,
-            entity_key=resolve_entity(body.entity),
+            entity_key=entity_key,
             rationale=body.rationale,
             agent_id=body.agent_id,
+            extensions=ext,
         )
         return {"seq": result.seq, "cleared": result.cleared}
 
