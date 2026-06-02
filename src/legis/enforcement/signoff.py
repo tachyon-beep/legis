@@ -73,14 +73,20 @@ class SignoffGate:
         return self._store.append(payload)
 
     def request(
-        self, *, policy: str, entity_key: EntityKey, rationale: str, agent_id: str
+        self,
+        *,
+        policy: str,
+        entity_key: EntityKey,
+        rationale: str,
+        agent_id: str,
+        extensions: dict[str, Any] | None = None,
     ) -> SignoffResult:
         seq = self._append(
             policy=policy,
             entity_key=entity_key,
             rationale=rationale,
             actor_id=agent_id,
-            ext={"signoff_state": SignoffState.PENDING.value},
+            ext={**(extensions or {}), "signoff_state": SignoffState.PENDING.value},
         )
         return SignoffResult(seq=seq, cleared=False)
 
