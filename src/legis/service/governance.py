@@ -55,6 +55,10 @@ def verified_records(
     Verification is fail-closed and applies to EVERY consumer of the protected
     trail, so a tampered record is an honest integrity error
     (``AuditIntegrityError``), never silently read or scored.
+
+    ``protected_gate`` and ``trail_verifier`` are intentionally left duck-typed
+    (a gate exposing ``records()`` and a verifier exposing ``verify()``) so the
+    service layer is not coupled to the enforcement concrete types.
     """
     if protected_gate is not None:
         records = protected_gate.records()
@@ -96,6 +100,10 @@ def submit_override(
     judge present → coached (ACCEPTED records, BLOCKED records the attempt). The
     adapter maps ``EnforcementResult.accepted`` to its transport's success/blocked
     signal (HTTP 201/409; MCP ACCEPTED_*/BLOCKED).
+
+    Keyword-only after ``engine`` so the five same-typed fields cannot be
+    transposed at the call site; this is the seam the MCP adapter (WP-M3) calls
+    directly, alongside the existing ``POST /overrides`` handler.
     """
     entity_key, ext = resolve_for_record(identity, entity)
     return engine.submit_override(
