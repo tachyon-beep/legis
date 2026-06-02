@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from legis.enforcement.lifecycle import evaluate_override_rate
 from legis.enforcement.protected import TamperError
+from legis.governance import params
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.service.errors import AuditIntegrityError
@@ -62,3 +64,17 @@ def verified_records(
                 raise AuditIntegrityError(f"audit integrity failure: {exc}") from exc
         return records
     return engine_records()
+
+
+def compute_override_rate(records: list):
+    """Evaluate the override-rate gate against the policy constants.
+
+    Threshold/window/floor come from ADR-0002 constants — NOT caller input — so
+    the gate an agent is measured against cannot be tuned by it.
+    """
+    return evaluate_override_rate(
+        records,
+        threshold=params.OVERRIDE_RATE_THRESHOLD,
+        window=params.OVERRIDE_RATE_WINDOW,
+        min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
+    )

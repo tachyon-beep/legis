@@ -25,12 +25,10 @@ from legis import __version__
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.lifecycle import evaluate_override_rate
 from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
 from legis.git.surface import GitError, GitSurface
-from legis.governance import params
 from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
 from legis.filigree.client import FiligreeClient
 from legis.governance.binding_ledger import BindingError, BindingLedger
@@ -38,6 +36,7 @@ from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.service.errors import AuditIntegrityError
+from legis.service.governance import compute_override_rate as _compute_override_rate
 from legis.service.governance import resolve_for_record as _resolve_for_record
 from legis.service.governance import verified_records as _verified_records
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
@@ -374,14 +373,7 @@ def create_app(
 
     @app.get("/governance/override-rate")
     def override_rate() -> dict:
-        # Threshold/window/floor come from ADR-0002 policy constants — NOT query
-        # params — so the gate an agent is measured against cannot be tuned by it.
-        res = evaluate_override_rate(
-            verified_governance_records(),
-            threshold=params.OVERRIDE_RATE_THRESHOLD,
-            window=params.OVERRIDE_RATE_WINDOW,
-            min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
-        )
+        res = _compute_override_rate(verified_governance_records())
         return {
             "status": res.status.value,
             "rate": res.rate,

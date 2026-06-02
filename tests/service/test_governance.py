@@ -1,9 +1,10 @@
 import pytest
 
+from legis.enforcement.lifecycle import GateStatus
 from legis.enforcement.protected import TamperError
 from legis.identity.entity_key import EntityKey
 from legis.service.errors import AuditIntegrityError
-from legis.service.governance import resolve_for_record, verified_records
+from legis.service.governance import compute_override_rate, resolve_for_record, verified_records
 
 
 class _FakeResult:
@@ -108,3 +109,11 @@ def test_verified_records_raises_audit_integrity_error_on_tamper():
         verified_records(gate, _TamperVerifier(), _boom)
     # the `from exc` chain must be preserved
     assert isinstance(exc_info.value.__cause__, TamperError)
+
+
+def test_compute_override_rate_returns_status_rate_sample_below_min_sample():
+    # An empty trail is below min-sample → the gate is not FAIL; rate is 0.
+    res = compute_override_rate([])
+    assert res.status == GateStatus.PASS_WITH_NOTICE
+    assert res.rate == 0.0
+    assert res.sample_size == 0

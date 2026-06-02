@@ -12,13 +12,14 @@ from legis.service.errors import (
     NotFoundError,
     ServiceError,
 )
-from legis.service.governance import resolve_for_record, verified_records
+from legis.service.governance import compute_override_rate, resolve_for_record, verified_records
 
 __all__ = [
     "ServiceError",
     "AuditIntegrityError",
     "NotEnabledError",
     "NotFoundError",
+    "compute_override_rate",
     "resolve_for_record",
     "verified_records",
 ]
