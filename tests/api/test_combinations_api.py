@@ -109,16 +109,22 @@ def test_bind_issue_records_to_ledger_and_binding_is_verifiable(tmp_path):
                                        "lineage_snapshot": None}})
     sg.sign_off(request_seq=1, operator_id="op-1")
 
+    # The body's content_hash is attacker-supplied and must NOT win: the SEI and
+    # content_hash come from the CLEARED sign-off record ("blake3"), never the body.
     resp = c.post("/signoff/1/bind-issue",
-                  json={"issue_id": "ISSUE-1", "sei": "clarion:eid:abc", "content_hash": "ignored"})
+                  json={"issue_id": "ISSUE-1", "sei": "clarion:eid:abc",
+                        "content_hash": "ATTACKER-SUPPLIED"})
     assert resp.status_code == 201
     assert resp.json()["binding_seq"] == 1
-    assert fil.attached[0][0] == "ISSUE-1"
+    # Full tuple: the cleared "blake3" wins at index [2], NOT "ATTACKER-SUPPLIED".
+    assert fil.attached[0] == ("ISSUE-1", "clarion:eid:abc", "blake3", "legis")
 
     got = c.get("/signoff/1/binding")
     assert got.status_code == 200
     assert got.json()["issue_id"] == "ISSUE-1"
     assert got.json()["entity_key"]["value"] == "clarion:eid:abc"
+    # The recorded binding reflects the cleared content_hash, not the body's.
+    assert got.json()["content_hash"] == "blake3"
 
 
 def test_binding_read_404_when_no_ledger(tmp_path):
