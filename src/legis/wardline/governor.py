@@ -56,11 +56,15 @@ def route_findings(
     if (policy is None) == (cell_map is None):
         raise ValueError("exactly one of policy or cell_map must be given")
 
-    # Validate every dependency the run could need BEFORE writing anything: the
-    # append-only ledger has no rollback, so a per-cell guard firing mid-loop
-    # would leave a partially-applied batch. With cell_map, SURFACE_OVERRIDE is
-    # always reachable (unmapped severity falls back to it), so engine is
-    # effectively required.
+    # Validate every dependency the run could need BEFORE writing anything.
+    # This guard ensures no write begins until all required engine/signoff
+    # dependencies are confirmed present — preventing a mid-loop ValueError
+    # after some findings have already been persisted. It is NOT full
+    # transactional atomicity: a successful mixed batch spans two append-only
+    # stores (engine and signoff), and a mid-loop runtime failure leaves any
+    # prior writes in those stores permanently persisted.
+    # With cell_map, SURFACE_OVERRIDE is always reachable (unmapped severity
+    # falls back to it), so engine is effectively required.
     cells_needed = (set(cell_map.values()) | {WardlineCellPolicy.SURFACE_OVERRIDE}
                     if cell_map is not None else {policy})
     if engine is None and (WardlineCellPolicy.SURFACE_OVERRIDE in cells_needed

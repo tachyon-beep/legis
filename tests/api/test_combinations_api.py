@@ -212,6 +212,12 @@ def test_scan_results_block_escalate_only_needs_no_engine(tmp_path):
     assert resp.json()["routed"][0]["mode"] == "block_escalate"
 
 
+def test_scan_results_empty_cell_by_severity_is_422(tmp_path):
+    c = _client(tmp_path)
+    body = {"agent_id": "a", "cell_by_severity": {}, "scan": {"findings": []}}
+    assert c.post("/wardline/scan-results", json=body).status_code == 422
+
+
 def test_scan_results_single_cell_still_works(tmp_path):
     c = _client(tmp_path)
     body = {"cell": "surface_override", "agent_id": "agent-1", "scan": {"findings": [

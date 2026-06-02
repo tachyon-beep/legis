@@ -159,6 +159,25 @@ def test_exactly_one_of_policy_or_cell_map(tmp_path):
                        resolve=lambda q: (EntityKey.from_locator("x"), {}), engine=eng)
 
 
+def test_surface_only_record_is_orphan_detectable(tmp_path):
+    from legis.governance.gaps import find_orphan_gaps
+    eng = _engine(tmp_path)
+    route_findings(
+        active_defects(_scan()), policy=WardlineCellPolicy.SURFACE_ONLY, agent_id="a",
+        resolve=lambda q: (EntityKey.from_sei("clarion:eid:s"),
+                           {"clarion": {"alive": True, "content_hash": "h", "lineage_snapshot": None}}),
+        engine=eng)
+
+    class DeadClient:
+        def resolve_sei(self, sei):
+            return {"sei": sei, "alive": False, "lineage": [{"event": "orphaned"}]}
+        def lineage(self, sei):
+            return []
+
+    gaps = find_orphan_gaps(eng.records(), DeadClient())
+    assert [g.sei for g in gaps] == ["clarion:eid:s"]  # surfaced record IS orphan-detectable
+
+
 def test_pre_loop_guard_prevents_partial_application(tmp_path):
     # A heterogeneous cell_map needing block_escalate with no signoff gate must
     # raise BEFORE any finding is written — no partial batch in the ledger.

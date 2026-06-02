@@ -450,6 +450,8 @@ def create_app(
         if (body.cell is None) == (body.cell_by_severity is None):
             raise HTTPException(status_code=422,
                                 detail="provide exactly one of cell or cell_by_severity")
+        if body.cell_by_severity is not None and not body.cell_by_severity:
+            raise HTTPException(status_code=422, detail="cell_by_severity must not be empty")
 
         def resolve(qualname: str | None) -> tuple[EntityKey, dict]:
             # Use the one resolve-then-key boundary so a wardline-routed override
