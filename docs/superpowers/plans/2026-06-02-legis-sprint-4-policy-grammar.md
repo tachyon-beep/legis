@@ -27,6 +27,10 @@
 - **The injected `resolver` is a trust boundary.** A permissive resolver (returns a dummy that always matches) voids the gate — same posture as the judge seam and the HMAC key.
 - **The YAML external allowlist is positioning, not a build target.** The decorator reduces its surface; "reserved for one-offs" is a relationship statement. No allowlist subsystem is built here.
 - **Judge / Wardline convergence is Sprint 6.** This sprint ships the grammar as substrate; wiring it into the judge's override evaluation and the suite trust-vocabulary is deferred (and gated on siblings).
+- **The honesty gate has no caller yet.** `check_policy_boundary` is unit-proven, but nothing in legis *discovers* `@policy_boundary`-decorated functions and runs the gate over them (no CI runner, no endpoint, no enforcement path). The gate *logic* ships and is tested; invocation over a codebase is production wiring, deferred — so "a stale decorator fails the gate" holds for the function, not yet for the repo. (Distinct from the no-analyzer-consumes-`suppresses` note above.)
+- **`/policy/evaluate` is a query surface, not a commit surface (deliberate).** CLEAR and VIOLATION record nothing; only UNKNOWN records a provenance-gap event. A VIOLATION leaving no trail is *not* a silent path — the violation is returned honestly; actual enforcement recording happens through the Sprint 2/3 override/protected paths. Evaluate answers "what does the grammar say?", it does not enforce.
+- **`suppresses` is not validated against the registered grammar.** A decorator may declare `suppresses=("policy-that-doesn't-exist",)` and pass the gate (harmless today — suppressing a non-policy does nothing). elspeth constrained this to a `Literal` rule set; legis widened to free strings deliberately. When the suppression-consuming analyzer lands, it owes a check that suppressed names are registered policies.
+- **UNKNOWN_POLICY events accumulate per call.** Polling the same unprovable policy N times writes N append-only events (by design). A consumer counting provenance gaps must dedup by policy or treat them as a stream — same shape as the Sprint 2 record-both denominator note.
 
 ---
 
