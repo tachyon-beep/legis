@@ -43,6 +43,14 @@ def test_single_table_instead_of_array_fails_clearly(tmp_path):
         load_exemptions(path)
 
 
+def test_scalar_array_entry_fails_clearly(tmp_path):
+    # An array of scalars (not tables) must fail closed with a clear ValueError,
+    # not a bare AttributeError from calling .get on a str.
+    path = _write(tmp_path, 'exemption = ["oops"]\n')
+    with pytest.raises(ValueError, match="malformed"):
+        load_exemptions(path)
+
+
 def test_empty_file_is_an_empty_registry(tmp_path):
     reg = load_exemptions(_write(tmp_path, ""))
     assert reg.is_exempt("import-allowlist", "requests") is None

@@ -47,6 +47,11 @@ def load_exemptions(path: str | Path) -> ExemptionRegistry:
         )
     exemptions: list[Exemption] = []
     for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"exemption[{i}] is malformed: expected a table ([[exemption]]), "
+                f"got {type(entry).__name__!r}"
+            )
         missing = [k for k in ("policy", "value", "reason") if not entry.get(k)]
         if missing:
             raise ValueError(
