@@ -118,3 +118,12 @@ def test_git_surface_command_injection_mitigation(git_repo):
         s.merge_base("main|sh", "feature")
     with pytest.raises(GitError):
         s.renames("HEAD~1..HEAD; echo")
+
+
+def test_git_surface_times_out_slow_git_commands(git_repo, monkeypatch):
+    def slow_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr(subprocess, "run", slow_run)
+    with pytest.raises(GitError, match="timed out"):
+        GitSurface(git_repo).branches()

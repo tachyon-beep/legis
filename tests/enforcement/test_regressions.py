@@ -1,4 +1,3 @@
-import os
 import pytest
 import sqlite3
 from fastapi.testclient import TestClient
@@ -39,104 +38,90 @@ def test_signoff_gate_out_of_bounds(tmp_path):
         store._engine.dispose()
 
 
-def test_api_overrides_protected_policies_403(tmp_path):
-    os.environ["LEGIS_PROTECTED_POLICIES"] = "no-eval,protected-policy"
-    os.environ["LEGIS_HMAC_KEY"] = "secret-key"
-    try:
-        app = create_app()
-        client = TestClient(app)
-        res = client.post("/overrides", json={
-            "policy": "protected-policy",
-            "entity": "clarion:eid:abc",
-            "rationale": "bypass",
-            "agent_id": "agent-1"
-        })
-        assert res.status_code == 403
-        assert "protected" in res.json()["detail"]
-    finally:
-        os.environ.pop("LEGIS_PROTECTED_POLICIES", None)
-        os.environ.pop("LEGIS_HMAC_KEY", None)
+def test_api_overrides_protected_policies_403(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "no-eval,protected-policy")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
+    app = create_app()
+    client = TestClient(app)
+    res = client.post("/overrides", json={
+        "policy": "protected-policy",
+        "entity": "clarion:eid:abc",
+        "rationale": "bypass",
+        "agent_id": "agent-1"
+    })
+    assert res.status_code == 403
+    assert "protected" in res.json()["detail"]
 
 
-def test_api_admin_auth(tmp_path):
-    os.environ["LEGIS_API_SECRET"] = "super-secret"
-    os.environ["LEGIS_HMAC_KEY"] = "secret-key"
-    os.environ["LEGIS_GOVERNANCE_DB"] = f"sqlite:///{tmp_path / 'gov.db'}"
-    try:
-        app = create_app()
-        client = TestClient(app)
-        
-        # 1. operator override unauthenticated
-        res = client.post("/protected/operator-override", json={
-            "policy": "no-eval",
-            "entity": "clarion:eid:abc",
-            "rationale": "override",
-            "operator_id": "op-1",
-            "file_fingerprint": "fp",
-            "ast_path": "ap"
-        })
-        assert res.status_code == 401
+def test_api_admin_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_SECRET", "super-secret")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    app = create_app()
+    client = TestClient(app)
 
-        # operator override authenticated
-        res = client.post("/protected/operator-override", json={
-            "policy": "no-eval",
-            "entity": "clarion:eid:abc",
-            "rationale": "override",
-            "operator_id": "op-1",
-            "file_fingerprint": "fp",
-            "ast_path": "ap"
-        }, headers={"Authorization": "Bearer super-secret"})
-        assert res.status_code == 201
-        
-        # 2. signoff sign unauthenticated
-        res = client.post("/signoff/1/sign", json={
-            "operator_id": "op-1",
-            "rationale": "override"
-        })
-        assert res.status_code == 401
-    finally:
-        os.environ.pop("LEGIS_API_SECRET", None)
-        os.environ.pop("LEGIS_HMAC_KEY", None)
-        os.environ.pop("LEGIS_GOVERNANCE_DB", None)
+    # 1. operator override unauthenticated
+    res = client.post("/protected/operator-override", json={
+        "policy": "no-eval",
+        "entity": "clarion:eid:abc",
+        "rationale": "override",
+        "operator_id": "op-1",
+        "file_fingerprint": "fp",
+        "ast_path": "ap"
+    })
+    assert res.status_code == 401
+
+    # operator override authenticated
+    res = client.post("/protected/operator-override", json={
+        "policy": "no-eval",
+        "entity": "clarion:eid:abc",
+        "rationale": "override",
+        "operator_id": "op-1",
+        "file_fingerprint": "fp",
+        "ast_path": "ap"
+    }, headers={"Authorization": "Bearer super-secret"})
+    assert res.status_code == 201
+
+    # 2. signoff sign unauthenticated
+    res = client.post("/signoff/1/sign", json={
+        "operator_id": "op-1",
+        "rationale": "override"
+    })
+    assert res.status_code == 401
 
 
-def test_api_policy_evaluate_logging(tmp_path):
-    os.environ["LEGIS_API_SECRET"] = "super-secret"
-    os.environ["LEGIS_HMAC_KEY"] = "secret-key"
+def test_api_policy_evaluate_logging(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_SECRET", "super-secret")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
     db_path = tmp_path / "gov.db"
-    os.environ["LEGIS_GOVERNANCE_DB"] = f"sqlite:///{db_path}"
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{db_path}")
+    app = create_app()
+    client = TestClient(app)
+
+    # Unknown policy evaluation unauthenticated
+    res = client.post("/policy/evaluate", json={
+        "policy": "unknown-policy-here",
+        "target": {"value": "some-val"}
+    })
+    assert res.status_code == 401
+
+    store = AuditStore(f"sqlite:///{db_path}")
     try:
-        app = create_app()
-        client = TestClient(app)
-        
-        # Unknown policy evaluation unauthenticated
+        records = store.read_all()
+        assert len(records) == 0
+
+        # Unknown policy evaluation authenticated
         res = client.post("/policy/evaluate", json={
             "policy": "unknown-policy-here",
             "target": {"value": "some-val"}
-        })
+        }, headers={"Authorization": "Bearer super-secret"})
         assert res.status_code == 200
-        
-        store = AuditStore(f"sqlite:///{db_path}")
-        try:
-            records = store.read_all()
-            assert len(records) == 0
-            
-            # Unknown policy evaluation authenticated
-            res = client.post("/policy/evaluate", json={
-                "policy": "unknown-policy-here",
-                "target": {"value": "some-val"}
-            }, headers={"Authorization": "Bearer super-secret"})
-            assert res.status_code == 200
-            
-            records = store.read_all()
-            assert len(records) == 1
-            assert records[0].payload["policy"] == "unknown-policy-here"
-        finally:
-            store._engine.dispose()
+
+        records = store.read_all()
+        assert len(records) == 1
+        assert records[0].payload["policy"] == "unknown-policy-here"
     finally:
-        os.environ.pop("LEGIS_API_SECRET", None)
-        os.environ.pop("LEGIS_HMAC_KEY", None)
-        os.environ.pop("LEGIS_GOVERNANCE_DB", None)
+        store._engine.dispose()
 
 
 def test_exemption_unhashable_target_value():

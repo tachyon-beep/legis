@@ -44,6 +44,8 @@ def test_identity_resolution_carries_clarion_extension_when_alive_known():
         "alive": True,
         "content_hash": "abc",
         "lineage_snapshot": ["e1"],
+        "identity_resolution_status": "resolved",
+        "lineage_snapshot_status": "verified",
     }
 
 
@@ -58,6 +60,8 @@ def test_alive_false_records_clarion_extension_with_alive_false():
         "alive": False,
         "content_hash": None,
         "lineage_snapshot": None,
+        "identity_resolution_status": "not_alive",
+        "lineage_snapshot_status": "not_applicable",
     }
 
 
@@ -77,6 +81,11 @@ class _FakeProtectedGate:
 
     def records(self):
         return self._records
+
+
+class _IntegrityFailGate(_FakeProtectedGate):
+    def verify_integrity(self):
+        return False
 
 
 class _OkVerifier:
@@ -113,6 +122,12 @@ def test_verified_records_raises_audit_integrity_error_on_tamper():
         verified_records(gate, _TamperVerifier(), _boom)
     # the `from exc` chain must be preserved
     assert isinstance(exc_info.value.__cause__, TamperError)
+
+
+def test_verified_records_uses_public_gate_integrity_hook():
+    gate = _IntegrityFailGate(["bad"])
+    with pytest.raises(AuditIntegrityError, match="hash chain"):
+        verified_records(gate, None, _boom)
 
 
 def test_compute_override_rate_returns_status_rate_sample_below_min_sample():

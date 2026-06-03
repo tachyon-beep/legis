@@ -3,11 +3,12 @@ from legis.identity.resolver import IdentityResolver
 
 
 class FakeClient:
-    def __init__(self, *, capable=True, resolve=None, lineage=None, boom=False):
+    def __init__(self, *, capable=True, resolve=None, lineage=None, boom=False, lineage_boom=False):
         self._capable = capable
         self._resolve = resolve or {"alive": False}
         self._lineage = lineage or []
         self._boom = boom
+        self._lineage_boom = lineage_boom
 
     def capability(self):
         if self._boom:
@@ -21,6 +22,8 @@ class FakeClient:
         raise AssertionError
 
     def lineage(self, sei):
+        if self._lineage_boom:
+            raise RuntimeError("lineage down")
         return self._lineage
 
 
@@ -38,6 +41,8 @@ def test_alive_sei_is_keyed_opaquely_with_two_axes():
     assert res.alive is True                                    # identity axis
     assert res.content_hash == "blake3hash"                     # content axis
     assert res.lineage_snapshot == {"length": 1, "hash": content_hash([{"event": "born"}])}
+    assert res.identity_resolution_status == "resolved"
+    assert res.lineage_snapshot_status == "verified"
 
 
 def test_capability_absent_degrades_to_locator():
@@ -64,3 +69,42 @@ def test_transport_error_degrades_never_raises():
     r = IdentityResolver(FakeClient(boom=True))
     res = r.resolve("python:function:m.f")
     assert res.entity_key.identity_stable is False
+
+
+def test_transient_capability_error_is_retried():
+    class FlakyCapabilityClient(FakeClient):
+        def __init__(self):
+            super().__init__(resolve=ALIVE, lineage=[{"event": "born"}])
+            self.calls = 0
+
+        def capability(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("clarion temporarily down")
+            return True
+
+    client = FlakyCapabilityClient()
+    r = IdentityResolver(client)
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is False
+
+    res = r.resolve("python:function:m.f")
+
+    assert res.entity_key.value == "clarion:eid:deadbeef"
+    assert client.calls == 2
+
+
+def test_alive_response_missing_sei_degrades_instead_of_raw_key_error():
+    r = IdentityResolver(FakeClient(resolve={"alive": True, "content_hash": "h"}))
+    res = r.resolve("python:function:m.f")
+    assert res.entity_key.identity_stable is False
+    assert res.alive is None
+
+
+def test_alive_sei_with_lineage_failure_records_unavailable_status():
+    r = IdentityResolver(FakeClient(resolve=ALIVE, lineage_boom=True))
+    res = r.resolve("python:function:m.f")
+    assert res.entity_key.value == "clarion:eid:deadbeef"
+    assert res.alive is True
+    assert res.lineage_snapshot is None
+    assert res.identity_resolution_status == "resolved"
+    assert res.lineage_snapshot_status == "unavailable"

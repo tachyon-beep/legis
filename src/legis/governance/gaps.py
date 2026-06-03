@@ -33,6 +33,18 @@ class LineageDivergence:
     current_length: int
 
 
+@dataclass(frozen=True)
+class LineageUnavailable:
+    sei: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class LineageIntegrity:
+    divergences: list[LineageDivergence]
+    unavailable: list[LineageUnavailable]
+
+
 def _stable_seis(records: list[AuditRecord]) -> list[str]:
     seen: dict[str, None] = {}  # ordered, de-duplicated
     for rec in records:
@@ -53,25 +65,40 @@ def find_orphan_gaps(
     return gaps
 
 
-def find_lineage_divergence(
+def find_lineage_integrity(
     records: list[AuditRecord], client: ClarionIdentity
-) -> list[LineageDivergence]:
+) -> LineageIntegrity:
     divergences: list[LineageDivergence] = []
+    unavailable: dict[str, LineageUnavailable] = {}
     lineages: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
         ek = rec.payload.get("entity_key", {})
         sei = ek.get("value")
         if not (ek.get("identity_stable") and sei):
             continue
-        snap = (rec.payload.get("extensions", {}).get("clarion", {}) or {}).get(
-            "lineage_snapshot"
-        )
+        clarion = (rec.payload.get("extensions", {}).get("clarion", {}) or {})
+        snap = clarion.get("lineage_snapshot")
         if not snap:
+            unavailable.setdefault(
+                sei,
+                LineageUnavailable(
+                    sei=sei,
+                    reason=clarion.get("lineage_snapshot_status") or "missing_snapshot",
+                ),
+            )
+            continue
+        if not isinstance(snap, dict) or "length" not in snap or "hash" not in snap:
+            unavailable.setdefault(
+                sei, LineageUnavailable(sei=sei, reason="malformed_snapshot")
+            )
             continue
         if sei not in lineages:
             try:
                 lineages[sei] = client.lineage(sei)
             except Exception:
+                unavailable.setdefault(
+                    sei, LineageUnavailable(sei=sei, reason="lineage_fetch_failed")
+                )
                 continue
         current = lineages[sei]
         n = snap["length"]
@@ -79,4 +106,10 @@ def find_lineage_divergence(
             divergences.append(
                 LineageDivergence(sei=sei, recorded_length=n, current_length=len(current))
             )
-    return divergences
+    return LineageIntegrity(divergences=divergences, unavailable=list(unavailable.values()))
+
+
+def find_lineage_divergence(
+    records: list[AuditRecord], client: ClarionIdentity
+) -> list[LineageDivergence]:
+    return find_lineage_integrity(records, client).divergences

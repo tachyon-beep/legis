@@ -26,6 +26,14 @@ def test_main_serve_invokes_runner_with_factory():
                       {"host": "0.0.0.0", "port": 9001, "factory": True})]
 
 
+def test_serve_rejects_hmac_key_argument():
+    import pytest
+
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["serve", "--hmac-key", "secret"])
+    assert excinfo.value.code == 2
+
+
 def test_main_no_command_returns_2():
     rc = main([], run=lambda *a, **k: None)
     assert rc == 2
@@ -62,3 +70,11 @@ def test_check_override_rate_exits_0_when_clean(tmp_path, capsys):
                           "extensions": {"judge_verdict": Verdict.ACCEPTED.value}})
     assert main(["check-override-rate", "--db", db]) == 0
     assert "PASS" in capsys.readouterr().out
+
+
+def test_check_override_rate_fails_for_missing_sqlite_db_without_creating_it(tmp_path, capsys):
+    db_path = tmp_path / "missing.db"
+    rc = main(["check-override-rate", "--db", f"sqlite:///{db_path}"])
+    assert rc == 1
+    assert not db_path.exists()
+    assert "missing" in capsys.readouterr().err.lower()

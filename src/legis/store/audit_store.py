@@ -122,7 +122,10 @@ class AuditStore:
                     chain_hash=_chain(prev_hash, c_hash),
                 )
             )
-            return int(result.inserted_primary_key[0])
+            primary_key = result.inserted_primary_key
+            if primary_key is None:
+                raise RuntimeError("audit_log insert did not return a primary key")
+            return int(primary_key[0])
 
     def read_all(self) -> list[AuditRecord]:
         with self._engine.begin() as conn:

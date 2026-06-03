@@ -20,15 +20,23 @@ class GitError(RuntimeError):
 
 
 class GitSurface:
+    _TIMEOUT_SECONDS = 10.0
+
     def __init__(self, repo_path: str | Path) -> None:
         self._repo = str(repo_path)
 
     def _run_raw(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", self._repo, *args],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            return subprocess.run(
+                ["git", "-C", self._repo, *args],
+                capture_output=True,
+                text=True,
+                timeout=self._TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitError(
+                f"git {' '.join(args)} timed out after {self._TIMEOUT_SECONDS:g}s"
+            ) from exc
 
     def _run(self, *args: str) -> str:
         result = self._run_raw(*args)

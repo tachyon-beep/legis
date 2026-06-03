@@ -64,7 +64,10 @@ class CheckSurface:
                     finished_at=run.finished_at,
                 )
             )
-            return int(result.inserted_primary_key[0])
+            primary_key = result.inserted_primary_key
+            if primary_key is None:
+                raise RuntimeError("check run insert did not return a primary key")
+            return int(primary_key[0])
 
     def _select(self, whereclause) -> list[tuple[int, CheckRun]]:
         with self._engine.begin() as conn:

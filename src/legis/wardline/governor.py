@@ -4,9 +4,8 @@ One judge, not two: Wardline produced the finding; legis decides who answers.
 The cell is configured either for the whole scan via ``policy`` (single cell,
 the proven Wardline handshake path) or per-severity via ``cell_map``
 (``dict[WardlineSeverity, WardlineCellPolicy]``).  Exactly one must be given.
-With ``cell_map``, each finding's cell is ``cell_map.get(f.severity,
-SURFACE_OVERRIDE)`` — unmapped severities fall back to SURFACE_OVERRIDE so
-routing is always attributable, never a silent hard gate.
+With ``cell_map``, every severity present in the scan must be mapped explicitly;
+an omission is a configuration error, not an implicit downgrade.
 
 The finding's ``rule_id`` is the policy; its ``qualname`` is the entity to key
 on (resolved to an SEI via the same Sprint-5 resolver when available); its
@@ -16,9 +15,8 @@ on (resolved to an SEI via the same Sprint-5 resolver when available); its
   ``fingerprint``, trust ``tiers`` (the one shared vocabulary, verbatim from
   ``properties``), and ``severity`` in the record's ``extensions``.
 * **block+escalate** opens a sign-off request carrying ``rule_id`` (policy),
-  the resolved entity, and the seeded rationale. Carrying the Wardline tiers
-  onto the sign-off record is deferred: ``SignoffGate.request`` has no
-  ``extensions`` field yet.
+  the resolved entity, the seeded rationale, and the same Clarion/Wardline
+  evidence extensions the surface paths preserve.
 * **surface+only** records a non-gating ``wardline_surfaced`` governance event
   via ``EnforcementEngine.record_event``; no judge, no sign-off gate. Carries
   ``entity_key`` + ``clarion`` and ``wardline`` extensions so it is
@@ -29,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.signoff import SignoffGate
@@ -52,6 +50,7 @@ def route_findings(
     resolve: Callable[[str | None], tuple[EntityKey, dict[str, Any]]],
     engine: EnforcementEngine | None = None,
     signoff: SignoffGate | None = None,
+    batch_provenance: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if (policy is None) == (cell_map is None):
         raise ValueError("exactly one of policy or cell_map must be given")
@@ -63,10 +62,17 @@ def route_findings(
     # transactional atomicity: a successful mixed batch spans two append-only
     # stores (engine and signoff), and a mid-loop runtime failure leaves any
     # prior writes in those stores permanently persisted.
-    # With cell_map, SURFACE_OVERRIDE is always reachable (unmapped severity
-    # falls back to it), so engine is effectively required.
-    cells_needed = (set(cell_map.values()) | {WardlineCellPolicy.SURFACE_OVERRIDE}
-                    if cell_map is not None else {policy})
+    if cell_map is not None:
+        missing = {f.severity for f in findings} - set(cell_map)
+        if missing:
+            names = ", ".join(sorted(sev.value for sev in missing))
+            raise ValueError(f"unmapped severity in cell_map: {names}")
+
+    if cell_map is not None:
+        cells_needed = set(cell_map.values())
+    else:
+        assert policy is not None
+        cells_needed = {policy}
     if engine is None and (WardlineCellPolicy.SURFACE_OVERRIDE in cells_needed
                            or WardlineCellPolicy.SURFACE_ONLY in cells_needed):
         raise ValueError("surface cell(s) require an engine")
@@ -75,7 +81,7 @@ def route_findings(
 
     def cell_for(f: WardlineFinding) -> WardlineCellPolicy:
         if cell_map is not None:
-            return cell_map.get(f.severity, WardlineCellPolicy.SURFACE_OVERRIDE)
+            return cell_map[f.severity]
         assert policy is not None
         return policy
 
@@ -84,15 +90,21 @@ def route_findings(
         cell = cell_for(f)
         entity_key, clarion_ext = resolve(f.qualname)
         rationale = f"[wardline {f.rule_id}] {f.message}"
-        wardline_ext = {"fingerprint": f.fingerprint, "tiers": dict(f.properties),
-                        "severity": f.severity.value}
+        wardline_ext = {
+            "fingerprint": f.fingerprint,
+            "tiers": dict(f.properties),
+            "severity": f.severity.value,
+            **dict(batch_provenance or {}),
+        }
         if cell is WardlineCellPolicy.BLOCK_ESCALATE:
             if signoff is None:
                 raise ValueError("block_escalate cell requires a signoff gate")
-            res = signoff.request(policy=f.rule_id, entity_key=entity_key,
-                                  rationale=rationale, agent_id=agent_id)
+            ext = {**clarion_ext, "wardline": wardline_ext}
+            signoff_result = signoff.request(policy=f.rule_id, entity_key=entity_key,
+                                             rationale=rationale, agent_id=agent_id,
+                                             extensions=ext)
             results.append({"mode": cell.value, "fingerprint": f.fingerprint,
-                            "seq": res.seq, "cleared": res.cleared})
+                            "seq": signoff_result.seq, "cleared": signoff_result.cleared})
         elif cell is WardlineCellPolicy.SURFACE_OVERRIDE:
             if engine is None:
                 raise ValueError("surface_override cell requires an engine")
@@ -100,11 +112,11 @@ def route_findings(
             # so a wardline-routed override carries the same lineage snapshot a
             # /overrides override would.
             ext = {**clarion_ext, "wardline": wardline_ext}
-            res = engine.submit_override(policy=f.rule_id, entity_key=entity_key,
-                                         rationale=rationale, agent_id=agent_id,
-                                         extensions=ext)
+            override_result = engine.submit_override(policy=f.rule_id, entity_key=entity_key,
+                                                     rationale=rationale, agent_id=agent_id,
+                                                     extensions=ext)
             results.append({"mode": cell.value, "fingerprint": f.fingerprint,
-                            "seq": res.seq, "accepted": res.accepted})
+                            "seq": override_result.seq, "accepted": override_result.accepted})
         elif cell is WardlineCellPolicy.SURFACE_ONLY:
             # recorded, non-gating
             if engine is None:

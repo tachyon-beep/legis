@@ -25,6 +25,24 @@ class SignoffResult:
     cleared: bool
 
 
+def signoff_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    ext = payload.get("extensions") or {}
+    clar = ext.get("clarion") or {}
+    snap = clar.get("lineage_snapshot") or {}
+    return {
+        "policy": payload.get("policy"),
+        "entity": payload.get("entity_key"),
+        "recorded_at": payload.get("recorded_at"),
+        "rationale": payload.get("rationale"),
+        "actor": payload.get("agent_id"),
+        "signoff_state": ext.get("signoff_state"),
+        "request_seq": ext.get("request_seq"),
+        "clarion_content_hash": clar.get("content_hash"),
+        "clarion_lineage_hash": snap.get("hash"),
+        "clarion_lineage_len": snap.get("length"),
+    }
+
+
 class SignoffGate:
     def __init__(
         self,
@@ -59,16 +77,7 @@ class SignoffGate:
         payload = rec.to_payload()
         if self._sign and self._key is not None:
             payload["extensions"]["signoff_signature"] = sign(
-                {
-                    "policy": payload["policy"],
-                    "entity": payload["entity_key"],
-                    "recorded_at": payload["recorded_at"],
-                    "rationale": payload["rationale"],
-                    "operator": actor_id,
-                    "signoff_state": ext.get("signoff_state"),
-                    "request_seq": ext.get("request_seq"),
-                },
-                self._key,
+                signoff_signing_fields(payload), self._key
             )
         return self._store.append(payload)
 
@@ -129,3 +138,11 @@ class SignoffGate:
             ):
                 return True
         return False
+
+    def records(self):
+        """The sign-off trail this gate writes to — for verified consumers."""
+        return self._store.read_all()
+
+    def verify_integrity(self) -> bool:
+        """Verify the underlying append-only hash chain before HMAC checks."""
+        return self._store.verify_integrity()

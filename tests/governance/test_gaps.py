@@ -1,6 +1,8 @@
 from legis.canonical import content_hash
 from legis.governance.gaps import (
     LineageDivergence,
+    LineageUnavailable,
+    find_lineage_integrity,
     find_lineage_divergence,
     find_orphan_gaps,
 )
@@ -31,6 +33,11 @@ class FakeClient:
 
     def lineage(self, sei):
         return self._lineages.get(sei, [])
+
+
+class BrokenLineageClient(FakeClient):
+    def lineage(self, sei):
+        raise RuntimeError("clarion down")
 
 
 def test_orphaned_sei_surfaces_a_gap(tmp_path):
@@ -66,3 +73,23 @@ def test_truncated_or_mutated_prefix_is_divergence(tmp_path):
     tampered = [{"event": "born"}]   # the 'moved' event vanished — prefix broken
     div = find_lineage_divergence(store.read_all(), FakeClient({}, {"clarion:eid:s": tampered}))
     assert div == [LineageDivergence(sei="clarion:eid:s", recorded_length=2, current_length=1)]
+
+
+def test_lineage_integrity_reports_unavailable_fetches(tmp_path):
+    born = [{"event": "born"}]
+    snap = {"length": 1, "hash": content_hash(born)}
+    store = _store(tmp_path, _rec("clarion:eid:s", snapshot=snap))
+    integrity = find_lineage_integrity(store.read_all(), BrokenLineageClient({}))
+    assert integrity.divergences == []
+    assert integrity.unavailable == [
+        LineageUnavailable(sei="clarion:eid:s", reason="lineage_fetch_failed")
+    ]
+
+
+def test_lineage_integrity_reports_missing_snapshot_as_unverified(tmp_path):
+    store = _store(tmp_path, _rec("clarion:eid:s"))
+    integrity = find_lineage_integrity(store.read_all(), FakeClient({}))
+    assert integrity.divergences == []
+    assert integrity.unavailable == [
+        LineageUnavailable(sei="clarion:eid:s", reason="missing_snapshot")
+    ]

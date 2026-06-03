@@ -22,3 +22,7 @@ class NotEnabledError(ServiceError):
 
 class NotFoundError(ServiceError):
     """A referenced resource (record, request, PR) does not exist."""
+
+
+class InvalidArgumentError(ServiceError):
+    """Caller input is structurally valid for the transport but invalid for Legis."""

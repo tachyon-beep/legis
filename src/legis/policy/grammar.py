@@ -87,7 +87,7 @@ class PolicyGrammar:
             result is PolicyResult.VIOLATION
             and self._exemptions is not None
             and "value" in target
-            and isinstance(target["value"], Hashable)
+            and isinstance(target["value"], str)
         ):
             ex = self._exemptions.is_exempt(policy, target["value"])
             if ex is not None:

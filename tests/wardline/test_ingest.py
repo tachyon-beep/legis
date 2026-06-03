@@ -26,7 +26,15 @@ def test_from_wire_carries_trust_properties_verbatim():
 def test_active_defects_excludes_suppressed_and_non_defects():
     scan = {"findings": [
         _finding(fingerprint="a"),                              # active defect → in
-        _finding(fingerprint="b", suppressed="waived"),         # waived → out
+        _finding(
+            fingerprint="b",
+            suppressed="waived",
+            properties={
+                "actual_return": "UNKNOWN_RAW",
+                "declared_return": "ASSURED",
+                "suppression_proof": "ISSUE-1",
+            },
+        ),                                                      # proved waiver → out
         _finding(fingerprint="c", kind="metric", severity="NONE"),  # not a defect → out
     ]}
     got = [f.fingerprint for f in active_defects(scan)]

@@ -28,7 +28,7 @@ def test_record_then_get_round_trips_the_binding(tmp_path):
     assert got["issue_id"] == "ISSUE-1"
     assert got["entity_key"] == {"value": "clarion:eid:abc", "identity_stable": True}
     assert got["content_hash"] == "h"
-    assert got["binding_signature"].startswith("hmac-sha256:v1:")
+    assert got["binding_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_verify_passes_for_a_legit_record(tmp_path):

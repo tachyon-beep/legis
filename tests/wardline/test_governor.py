@@ -5,7 +5,7 @@ from legis.enforcement.verdict import SignoffState
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy, route_findings
-from legis.wardline.ingest import WardlineSeverity, active_defects
+from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity, active_defects
 
 
 def _scan():
@@ -38,6 +38,24 @@ def test_surface_override_cell_records_an_override(tmp_path):
     assert "untrusted reaches trusted" in trail[0]["rationale"]
 
 
+def test_invalid_trust_tier_properties_are_rejected():
+    import pytest
+
+    scan = _scan()
+    scan["findings"][0]["properties"] = {"actual_return": "ROOT"}
+    with pytest.raises(WardlinePayloadError, match="trust tier"):
+        active_defects(scan)
+
+
+def test_suppressed_defect_without_proof_is_rejected():
+    import pytest
+
+    scan = _scan()
+    scan["findings"][0]["suppressed"] = "waived"
+    with pytest.raises(WardlinePayloadError, match="suppression proof"):
+        active_defects(scan)
+
+
 def test_surface_override_captures_clarion_lineage_alongside_wardline(tmp_path):
     # A SEI-keyed wardline-routed override must carry the REQ-L-01 clarion
     # lineage snapshot (alive/content_hash/lineage_snapshot) merged ALONGSIDE the
@@ -56,6 +74,23 @@ def test_surface_override_captures_clarion_lineage_alongside_wardline(tmp_path):
     ext = eng.trail()[0]["extensions"]
     assert ext["clarion"] == clarion_ext["clarion"]      # lineage snapshot captured
     assert ext["wardline"]["fingerprint"] == "fp1"       # wardline ext still present
+
+
+def test_route_records_batch_provenance(tmp_path):
+    eng = _engine(tmp_path)
+    provenance = {"scan_digest": "sha256:abc", "finding_count": 3, "active_count": 1}
+    route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng,
+        batch_provenance=provenance,
+    )
+    wardline = eng.trail()[0]["extensions"]["wardline"]
+    assert wardline["scan_digest"] == "sha256:abc"
+    assert wardline["finding_count"] == 3
+    assert wardline["active_count"] == 1
 
 
 def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
@@ -80,6 +115,24 @@ def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
     assert (
         record["extensions"]["signoff_state"] == SignoffState.PENDING.value
     )
+
+
+def test_block_escalate_captures_clarion_and_wardline_metadata(tmp_path):
+    store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
+    gate = SignoffGate(store, FixedClock("2026-06-02T12:00:00+00:00"))
+    clarion_ext = {"clarion": {"alive": True, "content_hash": "h",
+                               "lineage_snapshot": {"length": 1, "hash": "z"}}}
+    results = route_findings(
+        active_defects(_scan()),
+        policy=WardlineCellPolicy.BLOCK_ESCALATE,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_sei("clarion:eid:x"), clarion_ext),
+        signoff=gate,
+    )
+    record = store.read_all()[results[0]["seq"] - 1].payload
+    assert record["extensions"]["clarion"] == clarion_ext["clarion"]
+    assert record["extensions"]["wardline"]["fingerprint"] == "fp1"
+    assert record["extensions"]["wardline"]["severity"] == "ERROR"
 
 
 def test_surface_only_records_a_non_gating_event(tmp_path):
@@ -135,13 +188,15 @@ def test_cell_map_routes_each_finding_by_severity(tmp_path):
     assert by_fp == {"c": "block_escalate", "w": "surface_override", "i": "surface_only"}
 
 
-def test_unmapped_severity_falls_back_to_surface_override(tmp_path):
+def test_unmapped_severity_in_cell_map_is_rejected_before_writes(tmp_path):
+    import pytest
     eng = _engine(tmp_path)
     cell_map = {WardlineSeverity.CRITICAL: WardlineCellPolicy.SURFACE_ONLY}
-    results = route_findings(  # _scan() finding is ERROR — not in the map → fallback
-        active_defects(_scan()), cell_map=cell_map, agent_id="a",
-        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}), engine=eng)
-    assert results[0]["mode"] == "surface_override"
+    with pytest.raises(ValueError, match="unmapped severity"):
+        route_findings(
+            active_defects(_scan()), cell_map=cell_map, agent_id="a",
+            resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}), engine=eng)
+    assert eng.trail() == []
 
 
 def test_exactly_one_of_policy_or_cell_map(tmp_path):
@@ -186,6 +241,7 @@ def test_pre_loop_guard_prevents_partial_application(tmp_path):
     cell_map = {
         WardlineSeverity.WARN: WardlineCellPolicy.SURFACE_OVERRIDE,
         WardlineSeverity.CRITICAL: WardlineCellPolicy.BLOCK_ESCALATE,
+        WardlineSeverity.INFO: WardlineCellPolicy.SURFACE_ONLY,
     }
     with pytest.raises(ValueError, match="block_escalate cell requires a signoff gate"):
         route_findings(active_defects(_mixed_scan()), cell_map=cell_map, agent_id="a",

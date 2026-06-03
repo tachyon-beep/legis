@@ -15,6 +15,7 @@ no-arg app never creates state until a check route is used).
 from __future__ import annotations
 
 import os
+import hmac
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -27,38 +28,110 @@ from legis import __version__
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.protected import ProtectedGate, TrailVerifier
+from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
 from legis.git.surface import GitError, GitSurface
-from legis.governance.gaps import find_lineage_divergence, find_orphan_gaps
+from legis.governance.gaps import find_lineage_integrity, find_orphan_gaps
 from legis.filigree.client import FiligreeClient
 from legis.governance.binding_ledger import BindingError, BindingLedger
 from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
-from legis.service.errors import AuditIntegrityError
+from legis.service.errors import AuditIntegrityError, InvalidArgumentError, NotEnabledError
 from legis.service.governance import compute_override_rate as _compute_override_rate
+from legis.service.governance import evaluate_policy as _evaluate_policy
 from legis.service.governance import resolve_for_record as _resolve_for_record
+from legis.service.governance import submit_operator_override as _submit_operator_override
 from legis.service.governance import submit_override as _submit_override
+from legis.service.governance import submit_protected_override as _submit_protected_override
 from legis.service.governance import verified_records as _verified_records
-from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
-from legis.wardline.governor import WardlineCellPolicy, route_findings
-from legis.wardline.ingest import WardlineSeverity, active_defects
+from legis.service.wardline import route_wardline_scan as _route_wardline_scan
+from legis.policy.grammar import PolicyGrammar, default_grammar
+from legis.wardline.governor import WardlineCellPolicy
+from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity
 
 security = HTTPBearer(auto_error=False)
 
 
-def verify_operator(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> str:
+def _token_actor_from_mapping(
+    credentials: HTTPAuthorizationCredentials | None,
+    default_actor: str,
+    required_scope: str,
+) -> str | None:
+    mapping = os.environ.get("LEGIS_API_TOKEN_ACTORS")
+    if not mapping:
+        return None
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API secret token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    for entry in mapping.split(","):
+        actor_spec, sep, token = entry.partition("=")
+        if not sep:
+            continue
+        if hmac.compare_digest(credentials.credentials, token):
+            actor, scope_sep, scope_raw = actor_spec.partition(":")
+            scopes = {scope.strip() for scope in scope_raw.split("|") if scope.strip()}
+            if scope_sep and required_scope not in scopes:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Token is not authorized for {required_scope!r} operations.",
+                )
+            return actor.strip() or default_actor
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid or missing API secret token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _verify_secret(
+    credentials: HTTPAuthorizationCredentials | None,
+    default_actor: str,
+    required_scope: str,
+) -> str:
+    mapped_actor = _token_actor_from_mapping(credentials, default_actor, required_scope)
+    if mapped_actor is not None:
+        return mapped_actor
     secret = os.environ.get("LEGIS_API_SECRET")
     if secret:
-        if not credentials or credentials.credentials != secret:
+        if not credentials or not hmac.compare_digest(credentials.credentials, secret):
             raise HTTPException(
                 status_code=401,
                 detail="Invalid or missing API secret token.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    return "operator"
+        return os.environ.get("LEGIS_API_ACTOR", default_actor)
+    if _unsafe_dev_auth_enabled():
+        return default_actor
+    raise HTTPException(
+        status_code=401,
+        detail="Authentication is required; set LEGIS_UNSAFE_DEV_AUTH=1 only for local development.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _authenticated_actor_configured() -> bool:
+    return bool(os.environ.get("LEGIS_API_SECRET") or os.environ.get("LEGIS_API_TOKEN_ACTORS"))
+
+
+def _unsafe_dev_auth_enabled() -> bool:
+    return os.environ.get("LEGIS_UNSAFE_DEV_AUTH") == "1"
+
+
+def _recorded_actor(authenticated_actor: str, body_actor: str | None) -> str:
+    return authenticated_actor if _authenticated_actor_configured() else (body_actor or authenticated_actor)
+
+
+def verify_writer(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> str:
+    return _verify_secret(credentials, "agent", "writer")
+
+
+def verify_operator(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> str:
+    return _verify_secret(credentials, "operator", "operator")
 
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
@@ -69,14 +142,14 @@ class OverrideIn(BaseModel):
     policy: str
     entity: str  # a locator today (pre-SEI); identity_stable=False
     rationale: str
-    agent_id: str
+    agent_id: str | None = None
 
 
 class ProtectedIn(BaseModel):
     policy: str
     entity: str
     rationale: str
-    agent_id: str
+    agent_id: str | None = None
     file_fingerprint: str
     ast_path: str
 
@@ -85,7 +158,7 @@ class OperatorOverrideIn(BaseModel):
     policy: str
     entity: str
     rationale: str
-    operator_id: str
+    operator_id: str | None = None
     file_fingerprint: str
     ast_path: str
 
@@ -94,11 +167,11 @@ class SignoffRequestIn(BaseModel):
     policy: str
     entity: str
     rationale: str
-    agent_id: str
+    agent_id: str | None = None
 
 
 class SignoffSignIn(BaseModel):
-    operator_id: str
+    operator_id: str | None = None
     rationale: str = ""
 
 
@@ -108,7 +181,7 @@ class PolicyEvalIn(BaseModel):
 
 
 class ScanResultsIn(BaseModel):
-    agent_id: str
+    agent_id: str | None = None
     scan: dict
     cell: str | None = None
     cell_by_severity: dict[str, str] | None = None
@@ -132,6 +205,22 @@ class CheckRunIn(BaseModel):
     finished_at: str | None = None
 
 
+def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
+    mapping: dict[WardlineSeverity, WardlineCellPolicy] = {}
+    for part in raw.split(","):
+        if not part.strip():
+            continue
+        severity_raw, sep, cell_raw = part.partition("=")
+        if not sep:
+            raise ValueError("cell map entries must be SEVERITY=cell")
+        mapping[WardlineSeverity[severity_raw.strip()]] = WardlineCellPolicy(
+            cell_raw.strip()
+        )
+    if not mapping:
+        raise ValueError("cell map must not be empty")
+    return mapping
+
+
 def _check_to_dict(run: CheckRun) -> dict:
     d = asdict(run)
     d["outcome"] = run.outcome.value
@@ -152,6 +241,7 @@ def create_app(
     pull_requests: PullRequestSource | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
+    source_root = Path(repo_path) if repo_path is not None else Path(os.getcwd())
 
     # Fallback configuration loaders from environment variables if not injected
     if identity is None:
@@ -251,7 +341,10 @@ def create_app(
 
     @app.get("/git/branches")
     def git_branches() -> list[dict]:
-        return [asdict(b) for b in git().branches()]
+        try:
+            return [asdict(b) for b in git().branches()]
+        except GitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/git/commits/{sha}")
     def git_commit(sha: str) -> dict:
@@ -262,7 +355,10 @@ def create_app(
 
     @app.get("/git/renames")
     def git_renames(rev_range: str = Query(...)) -> list[dict]:
-        return [asdict(r) for r in git().renames(rev_range)]
+        try:
+            return [asdict(r) for r in git().renames(rev_range)]
+        except GitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/git/pull-requests/{number}")
     def get_pull_request(number: int) -> dict:
@@ -279,7 +375,7 @@ def create_app(
     # --- CI/check surface (WP-1.2) ---
 
     @app.post("/checks", status_code=201)
-    def post_check(run: CheckRunIn) -> dict:
+    def post_check(run: CheckRunIn, actor: str = Depends(verify_writer)) -> dict:
         cr = CheckRun(**run.model_dump())
         checks().record(cr)
         return _check_to_dict(cr)
@@ -299,8 +395,10 @@ def create_app(
     # --- simple-tier enforcement surface (WP-2.1 chill / WP-2.2 coached) ---
 
     @app.post("/overrides")
-    def post_override(body: OverrideIn, response: Response) -> dict:
-        protected_set = trail_verifier._protected if trail_verifier is not None else frozenset()
+    def post_override(body: OverrideIn, response: Response, actor: str = Depends(verify_writer)) -> dict:
+        protected_set = (
+            trail_verifier.protected_policies if trail_verifier is not None else frozenset()
+        )
         if body.policy in protected_set:
             raise HTTPException(
                 status_code=403,
@@ -312,7 +410,7 @@ def create_app(
             policy=body.policy,
             entity=body.entity,
             rationale=body.rationale,
-            agent_id=body.agent_id,
+            agent_id=_recorded_actor(actor, body.agent_id),
         )
         # ACCEPTED → 201 (the override took effect); BLOCKED → 409 (it did not,
         # the agent must correct or convince). Full body either way so the agent
@@ -341,19 +439,25 @@ def create_app(
     # --- complex-tier enforcement surface (WP-3.1 structured / WP-3.2 protected) ---
 
     @app.post("/protected/overrides")
-    def post_protected_override(body: ProtectedIn, response: Response) -> dict:
-        if protected_gate is None:
-            raise HTTPException(status_code=404, detail="protected cell not enabled")
-        entity_key, ext = resolve_for_record(body.entity)
-        result = protected_gate.submit(
-            policy=body.policy,
-            entity_key=entity_key,
-            rationale=body.rationale,
-            agent_id=body.agent_id,
-            file_fingerprint=body.file_fingerprint,
-            ast_path=body.ast_path,
-            extensions=ext,
-        )
+    def post_protected_override(
+        body: ProtectedIn, response: Response, actor: str = Depends(verify_writer)
+    ) -> dict:
+        try:
+            result = _submit_protected_override(
+                protected_gate,
+                identity=identity,
+                policy=body.policy,
+                entity=body.entity,
+                rationale=body.rationale,
+                agent_id=_recorded_actor(actor, body.agent_id),
+                file_fingerprint=body.file_fingerprint,
+                ast_path=body.ast_path,
+                source_root=source_root,
+            )
+        except NotEnabledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except InvalidArgumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         response.status_code = 201 if result.accepted else 409
         return {
             "accepted": result.accepted,
@@ -366,18 +470,22 @@ def create_app(
 
     @app.post("/protected/operator-override", status_code=201)
     def post_operator_override(body: OperatorOverrideIn, operator: str = Depends(verify_operator)) -> dict:
-        if protected_gate is None:
-            raise HTTPException(status_code=404, detail="protected cell not enabled")
-        entity_key, ext = resolve_for_record(body.entity)
-        result = protected_gate.operator_override(
-            policy=body.policy,
-            entity_key=entity_key,
-            rationale=body.rationale,
-            operator_id=body.operator_id,
-            file_fingerprint=body.file_fingerprint,
-            ast_path=body.ast_path,
-            extensions=ext,
-        )
+        try:
+            result = _submit_operator_override(
+                protected_gate,
+                identity=identity,
+                policy=body.policy,
+                entity=body.entity,
+                rationale=body.rationale,
+                operator_id=_recorded_actor(operator, body.operator_id),
+                file_fingerprint=body.file_fingerprint,
+                ast_path=body.ast_path,
+                source_root=source_root,
+            )
+        except NotEnabledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except InvalidArgumentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {
             "accepted": result.accepted,
             "seq": result.seq,
@@ -386,7 +494,7 @@ def create_app(
         }
 
     @app.post("/signoff/request", status_code=202)
-    def post_signoff_request(body: SignoffRequestIn) -> dict:
+    def post_signoff_request(body: SignoffRequestIn, actor: str = Depends(verify_writer)) -> dict:
         if signoff_gate is None:
             raise HTTPException(status_code=404, detail="structured cell not enabled")
         entity_key, ext = resolve_for_record(body.entity)
@@ -394,17 +502,32 @@ def create_app(
             policy=body.policy,
             entity_key=entity_key,
             rationale=body.rationale,
-            agent_id=body.agent_id,
+            agent_id=_recorded_actor(actor, body.agent_id),
             extensions=ext,
         )
         return {"seq": result.seq, "cleared": result.cleared}
 
     @app.post("/signoff/{request_seq}/bind-issue", status_code=201)
-    def bind_issue(request_seq: int, body: BindIssueIn) -> dict:
+    def bind_issue(
+        request_seq: int, body: BindIssueIn, actor: str = Depends(verify_writer)
+    ) -> dict:
         if filigree is None:
             raise HTTPException(status_code=404, detail="filigree binding not enabled")
         if signoff_gate is None:
             raise HTTPException(status_code=404, detail="structured cell not enabled")
+        if not signoff_gate.verify_integrity():
+            raise HTTPException(
+                status_code=500,
+                detail="sign-off trail integrity failure: database hash chain verification failed",
+            )
+        if trail_verifier is not None:
+            try:
+                trail_verifier.verify(signoff_gate.records())
+            except TamperError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"sign-off trail integrity failure: {exc}",
+                ) from exc
         req = signoff_gate.request_record(request_seq)
         if req is None:
             raise HTTPException(
@@ -449,7 +572,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="structured cell not enabled")
         result = signoff_gate.sign_off(
             request_seq=request_seq,
-            operator_id=body.operator_id,
+            operator_id=_recorded_actor(operator, body.operator_id),
             rationale=body.rationale,
         )
         return {"seq": result.seq, "cleared": result.cleared}
@@ -481,30 +604,33 @@ def create_app(
     @app.get("/governance/lineage-integrity")
     def lineage_integrity() -> dict:
         if identity is None or identity.client is None:
-            return {"divergences": []}
-        divs = find_lineage_divergence(verified_governance_records(), identity.client)
-        return {"divergences": [
-            {"sei": d.sei, "recorded_length": d.recorded_length,
-             "current_length": d.current_length} for d in divs]}
+            return {
+                "status": "unavailable",
+                "divergences": [],
+                "unavailable": [{"reason": "clarion client not configured"}],
+            }
+        integrity = find_lineage_integrity(verified_governance_records(), identity.client)
+        return {
+            "status": "unverified" if integrity.unavailable else "verified",
+            "divergences": [
+                {"sei": d.sei, "recorded_length": d.recorded_length,
+                 "current_length": d.current_length} for d in integrity.divergences
+            ],
+            "unavailable": [
+                {"sei": u.sei, "reason": u.reason} for u in integrity.unavailable
+            ],
+        }
 
     # --- agent-programmable policy grammar (WP-4.1) ---
 
     @app.post("/policy/evaluate")
-    def policy_evaluate(body: PolicyEvalIn, credentials: HTTPAuthorizationCredentials | None = Security(security)) -> dict:
-        ev = grammar_().evaluate(body.policy, body.target)
-        if ev.result is PolicyResult.UNKNOWN:
-            secret = os.environ.get("LEGIS_API_SECRET")
-            # Only record the UNKNOWN policy event if either no secret is configured, or a valid credentials token matches.
-            if not secret or (credentials and credentials.credentials == secret):
-                # Honest event + provenance gap — never a silent false-green.
-                engine().record_event(
-                    {
-                        "event": "UNKNOWN_POLICY",
-                        "policy": ev.policy,
-                        "detail": ev.detail,
-                        "provenance_gap": True,
-                    }
-                )
+    def policy_evaluate(body: PolicyEvalIn, actor: str = Depends(verify_writer)) -> dict:
+        ev = _evaluate_policy(
+            grammar_(),
+            engine=engine(),
+            policy=body.policy,
+            target=body.target,
+        )
         return {
             "policy": ev.policy,
             "result": ev.result.value,
@@ -515,26 +641,39 @@ def create_app(
     # --- wardline suite-combination surface (WP-6.1) ---
 
     @app.post("/wardline/scan-results")
-    def wardline_scan_results(body: ScanResultsIn) -> dict:
-        if (body.cell is None) == (body.cell_by_severity is None):
-            raise HTTPException(status_code=422,
-                                detail="provide exactly one of cell or cell_by_severity")
-        if body.cell_by_severity is not None and not body.cell_by_severity:
-            raise HTTPException(status_code=422, detail="cell_by_severity must not be empty")
+    def wardline_scan_results(body: ScanResultsIn, actor: str = Depends(verify_writer)) -> dict:
+        server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
+        server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
+        if server_cell and server_cell_by_severity:
+            raise HTTPException(status_code=500, detail="server Wardline routing is misconfigured")
+        server_routing = server_cell is not None or server_cell_by_severity is not None
+        if server_routing and (body.cell is not None or body.cell_by_severity is not None):
+            raise HTTPException(status_code=403, detail="Wardline routing is server-owned")
+        if not server_routing:
+            if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Wardline routing is server-owned; configure LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
+                )
+            if (body.cell is None) == (body.cell_by_severity is None):
+                raise HTTPException(status_code=422,
+                                    detail="provide exactly one of cell or cell_by_severity")
+            if body.cell_by_severity is not None and not body.cell_by_severity:
+                raise HTTPException(status_code=422, detail="cell_by_severity must not be empty")
 
-        def resolve(qualname: str | None) -> tuple[EntityKey, dict]:
-            # Use the one resolve-then-key boundary so a wardline-routed override
-            # captures the clarion lineage snapshot like every other write path.
-            if qualname:
-                return resolve_for_record(qualname)
-            return EntityKey.from_locator("unknown"), {}
-
+        policy: WardlineCellPolicy | None = None
+        cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
         try:
-            if body.cell_by_severity is not None:
+            if server_cell_by_severity is not None:
+                cell_map = _parse_wardline_cell_map(server_cell_by_severity)
+                cells = set(cell_map.values())
+            elif server_cell is not None:
+                policy = WardlineCellPolicy(server_cell)
+                cells = {policy}
+            elif body.cell_by_severity is not None:
                 cell_map = {WardlineSeverity[sev]: WardlineCellPolicy(cell)
                             for sev, cell in body.cell_by_severity.items()}
-                # SURFACE_OVERRIDE is always reachable via the unmapped-severity fallback.
-                cells = set(cell_map.values()) | {WardlineCellPolicy.SURFACE_OVERRIDE}
+                cells = set(cell_map.values())
             else:
                 policy = WardlineCellPolicy(body.cell)
                 cells = {policy}
@@ -546,16 +685,23 @@ def create_app(
         # must not touch it. signoff_gate is an injected param (no side effect).
         needs_engine = bool(cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
                                      WardlineCellPolicy.SURFACE_ONLY})
-        kwargs: dict = {"agent_id": body.agent_id, "resolve": resolve,
-                        "engine": engine() if needs_engine else None,
-                        "signoff": signoff_gate}
-        if body.cell_by_severity is not None:
-            kwargs["cell_map"] = cell_map
-        else:
-            kwargs["policy"] = policy
-
         try:
-            routed = route_findings(active_defects(body.scan), **kwargs)
+            routed = _route_wardline_scan(
+                body.scan,
+                agent_id=_recorded_actor(actor, body.agent_id),
+                identity=identity,
+                engine=engine() if needs_engine else None,
+                signoff=signoff_gate,
+                policy=policy,
+                cell_map=cell_map,
+                artifact_key=(
+                    os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
+                    if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
+                    else None
+                ),
+            )
+        except WardlinePayloadError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         return {"routed": routed}

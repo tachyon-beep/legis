@@ -195,18 +195,8 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
                 elif isinstance(node.func, ast.Attribute) and node.func.attr in (func.__name__, wrapped.__name__):
                     func_called = True
                     break
-            elif isinstance(node, ast.Name) and node.id in (func.__name__, wrapped.__name__):
-                func_called = True
-                break
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if re.search(r'\b' + re.escape(wrapped.__name__) + r'\b', node.value):
-                    func_called = True
-                    break
-                if re.search(r'\b' + re.escape(func.__name__) + r'\b', node.value):
-                    func_called = True
-                    break
     else:
-        func_called = (func.__name__ in src or wrapped.__name__ in src)
+        func_called = False
 
     if not func_called:
         return GateFinding(False, "test does not appear to exercise the boundary")

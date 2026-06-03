@@ -19,6 +19,7 @@ legis = "legis.cli:main"
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
+    "mypy>=1.19",
 ]
 
 [build-system]
@@ -34,3 +35,9 @@ filterwarnings = [
     # Matched by message (category is StarletteDeprecationWarning, not DeprecationWarning).
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/legis"]
+show_error_codes = true
+warn_unused_configs = true

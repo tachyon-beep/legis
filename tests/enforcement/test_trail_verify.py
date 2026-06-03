@@ -3,7 +3,13 @@ import sqlite3
 
 from legis.canonical import canonical_json, content_hash
 from legis.clock import FixedClock
-from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
+from legis.enforcement.protected import (
+    ProtectedGate,
+    TamperError,
+    TrailVerifier,
+    legacy_signing_fields,
+)
+from legis.enforcement.signing import sign
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import GENESIS, AuditStore, _chain
@@ -49,6 +55,19 @@ def test_clean_protected_trail_verifies(tmp_path):
     TrailVerifier(KEY, PROTECTED).verify(store.read_all())  # no raise
 
 
+def test_legacy_v1_protected_signature_still_verifies(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+
+    def replace_with_legacy_signature(p):
+        p["extensions"]["judge_metadata_signature"] = sign(
+            legacy_signing_fields(p), KEY, version="v1"
+        )
+
+    _edit_payload_and_rechain(tmp_path / "gov.db", replace_with_legacy_signature)
+    TrailVerifier(KEY, PROTECTED).verify(store.read_all())  # no raise
+
+
 def test_missing_signature_on_protected_policy_is_tampering(tmp_path):
     g, store = _gate(tmp_path / "gov.db")
     _submit(g)
@@ -72,6 +91,89 @@ def test_hmac_catches_a_fully_rechained_edit(tmp_path):
     try:
         TrailVerifier(KEY, PROTECTED).verify(store.read_all())
         raise AssertionError("expected TamperError on forged rationale")
+    except TamperError:
+        pass
+
+
+def test_hmac_catches_rechained_agent_attribution_edit(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _edit_payload_and_rechain(tmp_path / "gov.db", lambda p: p.update({"agent_id": "forged-agent"}))
+    assert store.verify_integrity() is True
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on forged agent_id")
+    except TamperError:
+        pass
+
+
+def test_protected_gate_record_verifies_even_with_empty_protected_policy_set(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _edit_payload_and_rechain(tmp_path / "gov.db", lambda p: p.update({"agent_id": "forged-agent"}))
+    assert store.verify_integrity() is True
+    try:
+        TrailVerifier(KEY, frozenset()).verify(store.read_all())
+        raise AssertionError("expected TamperError on protected gate record despite empty policy config")
+    except TamperError:
+        pass
+
+
+def test_hmac_catches_rechained_judge_rationale_edit(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _edit_payload_and_rechain(
+        tmp_path / "gov.db",
+        lambda p: p["extensions"].update({"judge_rationale": "forged rationale"}),
+    )
+    assert store.verify_integrity() is True
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on forged judge rationale")
+    except TamperError:
+        pass
+
+
+def test_missing_entity_key_on_protected_policy_is_tampering(tmp_path):
+    g, store = _gate(tmp_path / "gov.db")
+    _submit(g)
+    _edit_payload_and_rechain(
+        tmp_path / "gov.db",
+        lambda p: (p.pop("entity_key", None), p["extensions"].pop("judge_metadata_signature", None)),
+    )
+    assert store.verify_integrity() is True
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on missing entity_key")
+    except TamperError:
+        pass
+
+
+def test_protected_signoff_signature_covers_clarion_metadata(tmp_path):
+    from legis.enforcement.signoff import SignoffGate
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    gate = SignoffGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        signer=True,
+        key=KEY,
+    )
+    gate.request(
+        policy="no-eval",
+        entity_key=EntityKey.from_sei("clarion:eid:x"),
+        rationale="needs review",
+        agent_id="agent-1",
+        extensions={"clarion": {"alive": True, "content_hash": "original", "lineage_snapshot": {"length": 1, "hash": "h"}}},
+    )
+    _edit_payload_and_rechain(
+        tmp_path / "gov.db",
+        lambda p: p["extensions"]["clarion"].update({"content_hash": "forged"}),
+    )
+    assert store.verify_integrity() is True
+    try:
+        TrailVerifier(KEY, PROTECTED).verify(store.read_all())
+        raise AssertionError("expected TamperError on forged signoff clarion metadata")
     except TamperError:
         pass
 
@@ -101,12 +203,16 @@ def _rechain(con):
 
 
 def _edit_rationale_and_rechain(db, new_rationale):
+    _edit_payload_and_rechain(db, lambda p: p.update({"rationale": new_rationale}))
+
+
+def _edit_payload_and_rechain(db, mutate):
     con = _open_unlocked(db)
     seq, payload = con.execute(
         "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
     ).fetchone()
     p = json.loads(payload)
-    p["rationale"] = new_rationale
+    mutate(p)
     con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
     _rechain(con)
     con.close()

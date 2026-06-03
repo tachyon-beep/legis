@@ -1,11 +1,18 @@
+import json
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
+from legis.canonical import canonical_json, content_hash
 from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
+from legis.enforcement.protected import TrailVerifier
 from legis.enforcement.signoff import SignoffGate
+from legis.enforcement.signing import sign
 from legis.identity.entity_key import EntityKey
-from legis.store.audit_store import AuditStore
+from legis.store.audit_store import GENESIS, AuditStore, _chain
+from legis.wardline.ingest import wardline_artifact_fields
 
 
 def _client(tmp_path, **kw):
@@ -26,6 +33,29 @@ class _FakeFiligree:
 
     def associations_for_entity(self, entity_id):
         return []
+
+
+def _tamper_first_record(db, mutate):
+    con = sqlite3.connect(db)
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
+    seq, payload = con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
+    ).fetchone()
+    p = json.loads(payload)
+    mutate(p)
+    con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
+    prev = GENESIS
+    for s, pl in con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC"
+    ).fetchall():
+        ch = content_hash(json.loads(pl))
+        con.execute(
+            "UPDATE audit_log SET content_hash=?, prev_hash=?, chain_hash=? WHERE seq=?",
+            (ch, prev, _chain(prev, ch), s),
+        )
+        prev = _chain(prev, ch)
+    con.commit()
+    con.close()
 
 
 def test_scan_results_route_surface_override(tmp_path):
@@ -127,6 +157,41 @@ def test_bind_issue_records_to_ledger_and_binding_is_verifiable(tmp_path):
     assert got.json()["content_hash"] == "blake3"
 
 
+def test_bind_issue_fails_closed_on_tampered_signed_signoff_request(tmp_path):
+    fil = _FakeFiligree()
+    db = tmp_path / "sg.db"
+    gate = SignoffGate(
+        AuditStore(f"sqlite:///{db}"),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        signer=True,
+        key=b"k",
+    )
+    req = gate.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        rationale="r",
+        agent_id="a",
+        extensions={"clarion": {"content_hash": "blake3", "alive": True,
+                                "lineage_snapshot": {"length": 1, "hash": "lh"}}},
+    )
+    gate.sign_off(request_seq=req.seq, operator_id="op-1")
+    _tamper_first_record(
+        db,
+        lambda p: p["extensions"]["clarion"].update({"content_hash": "forged"}),
+    )
+    c = _client(
+        tmp_path,
+        signoff_gate=gate,
+        filigree=fil,
+        trail_verifier=TrailVerifier(b"k", frozenset()),
+    )
+
+    resp = c.post(f"/signoff/{req.seq}/bind-issue", json={"issue_id": "ISSUE-1"})
+
+    assert resp.status_code == 500
+    assert fil.attached == []
+
+
 def test_binding_read_404_when_no_ledger(tmp_path):
     c = _client(tmp_path)
     assert c.get("/signoff/1/binding").status_code == 404
@@ -157,6 +222,9 @@ def test_scan_results_surface_only_records_non_gating(tmp_path):
     assert resp.json()["routed"][0]["mode"] == "surface_only"
     trail = c.get("/overrides").json()
     assert trail[0]["kind"] == "wardline_surfaced"
+    assert trail[0]["extensions"]["wardline"]["finding_count"] == 1
+    assert trail[0]["extensions"]["wardline"]["active_count"] == 1
+    assert trail[0]["extensions"]["wardline"]["scan_digest"].startswith("sha256:")
 
 
 def test_scan_results_cell_by_severity_routes_per_finding(tmp_path):
@@ -216,6 +284,152 @@ def test_scan_results_empty_cell_by_severity_is_422(tmp_path):
     c = _client(tmp_path)
     body = {"agent_id": "a", "cell_by_severity": {}, "scan": {"findings": []}}
     assert c.post("/wardline/scan-results", json=body).status_code == 422
+
+
+def test_scan_results_rejects_malformed_findings_without_writing(tmp_path):
+    c = _client(tmp_path)
+    for scan in (
+        {"findings": "not-a-list"},
+        {"findings": [{"message": "missing rule", "severity": "ERROR", "kind": "defect",
+                       "fingerprint": "fp", "qualname": "m.f"}]},
+        {"findings": [{"rule_id": "R", "message": "bad severity", "severity": "BOGUS",
+                       "kind": "defect", "fingerprint": "fp", "qualname": "m.f"}]},
+    ):
+        resp = c.post("/wardline/scan-results",
+                      json={"cell": "surface_override", "agent_id": "agent-1", "scan": scan})
+        assert resp.status_code == 422
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_rejects_suppressed_defect_without_proof(tmp_path):
+    c = _client(tmp_path)
+    scan = {"findings": [
+        {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
+         "fingerprint": "c", "qualname": "m.f", "properties": {}, "suppressed": "waived"}
+    ]}
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
+    assert resp.status_code == 422
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_rejects_invalid_trust_tier_without_writing(tmp_path):
+    c = _client(tmp_path)
+    scan = {"findings": [
+        {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
+         "fingerprint": "c", "qualname": "m.f",
+         "properties": {"actual_return": "ROOT"}, "suppressed": "active"}
+    ]}
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
+    assert resp.status_code == 422
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_rejects_oversized_finding_batch_without_writing(tmp_path):
+    c = _client(tmp_path)
+    finding = {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+               "fingerprint": "fp", "qualname": "m.f", "properties": {},
+               "suppressed": "active"}
+    scan = {"findings": [{**finding, "fingerprint": f"fp-{i}"} for i in range(501)]}
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
+    assert resp.status_code == 422
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_server_owned_routing_rejects_request_routing(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    c = _client(tmp_path)
+    body = {"cell": "surface_override", "agent_id": "a", "scan": {"findings": [
+        {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+         "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+    ]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 403
+    assert "server-owned" in resp.json()["detail"]
+
+
+def test_scan_results_default_rejects_request_owned_routing(tmp_path, monkeypatch):
+    monkeypatch.delenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", raising=False)
+    c = _client(tmp_path)
+    body = {"cell": "surface_only", "agent_id": "a", "scan": {"findings": [
+        {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+         "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+    ]}}
+
+    resp = c.post("/wardline/scan-results", json=body)
+
+    assert resp.status_code == 403
+    assert "server-owned" in resp.json()["detail"]
+
+
+def test_scan_results_can_use_server_owned_single_cell(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    c = _client(tmp_path)
+    body = {"agent_id": "a", "scan": {"findings": [
+        {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+         "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+    ]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["routed"][0]["mode"] == "surface_only"
+
+
+def _signed_wardline_scan(scan, key=b"wardline-key"):
+    return {
+        **scan,
+        "artifact_signature": sign(wardline_artifact_fields(scan), key),
+    }
+
+
+def test_scan_results_requires_signed_artifact_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    c = _client(tmp_path)
+    scan = {
+        "scanner_identity": "wardline@1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "findings": [
+            {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+             "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+        ],
+    }
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
+
+    assert resp.status_code == 422
+    assert "artifact signature" in resp.json()["detail"]
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_records_verified_artifact_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    c = _client(tmp_path)
+    scan = _signed_wardline_scan({
+        "scanner_identity": "wardline@1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "findings": [
+            {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+             "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+        ],
+    })
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
+
+    assert resp.status_code == 200
+    wardline = c.get("/overrides").json()[0]["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "verified"
+    assert wardline["scanner_identity"] == "wardline@1"
+    assert wardline["rule_set_version"] == "rules@abc123"
+    assert wardline["commit_sha"] == "a" * 40
+    assert wardline["tree_sha"] == "b" * 40
+    assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_scan_results_single_cell_still_works(tmp_path):

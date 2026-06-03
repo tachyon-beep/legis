@@ -7,7 +7,12 @@ from legis.policy.decorator import (
 
 # A real, resolvable "test" function the gate will fingerprint.
 def fake_boundary_test():
-    # references the decorated function name 'handler' and the policy 'no-eval'
+    assert handler("payload") == "payload"
+    assert "no-eval" == "no-eval"
+
+
+def string_only_boundary_test():
+    # mentions the decorated function name and policy without exercising either
     handler_under_test = "handler exercises no-eval boundary"
     assert "no-eval" in handler_under_test
 
@@ -34,6 +39,16 @@ def test_gate_passes_with_a_pinned_unmodified_test():
     good = fingerprint(fake_boundary_test)
     finding = check_policy_boundary(_decorate(good), resolver)
     assert finding.ok is True, finding.reason
+
+
+def test_gate_rejects_string_only_mentions_as_behavioural_evidence():
+    def string_resolver(ref):
+        return {"tests::fake": string_only_boundary_test}.get(ref)
+
+    stale_proof = fingerprint(string_only_boundary_test)
+    finding = check_policy_boundary(_decorate(stale_proof), string_resolver)
+    assert finding.ok is False
+    assert "exercise" in finding.reason
 
 
 def test_gate_fails_on_fingerprint_drift():

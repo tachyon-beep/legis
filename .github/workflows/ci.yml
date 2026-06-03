@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run test suite
+        run: uv run pytest
+      - name: Run type check
+        run: uv run mypy src/legis
+
+  override-rate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Enforce override-rate gate
+        run: |
+          if [ -f legis-governance.db ]; then
+            uv run legis check-override-rate --db sqlite:///legis-governance.db
+          else
+            echo "::notice::No governance DB artifact found; override-rate gate skipped."
+          fi

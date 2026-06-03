@@ -64,7 +64,7 @@ def test_protected_signoff_is_tamper_bound(tmp_path):
     )
     g.sign_off(request_seq=req.seq, operator_id="op-1", rationale="ok")
     ext = store.read_all()[1].payload["extensions"]
-    assert ext["signoff_signature"].startswith("hmac-sha256:v1:")
+    assert ext["signoff_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_signoff_index_bounds_validation(tmp_path):

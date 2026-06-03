@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
+from legis.git.surface import GitError, GitSurface
 
 
 def client(git_repo):
@@ -39,3 +40,20 @@ def test_git_renames_endpoint(git_repo):
 def test_git_commit_unknown_sha_returns_404(git_repo):
     resp = client(git_repo).get(f"/git/commits/{'0' * 40}")
     assert resp.status_code == 404
+
+
+def test_git_renames_invalid_range_returns_4xx(git_repo):
+    resp = client(git_repo).get("/git/renames", params={"rev_range": "--version"})
+    assert resp.status_code in (400, 422)
+    assert "invalid" in resp.json()["detail"].lower()
+
+
+def test_git_branches_errors_are_mapped_to_4xx(git_repo, monkeypatch):
+    def fail(self):
+        raise GitError("bad repo")
+
+    monkeypatch.setattr(GitSurface, "branches", fail)
+    c = TestClient(create_app(repo_path=git_repo), raise_server_exceptions=False)
+    resp = c.get("/git/branches")
+    assert resp.status_code == 400
+    assert "bad repo" in resp.json()["detail"]

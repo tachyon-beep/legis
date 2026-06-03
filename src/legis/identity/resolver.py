@@ -23,6 +23,8 @@ class IdentityResolution:
     alive: bool | None          # identity axis; None when no capability/decision
     content_hash: str | None    # content axis; None when unavailable
     lineage_snapshot: dict[str, Any] | None  # {"length": N, "hash": ...} or None
+    identity_resolution_status: str
+    lineage_snapshot_status: str
 
 
 class IdentityResolver:
@@ -42,32 +44,53 @@ class IdentityResolver:
             try:
                 self._capable = bool(self._client.capability())
             except Exception:
-                self._capable = False  # honest degrade — never raise
+                return False  # honest transient degrade — retry on next resolve
         return self._capable
 
-    def _snapshot(self, sei: str) -> dict[str, Any] | None:
+    def _snapshot(self, sei: str) -> tuple[dict[str, Any] | None, str]:
         try:
             lineage = self._client.lineage(sei)  # type: ignore[union-attr]
         except Exception:
-            return None
-        return {"length": len(lineage), "hash": content_hash(lineage)}
+            return None, "unavailable"
+        return {"length": len(lineage), "hash": content_hash(lineage)}, "verified"
 
     def resolve(self, locator: str) -> IdentityResolution:
-        degraded = IdentityResolution(EntityKey.from_locator(locator), None, None, None)
+        degraded = IdentityResolution(
+            EntityKey.from_locator(locator),
+            None,
+            None,
+            None,
+            "unavailable",
+            "not_applicable",
+        )
         if not self._capability():
             return degraded
         try:
             res = self._client.resolve_locator(locator)  # type: ignore[union-attr]
         except Exception:
             return degraded
+        if not isinstance(res, dict):
+            return degraded
         if not res.get("alive"):
             # Capability present but this locator has no alive SEI — honest: no
             # stable identity, and we know it (alive recorded False, not None).
-            return IdentityResolution(EntityKey.from_locator(locator), False, None, None)
-        sei = res["sei"]
+            return IdentityResolution(
+                EntityKey.from_locator(locator),
+                False,
+                None,
+                None,
+                "not_alive",
+                "not_applicable",
+            )
+        sei = res.get("sei")
+        if not isinstance(sei, str) or not sei:
+            return degraded
+        snapshot, snapshot_status = self._snapshot(sei)
         return IdentityResolution(
             EntityKey.from_sei(sei),
             True,
             res.get("content_hash"),
-            self._snapshot(sei),
+            snapshot,
+            "resolved",
+            snapshot_status,
         )

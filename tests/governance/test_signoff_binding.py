@@ -57,7 +57,7 @@ def test_bind_records_a_signed_binding_when_a_ledger_is_given(tmp_path):
     recorded = ledger.get(7)
     assert recorded["issue_id"] == "ISSUE-1"
     assert recorded["entity_key"]["value"] == "clarion:eid:abc"
-    assert recorded["binding_signature"].startswith("hmac-sha256:v1:")
+    assert recorded["binding_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_bind_without_a_ledger_keeps_prior_behaviour():

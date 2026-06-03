@@ -51,6 +51,19 @@ def test_chill_post_override_returns_201_and_records(tmp_path):
     assert trail[0]["identity_stable"] is False
 
 
+def test_authenticated_token_actor_overrides_body_agent_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "agent-a=token-a")
+    c = chill_client(tmp_path)
+    resp = c.post(
+        "/overrides",
+        json={**BODY, "agent_id": "spoofed-agent"},
+        headers={"Authorization": "Bearer token-a"},
+    )
+    assert resp.status_code == 201
+    trail = c.get("/overrides").json()
+    assert trail[0]["agent_id"] == "agent-a"
+
+
 def test_coached_blocked_post_returns_409_with_judge_reasoning(tmp_path):
     c = coached_client(
         tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "rationale is boilerplate")

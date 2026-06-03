@@ -31,6 +31,11 @@ class FakeClient:
         return self._lineage
 
 
+class BrokenLineageClient(FakeClient):
+    def lineage(self, sei):
+        raise RuntimeError("clarion down")
+
+
 class ScriptedJudge:
     def __init__(self, opinion):
         self.opinion = opinion
@@ -145,7 +150,25 @@ def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
                                "rationale": "reviewed", "agent_id": "agent-1"})
     # FakeClient.lineage still returns the same [born]; snapshot matches → clean.
-    assert c.get("/governance/lineage-integrity").json() == {"divergences": []}
+    assert c.get("/governance/lineage-integrity").json() == {
+        "status": "verified",
+        "divergences": [],
+        "unavailable": [],
+    }
+
+
+def test_lineage_integrity_endpoint_reports_unavailable_not_clean(tmp_path):
+    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+             "content_hash": "h", "alive": True}
+    c = _app(tmp_path, BrokenLineageClient(alive, lineage=[{"event": "born"}]))
+    c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
+                               "rationale": "reviewed", "agent_id": "agent-1"})
+    body = c.get("/governance/lineage-integrity").json()
+    assert body["status"] == "unverified"
+    assert body["divergences"] == []
+    assert body["unavailable"] == [
+        {"sei": "clarion:eid:abc123", "reason": "unavailable"}
+    ]
 
 
 def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):

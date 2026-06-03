@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -32,13 +33,20 @@ PBODY = {
 }
 
 
-def _app(tmp_path, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")):
+def _fingerprint(path):
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _app(tmp_path, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"), repo_path=None):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(opinion), key=KEY)
     sg = SignoffGate(store, clock)
     app = create_app(
-        protected_gate=pg, signoff_gate=sg, trail_verifier=TrailVerifier(KEY, PROTECTED)
+        repo_path=repo_path,
+        protected_gate=pg,
+        signoff_gate=sg,
+        trail_verifier=TrailVerifier(KEY, PROTECTED),
     )
     return TestClient(app), store
 
@@ -49,7 +57,40 @@ def test_protected_post_records_and_verified_read_succeeds(tmp_path):
     trail = c.get("/overrides")
     assert trail.status_code == 200
     sig = trail.json()[0]["extensions"]["judge_metadata_signature"]
-    assert sig.startswith("hmac-sha256:v1:")
+    assert sig.startswith("hmac-sha256:v2:")
+
+
+def test_protected_post_rejects_stale_source_fingerprint_before_signing(tmp_path):
+    source = tmp_path / "src" / "x.py"
+    source.parent.mkdir()
+    source.write_text("def f():\n    return 1\n")
+    c, store = _app(tmp_path, repo_path=tmp_path)
+
+    resp = c.post(
+        "/protected/overrides",
+        json={**PBODY, "file_fingerprint": "sha256:" + "0" * 64},
+    )
+
+    assert resp.status_code == 422
+    assert "fingerprint does not match current source" in resp.json()["detail"]
+    assert store.read_all() == []
+
+
+def test_protected_post_records_verified_source_binding(tmp_path):
+    source = tmp_path / "src" / "x.py"
+    source.parent.mkdir()
+    source.write_text("def f():\n    return 1\n")
+    c, store = _app(tmp_path, repo_path=tmp_path)
+
+    resp = c.post(
+        "/protected/overrides",
+        json={**PBODY, "file_fingerprint": _fingerprint(source)},
+    )
+
+    assert resp.status_code == 201
+    ext = store.read_all()[0].payload["extensions"]
+    assert ext["source_binding"]["status"] == "verified"
+    assert ext["source_binding"]["source_path"] == "src/x.py"
 
 
 def test_protected_blocked_post_is_409(tmp_path):
@@ -64,6 +105,21 @@ def test_operator_override_post_is_201_and_distinct(tmp_path):
     resp = c.post("/protected/operator-override", json=body)
     assert resp.status_code == 201
     assert resp.json()["verdict"] == "OVERRIDDEN_BY_OPERATOR"
+
+
+def test_authenticated_token_actor_overrides_body_operator_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "op-a=token-a")
+    c, _ = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
+    body = {**PBODY, "operator_id": "spoofed-op"}
+    del body["agent_id"]
+    resp = c.post(
+        "/protected/operator-override",
+        json=body,
+        headers={"Authorization": "Bearer token-a"},
+    )
+    assert resp.status_code == 201
+    trail = c.get("/overrides").json()
+    assert trail[0]["agent_id"] == "op-a"
 
 
 def test_signoff_request_then_sign_clears(tmp_path):
