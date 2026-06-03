@@ -112,10 +112,10 @@ class SignoffGate:
 
     def request_record(self, request_seq: int) -> dict | None:
         """The recorded PENDING_SIGNOFF request payload at this seq, or None."""
-        records = self._store.read_all()
-        if not (1 <= request_seq <= len(records)):
+        rec = self._store.read_by_seq(request_seq)
+        if rec is None:
             return None
-        payload = records[request_seq - 1].payload
+        payload = rec.payload
         if payload.get("extensions", {}).get("signoff_state") != SignoffState.PENDING.value:
             return None
         return payload

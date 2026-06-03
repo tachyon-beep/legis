@@ -43,6 +43,8 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     verdict cannot be transplanted to another entity.
     """
     ext = payload.get("extensions") or {}
+    clar = ext.get("clarion") or {}
+    snap = clar.get("lineage_snapshot") or {}
     return {
         "policy": payload.get("policy"),
         "entity": payload.get("entity_key"),
@@ -52,6 +54,9 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "rationale": payload.get("rationale"),
         "file_fingerprint": ext.get("file_fingerprint"),
         "ast_path": ext.get("ast_path"),
+        "clarion_content_hash": clar.get("content_hash"),
+        "clarion_lineage_hash": snap.get("hash"),
+        "clarion_lineage_len": snap.get("length"),
     }
 
 
@@ -72,24 +77,44 @@ class TrailVerifier:
         for rec in records:
             if rec.payload.get("policy") not in self._protected:
                 continue
-            ext = rec.payload.get("extensions", {})
-            if "judge_verdict" not in ext:
+            if "entity_key" not in rec.payload:
                 continue
-            sig = ext.get("judge_metadata_signature")
-            if not sig:
-                raise TamperError(
-                    f"protected record seq={rec.seq} is missing its signature"
-                )
-            try:
-                fields = signing_fields(rec.payload)
-            except (KeyError, AttributeError, TypeError) as exc:
-                raise TamperError(
-                    f"protected record seq={rec.seq} is structurally malformed: {exc}"
-                ) from exc
-            if not verify(fields, sig, self._key):
-                raise TamperError(
-                    f"protected record seq={rec.seq} signature does not verify"
-                )
+            ext = rec.payload.get("extensions", {})
+            if "signoff_state" in ext:
+                sig = ext.get("signoff_signature")
+                if not sig:
+                    raise TamperError(
+                        f"protected sign-off record seq={rec.seq} is missing its signature"
+                    )
+                fields = {
+                    "policy": rec.payload.get("policy"),
+                    "entity": rec.payload.get("entity_key"),
+                    "recorded_at": rec.payload.get("recorded_at"),
+                    "rationale": rec.payload.get("rationale"),
+                    "operator": rec.payload.get("agent_id"),
+                    "signoff_state": ext.get("signoff_state"),
+                    "request_seq": ext.get("request_seq"),
+                }
+                if not verify(fields, sig, self._key):
+                    raise TamperError(
+                        f"protected sign-off record seq={rec.seq} signature does not verify"
+                    )
+            else:
+                sig = ext.get("judge_metadata_signature")
+                if not sig:
+                    raise TamperError(
+                        f"protected override record seq={rec.seq} is missing its signature"
+                    )
+                try:
+                    fields = signing_fields(rec.payload)
+                except (KeyError, AttributeError, TypeError) as exc:
+                    raise TamperError(
+                        f"protected record seq={rec.seq} is structurally malformed: {exc}"
+                    ) from exc
+                if not verify(fields, sig, self._key):
+                    raise TamperError(
+                        f"protected record seq={rec.seq} signature does not verify"
+                    )
 
 
 class ProtectedGate:

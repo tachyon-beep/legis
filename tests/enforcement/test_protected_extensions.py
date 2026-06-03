@@ -48,10 +48,13 @@ def test_clarion_block_does_not_break_the_signature(tmp_path):
     assert verify(signing_fields(payload), sig, KEY) is True
 
 
-def test_mutating_clarion_block_does_not_invalidate_the_signature(tmp_path):
-    # Discriminating regression lock for WP-A1: the clarion block lives OUTSIDE
-    # the signed field set. Mutating it after signing must NOT break the
-    # signature — if a refactor pulled clarion into signing_fields, this fails.
+import pytest
+from legis.enforcement.protected import TamperError
+
+
+def test_mutating_clarion_block_invalidates_the_signature(tmp_path):
+    # Discriminating regression lock for WP-A1/L-05: the clarion block must be bound
+    # to the signed field set. Mutating it after signing MUST break the signature.
     g, store = _gate(tmp_path)
     g.submit(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
              rationale="r", agent_id="a", file_fingerprint="fp", ast_path="ap",
@@ -61,9 +64,11 @@ def test_mutating_clarion_block_does_not_invalidate_the_signature(tmp_path):
     payload["extensions"]["clarion"]["content_hash"] = "TAMPERED"
     payload["extensions"]["clarion"]["lineage_snapshot"] = {"length": 99, "hash": "x"}
     sig = payload["extensions"]["judge_metadata_signature"]
-    assert verify(signing_fields(payload), sig, KEY) is True
-    # The protected-tier load-time verifier likewise accepts the mutated record.
-    TrailVerifier(KEY, frozenset({"no-eval"})).verify([record])
+    assert verify(signing_fields(payload), sig, KEY) is False
+    # The protected-tier load-time verifier likewise rejects the mutated record.
+    with pytest.raises(TamperError):
+        TrailVerifier(KEY, frozenset({"no-eval"})).verify([record])
+
 
 
 def test_operator_override_carries_clarion_block(tmp_path):

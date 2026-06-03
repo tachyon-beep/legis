@@ -52,10 +52,17 @@ def load_exemptions(path: str | Path) -> ExemptionRegistry:
                 f"exemption[{i}] is malformed: expected a table ([[exemption]]), "
                 f"got {type(entry).__name__!r}"
             )
-        missing = [k for k in ("policy", "value", "reason") if not entry.get(k)]
+        missing = []
+        for k in ("policy", "value", "reason"):
+            if k not in entry:
+                missing.append(k)
+            else:
+                val = entry[k]
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    missing.append(k)
         if missing:
             raise ValueError(
                 f"exemption[{i}] is malformed: missing/empty {', '.join(missing)}"
             )
-        exemptions.append(Exemption(entry["policy"], entry["value"], entry["reason"]))
+        exemptions.append(Exemption(str(entry["policy"]), str(entry["value"]), str(entry["reason"])))
     return ExemptionRegistry(exemptions)

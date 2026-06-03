@@ -62,6 +62,9 @@ def verified_records(
     """
     if protected_gate is not None:
         records = protected_gate.records()
+        store = getattr(protected_gate, "_store", None)
+        if store is not None and not store.verify_integrity():
+            raise AuditIntegrityError("audit integrity failure: database hash chain verification failed")
         if trail_verifier is not None:
             try:
                 trail_verifier.verify(records)

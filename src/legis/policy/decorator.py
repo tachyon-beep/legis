@@ -32,7 +32,7 @@ from legis.canonical import content_hash
 # distinguish a real root-level file from a coincidental ``word.ext``. The bar
 # this enforces is rejecting multi-word / whitespace vibe strings, not proving
 # the path exists.
-_CITATION_RE = re.compile(r"^(https?://\S+|[0-9a-f]{7,40}|[\w./-]+\.[A-Za-z0-9]+(:\d+)?)$")
+_CITATION_RE = re.compile(r"^(https?://\S+|[0-9a-fA-F]{7,64}|[\w./-]+\.[A-Za-z0-9]+(:\d+)?)$")
 
 
 def _is_citation(source: str) -> bool:
@@ -90,6 +90,19 @@ def policy_boundary(
     return decorator
 
 
+def get_normalized_ast_str(source: str) -> str:
+    import ast
+    parsed = ast.parse(source)
+    # Strip docstrings
+    for node in ast.walk(parsed):
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+            if node.body and isinstance(node.body[0], ast.Expr):
+                val = node.body[0].value
+                if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                    node.body.pop(0)
+    return ast.dump(parsed)
+
+
 def fingerprint(test_fn: Callable[..., Any]) -> str:
     """Content hash of a test function's source — the gate's anti-vibe teeth.
 
@@ -97,7 +110,21 @@ def fingerprint(test_fn: Callable[..., Any]) -> str:
     test, unchanged since review. (This proves the test is *pinned*, not that it
     *meaningfully* exercises the boundary — see the plan's known limitations.)
     """
-    return content_hash(inspect.getsource(test_fn))
+    try:
+        source = inspect.getsource(test_fn)
+    except (OSError, TypeError) as exc:
+        raise OSError(f"Source code not available for test: {exc}") from exc
+
+    # Normalize CRLF to LF to handle platform line ending differences
+    source = source.replace("\r\n", "\n")
+
+    try:
+        import textwrap
+        source = textwrap.dedent(source)
+        normalized = get_normalized_ast_str(source)
+        return content_hash(normalized)
+    except Exception:
+        return content_hash(source)
 
 
 @dataclass(frozen=True)
@@ -108,10 +135,18 @@ class GateFinding:
 
 def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
     """Honesty gate. The decorator's evidence must be real and current."""
+    if hasattr(func, "__func__"):
+        func = func.__func__
+
     meta = getattr(func, "__policy_boundary__", None)
     if meta is None:
         return GateFinding(False, "not a @policy_boundary function")
+
     # Scope / metadata-integrity: the record must belong to this function.
+    wrapped = getattr(func, "__wrapped__", func)
+    if wrapped is not meta.func:
+        return GateFinding(False, "metadata transplant detected: function object identity mismatch")
+
     if meta.qualname != func.__qualname__:
         return GateFinding(False, f"scope/qualname mismatch: {meta.qualname!r}")
     if not meta.source:
@@ -130,11 +165,66 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
     test_fn = resolver(meta.test_ref)
     if test_fn is None:
         return GateFinding(False, f"test_ref {meta.test_ref!r} points to no test")
-    if fingerprint(test_fn) != meta.test_fingerprint:
+
+    try:
+        fp = fingerprint(test_fn)
+    except OSError as exc:
+        return GateFinding(False, str(exc))
+
+    if fp != meta.test_fingerprint:
         return GateFinding(False, "test drifted: fingerprint does not match")
-    src = inspect.getsource(test_fn)
-    if func.__name__ not in src:
+
+    try:
+        src = inspect.getsource(test_fn)
+    except (OSError, TypeError) as exc:
+        return GateFinding(False, f"source code not available for test: {exc}")
+
+    import ast
+    try:
+        parsed_test = ast.parse(src)
+    except Exception:
+        parsed_test = None
+
+    func_called = False
+    if parsed_test is not None:
+        for node in ast.walk(parsed_test):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in (func.__name__, wrapped.__name__):
+                    func_called = True
+                    break
+                elif isinstance(node.func, ast.Attribute) and node.func.attr in (func.__name__, wrapped.__name__):
+                    func_called = True
+                    break
+            elif isinstance(node, ast.Name) and node.id in (func.__name__, wrapped.__name__):
+                func_called = True
+                break
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if re.search(r'\b' + re.escape(wrapped.__name__) + r'\b', node.value):
+                    func_called = True
+                    break
+                if re.search(r'\b' + re.escape(func.__name__) + r'\b', node.value):
+                    func_called = True
+                    break
+    else:
+        func_called = (func.__name__ in src or wrapped.__name__ in src)
+
+    if not func_called:
         return GateFinding(False, "test does not appear to exercise the boundary")
-    if not any(p in src for p in meta.suppresses):
+
+    policy_referenced = False
+    if parsed_test is not None:
+        for node in ast.walk(parsed_test):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if any(re.search(r'\b' + re.escape(p) + r'\b', node.value) for p in meta.suppresses):
+                    policy_referenced = True
+                    break
+            elif isinstance(node, ast.Name) and node.id in meta.suppresses:
+                policy_referenced = True
+                break
+    else:
+        policy_referenced = any(p in src for p in meta.suppresses)
+
+    if not policy_referenced:
         return GateFinding(False, "test does not assert any suppressed policy")
+
     return GateFinding(True, f"ok (invariant: {meta.invariant})")

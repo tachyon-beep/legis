@@ -23,6 +23,10 @@ from legis.enforcement.verdict import Verdict
         ("   ", Verdict.BLOCKED),
         ("maybe?", Verdict.BLOCKED),
         ("the model timed out", Verdict.BLOCKED),
+        ("NOT ACCEPTED", Verdict.BLOCKED),
+        ("NO ACCEPTED", Verdict.BLOCKED),
+        ("NEVER ACCEPTED", Verdict.BLOCKED),
+        ("UNACCEPTED", Verdict.BLOCKED),
     ],
 )
 def test_parse_verdict_is_fail_closed(raw, expected):

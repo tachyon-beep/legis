@@ -19,7 +19,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from legis import __version__
@@ -44,6 +45,21 @@ from legis.service.governance import verified_records as _verified_records
 from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
 from legis.wardline.governor import WardlineCellPolicy, route_findings
 from legis.wardline.ingest import WardlineSeverity, active_defects
+
+security = HTTPBearer(auto_error=False)
+
+
+def verify_operator(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> str:
+    secret = os.environ.get("LEGIS_API_SECRET")
+    if secret:
+        if not credentials or credentials.credentials != secret:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing API secret token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return "operator"
+
 
 DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
 DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
@@ -204,7 +220,8 @@ def create_app(
 
     def checks() -> CheckSurface:
         if state["checks"] is None:
-            state["checks"] = CheckSurface(DEFAULT_CHECK_DB)
+            check_db = os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
+            state["checks"] = CheckSurface(check_db)
         return state["checks"]
 
     def engine() -> EnforcementEngine:
@@ -212,8 +229,9 @@ def create_app(
             from legis.clock import SystemClock
             from legis.store.audit_store import AuditStore
 
+            gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB)
             state["enforcement"] = EnforcementEngine(
-                AuditStore(DEFAULT_GOVERNANCE_DB), SystemClock()
+                AuditStore(gov_db_url), SystemClock()
             )
         return state["enforcement"]
 
@@ -282,6 +300,12 @@ def create_app(
 
     @app.post("/overrides")
     def post_override(body: OverrideIn, response: Response) -> dict:
+        protected_set = trail_verifier._protected if trail_verifier is not None else frozenset()
+        if body.policy in protected_set:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Policy {body.policy!r} is protected; use the protected overrides endpoint instead."
+            )
         result = _submit_override(
             engine(),
             identity=identity,
@@ -341,7 +365,7 @@ def create_app(
         }
 
     @app.post("/protected/operator-override", status_code=201)
-    def post_operator_override(body: OperatorOverrideIn) -> dict:
+    def post_operator_override(body: OperatorOverrideIn, operator: str = Depends(verify_operator)) -> dict:
         if protected_gate is None:
             raise HTTPException(status_code=404, detail="protected cell not enabled")
         entity_key, ext = resolve_for_record(body.entity)
@@ -420,7 +444,7 @@ def create_app(
         return binding
 
     @app.post("/signoff/{request_seq}/sign")
-    def post_signoff_sign(request_seq: int, body: SignoffSignIn) -> dict:
+    def post_signoff_sign(request_seq: int, body: SignoffSignIn, operator: str = Depends(verify_operator)) -> dict:
         if signoff_gate is None:
             raise HTTPException(status_code=404, detail="structured cell not enabled")
         result = signoff_gate.sign_off(
@@ -466,18 +490,21 @@ def create_app(
     # --- agent-programmable policy grammar (WP-4.1) ---
 
     @app.post("/policy/evaluate")
-    def policy_evaluate(body: PolicyEvalIn) -> dict:
+    def policy_evaluate(body: PolicyEvalIn, credentials: HTTPAuthorizationCredentials | None = Security(security)) -> dict:
         ev = grammar_().evaluate(body.policy, body.target)
         if ev.result is PolicyResult.UNKNOWN:
-            # Honest event + provenance gap — never a silent false-green.
-            engine().record_event(
-                {
-                    "event": "UNKNOWN_POLICY",
-                    "policy": ev.policy,
-                    "detail": ev.detail,
-                    "provenance_gap": True,
-                }
-            )
+            secret = os.environ.get("LEGIS_API_SECRET")
+            # Only record the UNKNOWN policy event if either no secret is configured, or a valid credentials token matches.
+            if not secret or (credentials and credentials.credentials == secret):
+                # Honest event + provenance gap — never a silent false-green.
+                engine().record_event(
+                    {
+                        "event": "UNKNOWN_POLICY",
+                        "policy": ev.policy,
+                        "detail": ev.detail,
+                        "provenance_gap": True,
+                    }
+                )
         return {
             "policy": ev.policy,
             "result": ev.result.value,

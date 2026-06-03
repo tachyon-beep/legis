@@ -40,14 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Signoff-binding ledger URL (falls back to LEGIS_BINDING_DB env var)",
     )
 
+    import os
+    gov_db_default = os.environ.get("LEGIS_GOVERNANCE_DB", "sqlite:///legis-governance.db")
     rate = subparsers.add_parser(
         "check-override-rate",
         help="Fail (exit 1) if the override-rate gate is FAIL — for CI",
     )
     rate.add_argument(
-        # Literal duplicates api.app.DEFAULT_GOVERNANCE_DB deliberately: importing it
-        # would pull FastAPI at CLI load time, defeating the deferred-import decoupling.
-        "--db", default="sqlite:///legis-governance.db",
+        "--db", default=gov_db_default,
         help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
     )
 
@@ -82,12 +82,34 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         return 0
 
     if args.command == "check-override-rate":
+        import os
         from legis.enforcement.lifecycle import GateStatus, evaluate_override_rate
         from legis.governance import params
         from legis.store.audit_store import AuditStore
 
+        store = AuditStore(args.db)
+        if not store.verify_integrity():
+            print("Error: Database hash chain integrity check failed!", file=sys.stderr)
+            return 1
+
+        records = store.read_all()
+
+        hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
+        if hmac_key_str:
+            from legis.enforcement.protected import TrailVerifier, TamperError
+            protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+            protected_policies = frozenset(
+                p.strip() for p in protected_policies_str.split(",") if p.strip()
+            )
+            verifier = TrailVerifier(hmac_key_str.encode("utf-8"), protected_policies)
+            try:
+                verifier.verify(records)
+            except TamperError as exc:
+                print(f"Error: Protected audit trail verification failed: {exc}", file=sys.stderr)
+                return 1
+
         res = evaluate_override_rate(
-            AuditStore(args.db).read_all(),
+            records,
             threshold=params.OVERRIDE_RATE_THRESHOLD,
             window=params.OVERRIDE_RATE_WINDOW,
             min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,

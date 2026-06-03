@@ -12,7 +12,7 @@ false-green. Same seam shape as Wardline's ``TaintSourceProvider`` and Clarion's
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
@@ -87,6 +87,7 @@ class PolicyGrammar:
             result is PolicyResult.VIOLATION
             and self._exemptions is not None
             and "value" in target
+            and isinstance(target["value"], Hashable)
         ):
             ex = self._exemptions.is_exempt(policy, target["value"])
             if ex is not None:

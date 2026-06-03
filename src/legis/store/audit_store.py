@@ -70,10 +70,7 @@ class AuditStore:
                 finally:
                     cursor.close()
 
-        @event.listens_for(self._engine, "begin")
-        def force_immediate_transaction(conn):
-            if conn.dialect.name == "sqlite":
-                conn.execute(text("BEGIN IMMEDIATE"))
+        # Remove the global force_immediate_transaction event listener to prevent locking on read-only queries.
 
         self._md = MetaData()
         self._log = Table(
@@ -89,25 +86,28 @@ class AuditStore:
         self._install_append_only_triggers()
 
     def _install_append_only_triggers(self) -> None:
-        with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    "CREATE TRIGGER IF NOT EXISTS audit_log_no_update "
-                    "BEFORE UPDATE ON audit_log BEGIN "
-                    "SELECT RAISE(ABORT, 'audit_log is append-only'); END;"
+        if self._engine.dialect.name == "sqlite":
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS audit_log_no_update "
+                        "BEFORE UPDATE ON audit_log BEGIN "
+                        "SELECT RAISE(ABORT, 'audit_log is append-only'); END;"
+                    )
                 )
-            )
-            conn.execute(
-                text(
-                    "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete "
-                    "BEFORE DELETE ON audit_log BEGIN "
-                    "SELECT RAISE(ABORT, 'audit_log is append-only'); END;"
+                conn.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS audit_log_no_delete "
+                        "BEFORE DELETE ON audit_log BEGIN "
+                        "SELECT RAISE(ABORT, 'audit_log is append-only'); END;"
+                    )
                 )
-            )
 
     def append(self, payload: dict[str, Any]) -> int:
         c_hash = content_hash(payload)
         with self._engine.begin() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.execute(text("BEGIN IMMEDIATE"))
             prev = conn.execute(
                 select(self._log.c.chain_hash)
                 .order_by(self._log.c.seq.desc())

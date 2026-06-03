@@ -30,6 +30,8 @@ def parse_verdict(raw: str) -> Verdict:
             first_line = line
             break
     tokens = set(_TOKEN.findall(first_line.upper()))
+    if "NOT" in tokens or "NO" in tokens or "NEVER" in tokens or "UNACCEPTED" in tokens:
+        return Verdict.BLOCKED
     if Verdict.BLOCKED.value in tokens:
         return Verdict.BLOCKED
     if Verdict.ACCEPTED.value in tokens:
