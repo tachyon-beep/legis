@@ -55,6 +55,26 @@ class AuditStore:
         # NullPool: hold no connection between operations — an append-only
         # audit store wants no lingering locks and clean resource lifecycle.
         self._engine = create_engine(url, future=True, poolclass=NullPool)
+
+        from sqlalchemy import event
+        @event.listens_for(self._engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            if "sqlite" in url:
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                except Exception:
+                    pass
+                finally:
+                    cursor.close()
+
+        @event.listens_for(self._engine, "begin")
+        def force_immediate_transaction(conn):
+            if conn.dialect.name == "sqlite":
+                conn.execute(text("BEGIN IMMEDIATE"))
+
         self._md = MetaData()
         self._log = Table(
             "audit_log",
@@ -120,6 +140,21 @@ class AuditStore:
             for r in rows
         ]
 
+    def read_by_seq(self, seq: int) -> AuditRecord | None:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(self._log).where(self._log.c.seq == seq)
+            ).first()
+        if row is None:
+            return None
+        return AuditRecord(
+            seq=row.seq,
+            payload=json.loads(row.payload),
+            content_hash=row.content_hash,
+            prev_hash=row.prev_hash,
+            chain_hash=row.chain_hash,
+        )
+
     def verify_integrity(self) -> bool:
         prev_hash = GENESIS
         for rec in self.read_all():
@@ -131,3 +166,14 @@ class AuditStore:
                 return False
             prev_hash = rec.chain_hash
         return True
+
+    def get_latest_sequence_and_hash(self) -> tuple[int, str]:
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(self._log.c.seq, self._log.c.chain_hash)
+                .order_by(self._log.c.seq.desc())
+                .limit(1)
+            ).first()
+        if row is None:
+            return 0, GENESIS
+        return row.seq, row.chain_hash

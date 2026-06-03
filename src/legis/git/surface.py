@@ -68,6 +68,9 @@ class GitSurface:
         return branches
 
     def commit(self, sha: str) -> CommitInfo:
+        import re
+        if sha.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+$", sha):
+            raise GitError(f"invalid commit ref/SHA: {sha}")
         meta_fmt = US.join(["%H", "%an", "%ae", "%cI", "%P", "%B"])
         meta = self._run("show", "-s", f"--format={meta_fmt}", sha)
         # Body (%B) is last and may contain newlines/spaces — split with a cap.
@@ -103,10 +106,18 @@ class GitSurface:
         return files, insertions, deletions
 
     def commits(self, ref: str = "HEAD", limit: int = 50) -> list[CommitInfo]:
+        import re
+        if ref.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+$", ref):
+            raise GitError(f"invalid commit ref: {ref}")
         out = self._run("rev-list", f"--max-count={limit}", ref)
         return [self.commit(sha) for sha in out.split()]
 
     def merge_base(self, a: str, b: str) -> str | None:
+        import re
+        if a.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+$", a):
+            raise GitError(f"invalid ref: {a}")
+        if b.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+$", b):
+            raise GitError(f"invalid ref: {b}")
         result = self._run_raw("merge-base", a, b)
         if result.returncode != 0:
             return None  # no common ancestor (or a bad ref) → honest None
@@ -114,6 +125,9 @@ class GitSurface:
         return sha or None
 
     def renames(self, rev_range: str) -> list[RenameEvidence]:
+        import re
+        if rev_range.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+(\.\.[a-zA-Z0-9_/.~^-]+)?$", rev_range):
+            raise GitError(f"invalid revision range: {rev_range}")
         out = self._run(
             "log",
             "-M",

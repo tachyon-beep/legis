@@ -14,6 +14,10 @@ from legis.enforcement.verdict import Verdict
         ("blocked: rationale is boilerplate", Verdict.BLOCKED),
         # Ambiguity is fail-closed: BLOCKED wins when both tokens appear.
         ("I would say ACCEPTED but actually BLOCKED", Verdict.BLOCKED),
+        # Multi-line cases: only the first non-empty line is parsed
+        ("ACCEPTED\nReasoning: this could have been BLOCKED but isn't", Verdict.ACCEPTED),
+        ("BLOCKED\nBut we will ACCEPTED next time", Verdict.BLOCKED),
+        ("This is not clear\nACCEPTED", Verdict.BLOCKED),
         # Unparseable / unknown is fail-closed.
         ("", Verdict.BLOCKED),
         ("   ", Verdict.BLOCKED),

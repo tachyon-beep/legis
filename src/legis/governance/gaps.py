@@ -57,19 +57,23 @@ def find_lineage_divergence(
     records: list[AuditRecord], client: ClarionIdentity
 ) -> list[LineageDivergence]:
     divergences: list[LineageDivergence] = []
-    seen: set[str] = set()
+    lineages: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
         ek = rec.payload.get("entity_key", {})
         sei = ek.get("value")
-        if not (ek.get("identity_stable") and sei) or sei in seen:
+        if not (ek.get("identity_stable") and sei):
             continue
         snap = (rec.payload.get("extensions", {}).get("clarion", {}) or {}).get(
             "lineage_snapshot"
         )
         if not snap:
             continue
-        seen.add(sei)
-        current = client.lineage(sei)
+        if sei not in lineages:
+            try:
+                lineages[sei] = client.lineage(sei)
+            except Exception:
+                continue
+        current = lineages[sei]
         n = snap["length"]
         if len(current) < n or content_hash(current[:n]) != snap["hash"]:
             divergences.append(

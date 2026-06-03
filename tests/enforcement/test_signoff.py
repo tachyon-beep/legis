@@ -65,3 +65,39 @@ def test_protected_signoff_is_tamper_bound(tmp_path):
     g.sign_off(request_seq=req.seq, operator_id="op-1", rationale="ok")
     ext = store.read_all()[1].payload["extensions"]
     assert ext["signoff_signature"].startswith("hmac-sha256:v1:")
+
+
+def test_signoff_index_bounds_validation(tmp_path):
+    g, _ = gate(tmp_path)
+    import pytest
+
+    # Out of bounds request_seq
+    with pytest.raises(ValueError):
+        g.sign_off(request_seq=0, operator_id="op-1")
+    with pytest.raises(ValueError):
+        g.sign_off(request_seq=-1, operator_id="op-1")
+    with pytest.raises(ValueError):
+        g.sign_off(request_seq=999, operator_id="op-1")
+
+    # request_record checks
+    assert g.request_record(0) is None
+    assert g.request_record(-5) is None
+    assert g.request_record(999) is None
+
+
+def test_signoff_duplicate_signoff_rejected(tmp_path):
+    g, _ = gate(tmp_path)
+    import pytest
+
+    req = g.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_locator("svc/api"),
+        rationale="ship",
+        agent_id="agent-3",
+    )
+    g.sign_off(request_seq=req.seq, operator_id="op-1")
+
+    # Second signoff should be rejected
+    with pytest.raises(ValueError) as excinfo:
+        g.sign_off(request_seq=req.seq, operator_id="op-2")
+    assert "already been signed off" in str(excinfo.value)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
@@ -135,7 +136,64 @@ def create_app(
     pull_requests: PullRequestSource | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
-    state: dict[str, object | None] = {
+
+    # Fallback configuration loaders from environment variables if not injected
+    if identity is None:
+        clarion_url = os.environ.get("CLARION_API_URL")
+        if clarion_url:
+            from legis.identity.clarion_client import HttpClarionIdentity
+            from legis.identity.resolver import IdentityResolver
+            identity = IdentityResolver(HttpClarionIdentity(clarion_url))
+
+    if filigree is None:
+        filigree_url = os.environ.get("FILIGREE_API_URL")
+        if filigree_url:
+            from legis.filigree.client import HttpFiligreeClient
+            filigree = HttpFiligreeClient(filigree_url)
+
+    hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
+    hmac_key = hmac_key_str.encode("utf-8") if hmac_key_str else None
+
+    if hmac_key:
+        from legis.clock import SystemClock
+        from legis.store.audit_store import AuditStore
+
+        gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB)
+        gov_store = AuditStore(gov_db_url)
+        clock = SystemClock()
+
+        if trail_verifier is None:
+            from legis.enforcement.protected import TrailVerifier
+            protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+            protected_policies = frozenset(
+                p.strip() for p in protected_policies_str.split(",") if p.strip()
+            )
+            trail_verifier = TrailVerifier(hmac_key, protected_policies)
+
+        if protected_gate is None:
+            from legis.enforcement.protected import ProtectedGate
+            from legis.enforcement.verdict import JudgeOpinion, Verdict
+            from legis.records.override_record import OverrideRecord
+
+            class FailClosedJudge:
+                def evaluate(self, record: OverrideRecord) -> JudgeOpinion:
+                    return JudgeOpinion(
+                        verdict=Verdict.BLOCKED,
+                        model="fail-closed-fallback",
+                        rationale="No LLM judge client is configured on this server.",
+                    )
+
+            protected_gate = ProtectedGate(gov_store, clock, FailClosedJudge(), hmac_key)
+
+        if signoff_gate is None:
+            from legis.enforcement.signoff import SignoffGate
+            signoff_gate = SignoffGate(gov_store, clock, signer=True, key=hmac_key)
+
+        if binding_ledger is None:
+            from legis.governance.binding_ledger import BindingLedger
+            bind_db_url = os.environ.get("LEGIS_BINDING_DB", "sqlite:///legis-binding.db")
+            binding_ledger = BindingLedger(AuditStore(bind_db_url), clock, hmac_key)
+    state: dict[str, Any] = {
         "checks": check_surface,
         "enforcement": enforcement,
         "grammar": grammar,

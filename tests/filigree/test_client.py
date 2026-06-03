@@ -32,3 +32,12 @@ def test_associations_for_entity_url_encodes_colons():
     assert c.associations_for_entity("clarion:eid:abc") == []
     url = fetch.calls[-1][1]
     assert "entity_id=clarion%3Aeid%3Aabc" in url   # colons percent-encoded
+
+
+def test_attach_escapes_path_traversal_payload():
+    resp = {"attached": True}
+    # Expected URL has quoted/escaped path traversal characters
+    fetch = _fake_fetch({("POST", "/api/issue/..%2F..%2Fadmin%2Fdelete/entity-associations"): resp})
+    c = HttpFiligreeClient("http://f", fetch=fetch)
+    c.attach("../../admin/delete", "clarion:eid:abc", "h", actor="legis")
+    assert fetch.calls[-1][1] == "http://f/api/issue/..%2F..%2Fadmin%2Fdelete/entity-associations"

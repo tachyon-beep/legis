@@ -93,7 +93,11 @@ class SignoffGate:
     def sign_off(
         self, *, request_seq: int, operator_id: str, rationale: str = ""
     ) -> SignoffResult:
-        req = self._store.read_all()[request_seq - 1].payload
+        req = self.request_record(request_seq)
+        if req is None:
+            raise ValueError(f"No pending sign-off request found at sequence {request_seq}")
+        if self.is_cleared(request_seq):
+            raise ValueError(f"Request at sequence {request_seq} has already been signed off")
         seq = self._append(
             policy=req["policy"],
             entity_key=EntityKey.from_dict(req["entity_key"]),

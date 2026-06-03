@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -42,7 +43,7 @@ def _urllib_fetch(method: str, url: str, body: dict | None) -> dict:
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req) as resp:  # noqa: S310 (trusted Clarion URL)
+        with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310 (trusted Clarion URL)
             return json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError) as exc:
         raise ClarionError(f"{method} {url} failed: {exc}") from exc
@@ -64,8 +65,10 @@ class HttpClarionIdentity:
         )
 
     def resolve_sei(self, sei: str) -> dict[str, Any]:
-        return self._fetch("GET", f"{self._base}/api/v1/identity/sei/{sei}", None)
+        quoted_sei = urllib.parse.quote(sei, safe="")
+        return self._fetch("GET", f"{self._base}/api/v1/identity/sei/{quoted_sei}", None)
 
     def lineage(self, sei: str) -> list[dict[str, Any]]:
-        body = self._fetch("GET", f"{self._base}/api/v1/identity/lineage/{sei}", None)
+        quoted_sei = urllib.parse.quote(sei, safe="")
+        body = self._fetch("GET", f"{self._base}/api/v1/identity/lineage/{quoted_sei}", None)
         return list(body.get("lineage", []))

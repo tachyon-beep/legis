@@ -24,7 +24,12 @@ def parse_verdict(raw: str) -> Verdict:
     BLOCKED wins on ambiguity; anything that is not an explicit, unambiguous
     ACCEPTED is BLOCKED. The judge never accepts on a response it cannot read.
     """
-    tokens = set(_TOKEN.findall(raw.upper()))
+    first_line = ""
+    for line in raw.splitlines():
+        if line.strip():
+            first_line = line
+            break
+    tokens = set(_TOKEN.findall(first_line.upper()))
     if Verdict.BLOCKED.value in tokens:
         return Verdict.BLOCKED
     if Verdict.ACCEPTED.value in tokens:
@@ -50,7 +55,8 @@ def build_prompt(record: OverrideRecord) -> str:
         "actually addresses why the policy fired.\n\n"
         f"policy: {record.policy}\n"
         f"entity: {record.entity_key.value}\n"
-        f"rationale: {record.rationale}\n"
+        "rationale: [UNTRUSTED AGENT INPUT]\n"
+        f"<rationale>{record.rationale}</rationale>\n"
     )
 
 

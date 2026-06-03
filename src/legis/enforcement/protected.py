@@ -42,14 +42,14 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     Binds entity + policy in addition to the roadmap's six fields, so a signed
     verdict cannot be transplanted to another entity.
     """
-    ext = payload["extensions"]
+    ext = payload.get("extensions") or {}
     return {
-        "policy": payload["policy"],
-        "entity": payload["entity_key"],
-        "verdict": ext["judge_verdict"],
+        "policy": payload.get("policy"),
+        "entity": payload.get("entity_key"),
+        "verdict": ext.get("judge_verdict"),
         "model": ext.get("judge_model"),
-        "recorded_at": payload["recorded_at"],
-        "rationale": payload["rationale"],
+        "recorded_at": payload.get("recorded_at"),
+        "rationale": payload.get("rationale"),
         "file_fingerprint": ext.get("file_fingerprint"),
         "ast_path": ext.get("ast_path"),
     }
@@ -73,12 +73,20 @@ class TrailVerifier:
             if rec.payload.get("policy") not in self._protected:
                 continue
             ext = rec.payload.get("extensions", {})
+            if "judge_verdict" not in ext:
+                continue
             sig = ext.get("judge_metadata_signature")
             if not sig:
                 raise TamperError(
                     f"protected record seq={rec.seq} is missing its signature"
                 )
-            if not verify(signing_fields(rec.payload), sig, self._key):
+            try:
+                fields = signing_fields(rec.payload)
+            except (KeyError, AttributeError, TypeError) as exc:
+                raise TamperError(
+                    f"protected record seq={rec.seq} is structurally malformed: {exc}"
+                ) from exc
+            if not verify(fields, sig, self._key):
                 raise TamperError(
                     f"protected record seq={rec.seq} signature does not verify"
                 )

@@ -34,7 +34,7 @@ def _urllib_fetch(method: str, url: str, body: dict | None) -> dict:
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req) as resp:  # noqa: S310 (trusted Filigree URL)
+        with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310 (trusted Filigree URL)
             return json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError) as exc:
         raise FiligreeError(f"{method} {url} failed: {exc}") from exc
@@ -47,8 +47,9 @@ class HttpFiligreeClient:
 
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
                *, actor: str) -> dict[str, Any]:
+        quoted_issue_id = urllib.parse.quote(issue_id, safe="")
         return self._fetch(
-            "POST", f"{self._base}/api/issue/{issue_id}/entity-associations",
+            "POST", f"{self._base}/api/issue/{quoted_issue_id}/entity-associations",
             {"entity_id": entity_id, "content_hash": content_hash, "actor": actor},
         )
 

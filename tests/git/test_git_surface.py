@@ -92,3 +92,29 @@ def test_renames_carry_pre_and_post_blob_shas(git_repo):
     assert (ev.old_path, ev.new_path) == ("a.txt", "renamed.txt")
     assert len(ev.old_blob) == 40 and len(ev.new_blob) == 40
     assert ev.old_blob == ev.new_blob   # pure git mv → identical blob
+
+
+def test_git_surface_command_injection_mitigation(git_repo):
+    s = GitSurface(git_repo)
+
+    # Option injections starting with '-'
+    with pytest.raises(GitError):
+        s.commit("-o")
+    with pytest.raises(GitError):
+        s.commits("-o")
+    with pytest.raises(GitError):
+        s.merge_base("-o", "main")
+    with pytest.raises(GitError):
+        s.merge_base("main", "-o")
+    with pytest.raises(GitError):
+        s.renames("-o")
+
+    # Invalid patterns
+    with pytest.raises(GitError):
+        s.commit("main; rm -rf /")
+    with pytest.raises(GitError):
+        s.commits("HEAD&echo")
+    with pytest.raises(GitError):
+        s.merge_base("main|sh", "feature")
+    with pytest.raises(GitError):
+        s.renames("HEAD~1..HEAD; echo")

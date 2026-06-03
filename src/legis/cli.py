@@ -11,6 +11,34 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run the Legis API server")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     serve.add_argument("--port", default=8000, type=int, help="Bind port (default: 8000)")
+    serve.add_argument(
+        "--governance-db",
+        help="Governance store URL (falls back to LEGIS_GOVERNANCE_DB env var)",
+    )
+    serve.add_argument(
+        "--check-db",
+        help="Check store URL (falls back to LEGIS_CHECK_DB env var)",
+    )
+    serve.add_argument(
+        "--hmac-key",
+        help="HMAC signing key (falls back to LEGIS_HMAC_KEY env var)",
+    )
+    serve.add_argument(
+        "--protected-policies",
+        help="Comma-separated protected policy list (falls back to LEGIS_PROTECTED_POLICIES env var)",
+    )
+    serve.add_argument(
+        "--clarion-url",
+        help="Clarion identity API URL (falls back to CLARION_API_URL env var)",
+    )
+    serve.add_argument(
+        "--filigree-url",
+        help="Filigree issue-tracker API URL (falls back to FILIGREE_API_URL env var)",
+    )
+    serve.add_argument(
+        "--binding-db",
+        help="Signoff-binding ledger URL (falls back to LEGIS_BINDING_DB env var)",
+    )
 
     rate = subparsers.add_parser(
         "check-override-rate",
@@ -34,6 +62,22 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "serve":
+        import os
+        if args.governance_db:
+            os.environ["LEGIS_GOVERNANCE_DB"] = args.governance_db
+        if args.check_db:
+            os.environ["LEGIS_CHECK_DB"] = args.check_db
+        if args.hmac_key:
+            os.environ["LEGIS_HMAC_KEY"] = args.hmac_key
+        if args.protected_policies:
+            os.environ["LEGIS_PROTECTED_POLICIES"] = args.protected_policies
+        if args.clarion_url:
+            os.environ["CLARION_API_URL"] = args.clarion_url
+        if args.filigree_url:
+            os.environ["FILIGREE_API_URL"] = args.filigree_url
+        if args.binding_db:
+            os.environ["LEGIS_BINDING_DB"] = args.binding_db
+
         run("legis.api.app:create_app", host=args.host, port=args.port, factory=True)
         return 0
 

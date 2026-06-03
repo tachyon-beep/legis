@@ -85,3 +85,27 @@ def test_verify_integrity_detects_out_of_band_tamper(tmp_path):
     finally:
         conn.close()
     assert s.verify_integrity() is False
+
+
+def test_audit_store_concurrent_writes(tmp_path):
+    import threading
+    s = make_store(tmp_path)
+
+    errors = []
+    def run_appends(tid, count):
+        try:
+            for i in range(count):
+                s.append({"thread": tid, "idx": i})
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=run_appends, args=(t, 20)) for t in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"Concurrent appends failed with errors: {errors}"
+    recs = s.read_all()
+    assert len(recs) == 100
+    assert s.verify_integrity() is True
