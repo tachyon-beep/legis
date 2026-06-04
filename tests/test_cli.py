@@ -78,3 +78,75 @@ def test_check_override_rate_fails_for_missing_sqlite_db_without_creating_it(tmp
     assert rc == 1
     assert not db_path.exists()
     assert "missing" in capsys.readouterr().err.lower()
+
+
+def test_mcp_command_accepts_store_and_policy_cell_flags():
+    from legis.cli import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "mcp",
+            "--agent-id",
+            "agent-1",
+            "--governance-db",
+            "sqlite:///gov.db",
+            "--check-db",
+            "sqlite:///checks.db",
+            "--policy-cells",
+            "policy/cells.toml",
+        ]
+    )
+
+    assert args.command == "mcp"
+    assert args.agent_id == "agent-1"
+    assert args.governance_db == "sqlite:///gov.db"
+    assert args.check_db == "sqlite:///checks.db"
+    assert args.policy_cells == "policy/cells.toml"
+
+
+def test_main_mcp_sets_store_and_policy_cell_env(monkeypatch):
+    import os
+
+    import legis.mcp as mcp_module
+
+    calls = []
+
+    def fake_mcp_main(agent_id):
+        calls.append(
+            {
+                "agent_id": agent_id,
+                "governance_db": os.environ.get("LEGIS_GOVERNANCE_DB"),
+                "check_db": os.environ.get("LEGIS_CHECK_DB"),
+                "policy_cells": os.environ.get("LEGIS_POLICY_CELLS"),
+            }
+        )
+        return 0
+
+    monkeypatch.delenv("LEGIS_GOVERNANCE_DB", raising=False)
+    monkeypatch.delenv("LEGIS_CHECK_DB", raising=False)
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    monkeypatch.setattr(mcp_module, "main", fake_mcp_main)
+
+    rc = main(
+        [
+            "mcp",
+            "--agent-id",
+            "agent-1",
+            "--governance-db",
+            "sqlite:///gov.db",
+            "--check-db",
+            "sqlite:///checks.db",
+            "--policy-cells",
+            "policy/cells.toml",
+        ]
+    )
+
+    assert rc == 0
+    assert calls == [
+        {
+            "agent_id": "agent-1",
+            "governance_db": "sqlite:///gov.db",
+            "check_db": "sqlite:///checks.db",
+            "policy_cells": "policy/cells.toml",
+        }
+    ]

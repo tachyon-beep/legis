@@ -44,6 +44,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Governance store URL (falls back to LEGIS_GOVERNANCE_DB env var)",
     )
     mcp.add_argument(
+        "--check-db",
+        help="Check store URL (falls back to LEGIS_CHECK_DB env var)",
+    )
+    mcp.add_argument(
+        "--policy-cells",
+        help="Policy cell registry TOML path (falls back to LEGIS_POLICY_CELLS env var)",
+    )
+    mcp.add_argument(
         "--protected-policies",
         help="Comma-separated protected policy list (falls back to LEGIS_PROTECTED_POLICIES env var)",
     )
@@ -154,6 +162,10 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
             os.environ["LEGIS_PROTECTED_POLICIES"] = args.protected_policies
         if args.clarion_url:
             os.environ["CLARION_API_URL"] = args.clarion_url
+        if args.check_db:
+            os.environ["LEGIS_CHECK_DB"] = args.check_db
+        if args.policy_cells:
+            os.environ["LEGIS_POLICY_CELLS"] = args.policy_cells
 
         from legis.mcp import main as mcp_main
 
