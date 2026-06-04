@@ -67,6 +67,34 @@ def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
     assert args.agent_id == "agent-1"
 
 
+def test_build_runtime_wires_env_configured_openrouter_judge(tmp_path, monkeypatch):
+    from legis.enforcement.llm_client import OpenRouterLLMClient
+    from legis.mcp import build_runtime
+
+    def fake_init(self, config, *, fetch=None):
+        self.model_id = "openrouter:test-model"
+
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret")
+    monkeypatch.setenv("LEGIS_JUDGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov-env.db'}")
+    monkeypatch.setattr(OpenRouterLLMClient, "__init__", fake_init)
+    monkeypatch.setattr(OpenRouterLLMClient, "complete", lambda self, prompt: "ACCEPTED\nok")
+
+    runtime = build_runtime("agent-launch")
+
+    assert runtime.protected_gate is not None
+    result = runtime.protected_gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="specific rationale",
+        agent_id="agent-launch",
+        file_fingerprint="fp",
+        ast_path="ap",
+    )
+    assert result.judge_model == "openrouter:test-model"
+
+
 def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
     runtime, _store = _runtime(tmp_path)
     responses = _run(
