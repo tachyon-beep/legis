@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import re
 import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Any, cast
 
 from legis.canonical import content_hash
 from legis.policy.decorator import get_normalized_ast_str
+from legis.policy.evidence import evaluate_test_evidence
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,13 @@ class BoundaryFinding:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_EVIDENCE_RULE_IDS = {
+    "shadowed": "POLICY_BOUNDARY_TEST_SHADOWS_SUBJECT",
+    "not_exercised": "POLICY_BOUNDARY_TEST_DOES_NOT_EXERCISE_SUBJECT",
+    "policy_not_asserted": "POLICY_BOUNDARY_TEST_WEAK",
+}
 
 
 def scan_policy_boundaries(
@@ -159,21 +166,13 @@ class _BoundaryVisitor(ast.NodeVisitor):
                 )
                 return
 
-            if not _test_calls_subject(test_node, node.name):
+            evidence = evaluate_test_evidence(test_node, {node.name}, suppresses)
+            if not evidence.ok:
                 self._add(
-                    "POLICY_BOUNDARY_TEST_DOES_NOT_EXERCISE_SUBJECT",
+                    _EVIDENCE_RULE_IDS[evidence.code],
                     node,
                     qualname,
-                    "test does not call the policy-boundary subject",
-                )
-                return
-
-            if not _test_mentions_policy(test_node, suppresses):
-                self._add(
-                    "POLICY_BOUNDARY_TEST_DOES_NOT_MENTION_POLICY",
-                    node,
-                    qualname,
-                    "test does not mention a suppressed policy",
+                    evidence.reason,
                 )
                 return
 
@@ -349,42 +348,6 @@ def _find_function(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return node
     return None
-
-
-def _test_calls_subject(
-    test_node: ast.FunctionDef | ast.AsyncFunctionDef,
-    subject_name: str,
-) -> bool:
-    for node in _walk_without_nested_definitions(test_node):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id == subject_name:
-            return True
-        if isinstance(node.func, ast.Attribute) and node.func.attr == subject_name:
-            return True
-    return False
-
-
-def _test_mentions_policy(
-    test_node: ast.FunctionDef | ast.AsyncFunctionDef,
-    suppresses: tuple[str, ...],
-) -> bool:
-    patterns = [re.compile(r"\b" + re.escape(policy) + r"\b") for policy in suppresses]
-    for node in ast.walk(test_node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if any(pattern.search(node.value) for pattern in patterns):
-                return True
-    return False
-
-
-def _walk_without_nested_definitions(node: ast.AST):
-    yield node
-    for child in ast.iter_child_nodes(node):
-        if child is not node and isinstance(
-            child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ):
-            continue
-        yield from _walk_without_nested_definitions(child)
 
 
 def _display_path(file_path: Path, repo_root: Path) -> str:
