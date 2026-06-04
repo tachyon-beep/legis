@@ -367,3 +367,88 @@ def test_main_sei_backfill_dispatches_service(monkeypatch, capsys):
         }
     ]
     assert '"appended": 2' in capsys.readouterr().out
+
+
+def test_policy_boundary_check_outputs_json_and_fails(monkeypatch, capsys, tmp_path):
+    import legis.cli as cli_module
+    from legis.cli import main
+
+    class FakeFinding:
+        rule_id = "POLICY_BOUNDARY_TEST_WEAK"
+        file_path = "src/x.py"
+        line = 7
+        qualname = "x.guarded"
+        reason = "weak"
+
+        def to_dict(self):
+            return {"rule_id": self.rule_id, "file_path": self.file_path}
+
+    monkeypatch.setattr(
+        cli_module, "scan_policy_boundaries", lambda root, repo_root=None: [FakeFinding()]
+    )
+
+    rc = main(["policy-boundary-check", "--root", str(tmp_path), "--repo-root", str(tmp_path), "--format", "json"])
+
+    assert rc == 1
+    assert "POLICY_BOUNDARY_TEST_WEAK" in capsys.readouterr().out
+
+
+def test_policy_boundary_check_passes_when_no_findings(monkeypatch, capsys, tmp_path):
+    import legis.cli as cli_module
+    from legis.cli import main
+
+    monkeypatch.setattr(cli_module, "scan_policy_boundaries", lambda root, repo_root=None: [])
+
+    rc = main(["policy-boundary-check", "--root", str(tmp_path), "--repo-root", str(tmp_path)])
+
+    assert rc == 0
+    assert "policy-boundary-check: PASS" in capsys.readouterr().out
+
+
+def test_policy_boundary_check_end_to_end_flags_weak_boundary(tmp_path):
+    # Non-mocked: prove the CLI's argument wiring actually reaches the scanner.
+    # A monkeypatched-only test would pass even if --root/--repo-root were
+    # mis-wired, because src/ has no real decorators.
+    from legis.cli import main
+
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    (src / "subject.py").write_text(
+        'from legis.policy.decorator import policy_boundary\n\n'
+        '@policy_boundary(source="docs/spec.md:1", suppresses=("PY-WL-101",),\n'
+        '    invariant="x", test_ref="tests/test_subject.py::test_x", test_fingerprint="stale")\n'
+        'def guarded(payload):\n    return "ok"\n',
+        encoding="utf-8",
+    )
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_subject.py").write_text(
+        'def test_x():\n    assert guarded(1) == "ok", "PY-WL-101"\n', encoding="utf-8"
+    )
+
+    rc = main(["policy-boundary-check", "--root", str(src), "--repo-root", str(tmp_path)])
+
+    assert rc == 1  # stale fingerprint → a real finding through the real scanner
+
+
+def test_policy_boundary_check_text_format_with_findings(monkeypatch, capsys, tmp_path):
+    import legis.cli as cli_module
+    from legis.cli import main
+
+    class FakeFinding:
+        rule_id = "POLICY_BOUNDARY_TEST_WEAK"
+        file_path = "src/x.py"
+        line = 7
+        qualname = "x.guarded"
+        reason = "weak"
+
+        def to_dict(self):
+            return {}
+
+    monkeypatch.setattr(
+        cli_module, "scan_policy_boundaries", lambda root, repo_root=None: [FakeFinding()]
+    )
+    rc = main(["policy-boundary-check", "--root", str(tmp_path), "--repo-root", str(tmp_path)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "src/x.py:7: POLICY_BOUNDARY_TEST_WEAK: x.guarded: weak" in out

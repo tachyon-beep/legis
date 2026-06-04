@@ -25,6 +25,7 @@ from legis.enforcement.protected import ProtectedGate, TrailVerifier, TamperErro
 from legis.enforcement.signoff import SignoffGate
 from legis.enforcement.verdict import SignoffState, Verdict
 from legis.git.surface import GitError, GitSurface
+from legis.governance.binding_ledger import BindingError
 from legis.policy.cells import (
     PolicyCellRegistry,
     default_policy_cells,
@@ -64,9 +65,11 @@ _AGENT_TOOLS = frozenset(
         "git_branch_list",
         "git_commit_get",
         "git_rename_list",
+        "git_rename_feed_get",
         "pull_request_get",
         "check_list",
         "override_rate_get",
+        "filigree_closure_gate_get",
     }
 )
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
@@ -91,6 +94,7 @@ class McpRuntime:
     grammar: PolicyGrammar | None = None
     source_root: str | Path | None = None
     wardline_artifact_key: bytes | None = None
+    binding_ledger: Any | None = None
 
 
 def _load_policy_cell_registry() -> PolicyCellRegistry:
@@ -124,6 +128,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
     protected_gate = None
     trail_verifier = None
     signoff_gate = None
+    binding_ledger = None
     hmac_key = os.environ.get("LEGIS_HMAC_KEY")
     if hmac_key:
         key = hmac_key.encode("utf-8")
@@ -136,6 +141,14 @@ def build_runtime(agent_id: str) -> McpRuntime:
 
         protected_gate = ProtectedGate(store, clock, build_judge_from_env("MCP"), key)
         signoff_gate = SignoffGate(store, clock, signer=True, key=key)
+
+        from legis.governance.binding_ledger import BindingLedger
+
+        binding_ledger = BindingLedger(
+            AuditStore(os.environ.get("LEGIS_BINDING_DB", "sqlite:///legis-binding.db")),
+            clock,
+            key,
+        )
 
     return McpRuntime(
         agent_id=agent_id,
@@ -155,6 +168,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
             if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
             else None
         ),
+        binding_ledger=binding_ledger,
     )
 
 
@@ -249,6 +263,26 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": _schema(["rev_range"], {"rev_range": string}),
         },
         {
+            "name": "git_rename_feed_get",
+            "description": (
+                "Clarion-ready rename feed: committed renames over base..head plus "
+                "optional uncommitted working-tree renames."
+            ),
+            "inputSchema": _schema(
+                ["base"],
+                {
+                    "base": string,
+                    "head": string,
+                    "include_worktree": {"type": "boolean"},
+                },
+            ),
+        },
+        {
+            "name": "filigree_closure_gate_get",
+            "description": "Read whether legis holds verified binding evidence for closing a Filigree issue.",
+            "inputSchema": _schema(["issue_id"], {"issue_id": string}),
+        },
+        {
             "name": "pull_request_get",
             "description": "Read recorded pull-request metadata with joined check outcomes.",
             "inputSchema": _schema(["number"], {"number": string}),
@@ -312,6 +346,8 @@ def _tool_error(code: str, message: str) -> dict[str, Any]:
 
 def _service_error(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, AuditIntegrityError):
+        return _tool_error("AUDIT_INTEGRITY_FAILURE", str(exc))
+    if isinstance(exc, BindingError):
         return _tool_error("AUDIT_INTEGRITY_FAILURE", str(exc))
     if isinstance(exc, NotEnabledError):
         return _tool_error("CELL_NOT_ENABLED", str(exc))
@@ -866,6 +902,27 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                         for rename in _git(runtime).renames(_require(args, "rev_range"))
                     ]
                 }
+            )
+
+        if name == "git_rename_feed_get":
+            from legis.git.rename_feed import build_rename_feed
+
+            return _tool_result(
+                build_rename_feed(
+                    runtime.source_root or os.getcwd(),
+                    base=_require(args, "base"),
+                    head=args.get("head", "HEAD"),
+                    include_worktree=bool(args.get("include_worktree", False)),
+                )
+            )
+
+        if name == "filigree_closure_gate_get":
+            from legis.governance.filigree_gate import evaluate_issue_closure
+
+            if runtime.binding_ledger is None:
+                raise NotEnabledError("binding ledger not enabled")
+            return _tool_result(
+                evaluate_issue_closure(runtime.binding_ledger, issue_id=_require(args, "issue_id"))
             )
 
         if name == "pull_request_get":

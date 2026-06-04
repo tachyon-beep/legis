@@ -228,3 +228,13 @@ Two agent instances were interviewed as the customer, two rounds each with cross
   (grounding §4.2).
 - **Ratification:** both accepted the unified `override_submit` + `NEED_INPUTS` over separate
   per-cell tools, and both independently demanded the M3 chill-write vertical slice over reads-first.
+
+## Implementation notes
+
+> 2026-06-05 implementation note: The legis-side closeout landed the
+> policy-boundary CI gate (static scanner converged onto the runtime evidence
+> gate), the additive `/git/rename-feed` endpoint and `git_rename_feed_get` MCP
+> tool, and the `/filigree/issues/{id}/closure-gate` endpoint and
+> `filigree_closure_gate_get` MCP tool. Sibling-side consumption (Filigree
+> calling the closure gate; Clarion re-pointing to the rename feed) is tracked
+> as a follow-on spec.

@@ -459,3 +459,13 @@ that sank Loom-URI, and the SEI standard's minimal-apparatus posture is
 correct. Legis's v1 design will use **pull-only polling** on `lineage(sei)`
 and accept the latency. This note flags a possible future consideration for SEI
 vN, not a lock-blocking wire-contract demand.
+
+## Implementation notes
+
+> 2026-06-05 implementation note: The legis-side closeout landed the
+> policy-boundary CI gate (static scanner converged onto the runtime evidence
+> gate), the additive `/git/rename-feed` endpoint and `git_rename_feed_get` MCP
+> tool, and the `/filigree/issues/{id}/closure-gate` endpoint and
+> `filigree_closure_gate_get` MCP tool. Sibling-side consumption (Filigree
+> calling the closure gate; Clarion re-pointing to the rename feed) is tracked
+> as a follow-on spec.

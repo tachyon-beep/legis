@@ -8,6 +8,7 @@ import uvicorn
 from legis.clock import SystemClock
 from legis.governance.sei_backfill import run_pre_sei_backfill
 from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
+from legis.policy.boundary_scan import scan_policy_boundaries
 from legis.store.audit_store import AuditStore
 
 
@@ -126,6 +127,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--actor",
         default="legis-sei-backfill",
         help="Actor stamped on appended backfill events",
+    )
+
+    boundary = subparsers.add_parser(
+        "policy-boundary-check",
+        help="Fail when @policy_boundary metadata lacks current behavioural evidence",
+    )
+    boundary.add_argument("--root", default="src", help="Python source root to scan")
+    boundary.add_argument("--repo-root", default=".", help="Repo root for test_ref resolution")
+    boundary.add_argument(
+        "--format", choices=("text", "json"), default="text",
+        help="Output format: human-readable text (default) or machine-readable json",
     )
 
     return parser
@@ -268,6 +280,17 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         from legis.mcp import main as mcp_main
 
         return mcp_main(args.agent_id)
+
+    if args.command == "policy-boundary-check":
+        findings = scan_policy_boundaries(args.root, repo_root=args.repo_root)
+        if args.format == "json":
+            print(json.dumps([f.to_dict() for f in findings], sort_keys=True))
+        elif findings:
+            for f in findings:
+                print(f"{f.file_path}:{f.line}: {f.rule_id}: {f.qualname}: {f.reason}")
+        else:
+            print("policy-boundary-check: PASS")
+        return 1 if findings else 0
 
     parser.print_help(sys.stderr)
     return 2

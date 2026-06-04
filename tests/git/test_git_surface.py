@@ -120,6 +120,33 @@ def test_git_surface_command_injection_mitigation(git_repo):
         s.renames("HEAD~1..HEAD; echo")
 
 
+def test_working_tree_renames_detects_uncommitted_rename(git_repo):
+    s = GitSurface(git_repo)
+    # git_repo HEAD has renamed.txt; move it in the working tree without committing.
+    s._run("mv", "renamed.txt", "moved.txt")
+
+    evidence = s.working_tree_renames("HEAD")
+
+    assert len(evidence) == 1
+    assert evidence[0].commit_sha == "WORKTREE"
+    assert evidence[0].old_path == "renamed.txt"
+    assert evidence[0].new_path == "moved.txt"
+
+
+def test_working_tree_renames_rejects_unsafe_base_ref(git_repo):
+    import pytest
+
+    from legis.git.surface import GitError
+
+    s = GitSurface(git_repo)
+    # Mirror the sibling test_git_surface_command_injection_mitigation coverage:
+    # an option-like or metacharacter ref must raise before any git invocation.
+    with pytest.raises(GitError):
+        s.working_tree_renames("-o")
+    with pytest.raises(GitError):
+        s.working_tree_renames("HEAD; echo pwned")
+
+
 def test_git_surface_times_out_slow_git_commands(git_repo, monkeypatch):
     def slow_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], timeout=kwargs.get("timeout"))

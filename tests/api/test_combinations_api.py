@@ -558,3 +558,89 @@ def test_scan_results_single_cell_still_works(tmp_path):
     resp = c.post("/wardline/scan-results", json=body)
     assert resp.status_code == 200
     assert resp.json()["routed"][0]["mode"] == "surface_override"
+
+
+# --- Filigree closure-gate endpoint tests ---
+
+
+def test_closure_gate_404_when_ledger_disabled(monkeypatch):
+    # create_app auto-builds a ledger from LEGIS_HMAC_KEY when binding_ledger is
+    # None — clear it so "disabled" really means disabled (W1: else CI with the
+    # key set returns 409, not 404).
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    client = TestClient(create_app(binding_ledger=None))
+    resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
+    assert resp.status_code == 404
+
+
+def test_closure_gate_409_when_no_binding(tmp_path):
+    from legis.governance.binding_ledger import BindingLedger
+
+    # Empty-but-enabled ledger → no binding → blocked.
+    ledger = BindingLedger(
+        AuditStore(f"sqlite:///{tmp_path / 'bind.db'}"),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        key=b"k",
+    )
+    client = TestClient(create_app(binding_ledger=ledger))
+    resp = client.get("/filigree/issues/ISSUE-UNBOUND/closure-gate")
+    assert resp.status_code == 409
+    assert resp.json()["allowed"] is False
+
+
+def test_closure_gate_200_on_real_verified_binding(tmp_path):
+    from legis.governance.binding_ledger import BindingLedger
+
+    # ALLOW path against a REAL recorded binding (not a fake).
+    ledger = BindingLedger(
+        AuditStore(f"sqlite:///{tmp_path / 'bind.db'}"),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        key=b"k",
+    )
+    ledger.record(
+        signoff_seq=7,
+        issue_id="ISSUE-7",
+        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        content_hash="h7",
+    )
+    client = TestClient(create_app(binding_ledger=ledger))
+    resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
+    assert resp.status_code == 200
+    assert resp.json()["allowed"] is True
+    # Pin the evidence body end-to-end: a regression that silently nulls
+    # evidence must not pass just because allowed stays True.
+    body = resp.json()
+    assert body["evidence"]["signoff_seq"] == 7
+    assert body["evidence"]["content_hash"] == "h7"
+    assert body["evidence"]["recorded_at"] == "2026-06-02T12:00:00+00:00"
+
+
+def test_closure_gate_500_on_integrity_failure(tmp_path):
+    from legis.governance.binding_ledger import BindingLedger
+
+    # Tampered ledger → BindingError → 500 (fail-closed).
+    store = AuditStore(f"sqlite:///{tmp_path / 'bind.db'}")
+    ledger = BindingLedger(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        key=b"k",
+    )
+    ledger.record(
+        signoff_seq=7,
+        issue_id="ISSUE-7",
+        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        content_hash="h7",
+    )
+    # Append a forged binding record (bad signature) — poisons the whole ledger.
+    store.append({
+        "kind": "issue_binding",
+        "signoff_seq": 8,
+        "issue_id": "ISSUE-7",
+        "entity_key": {"value": "clarion:eid:abc", "identity_stable": True},
+        "content_hash": "h7",
+        "recorded_at": "t",
+        "binding_signature": "hmac-sha256:v1:deadbeef",
+    })
+    client = TestClient(create_app(binding_ledger=ledger))
+    resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
+    assert resp.status_code == 500

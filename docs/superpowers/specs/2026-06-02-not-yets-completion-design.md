@@ -283,3 +283,13 @@ gated not-yet; Track C is a single doc-edit plan.
   with the honest-degrade principle.
 - **Risk — A5 back-compat:** severity-driven routing must preserve the existing one-cell-per-scan callers
   via a degenerate map; the A5 plan keeps the current API working.
+
+## Implementation notes
+
+> 2026-06-05 implementation note: The legis-side closeout landed the
+> policy-boundary CI gate (static scanner converged onto the runtime evidence
+> gate), the additive `/git/rename-feed` endpoint and `git_rename_feed_get` MCP
+> tool, and the `/filigree/issues/{id}/closure-gate` endpoint and
+> `filigree_closure_gate_get` MCP tool. Sibling-side consumption (Filigree
+> calling the closure gate; Clarion re-pointing to the rename feed) is tracked
+> as a follow-on spec.

@@ -121,3 +121,51 @@ def test_broken_append_only_hash_chain_is_rejected(tmp_path):
         ledger.verify()
     with pytest.raises(BindingError, match="hash chain"):
         ledger.get(2)
+
+
+def test_get_by_issue_id_returns_verified_record(tmp_path):
+    ledger, _ = _ledger(tmp_path)
+    ledger.record(signoff_seq=7, issue_id="ISSUE-7",
+                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+    got = ledger.get_by_issue_id("ISSUE-7")
+    assert got is not None
+    assert got["issue_id"] == "ISSUE-7"
+    assert got["signoff_seq"] == 7
+    assert got["content_hash"] == "h7"
+
+
+def test_get_by_issue_id_returns_none_when_absent(tmp_path):
+    ledger, _ = _ledger(tmp_path)
+    ledger.record(signoff_seq=7, issue_id="ISSUE-7",
+                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+    assert ledger.get_by_issue_id("ISSUE-MISSING") is None
+
+
+def test_get_by_issue_id_raises_on_tampered_ledger(tmp_path):
+    ledger, store = _ledger(tmp_path)
+    # Record a legitimate ISSUE-7 binding first
+    ledger.record(signoff_seq=7, issue_id="ISSUE-7",
+                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+    # Then append a forged binding record (bad signature) — poisons the whole ledger
+    store.append({"kind": "issue_binding", "signoff_seq": 8, "issue_id": "ISSUE-7",
+                  "entity_key": {"value": "clarion:eid:abc", "identity_stable": True},
+                  "content_hash": "h7", "recorded_at": "t",
+                  "binding_signature": "hmac-sha256:v1:deadbeef"})
+    # Fail-closed: must raise rather than return the real record from a poisoned ledger
+    with pytest.raises(BindingError):
+        ledger.get_by_issue_id("ISSUE-7")
+
+
+def test_get_by_issue_id_returns_last_binding_for_issue(tmp_path):
+    # Insertion order and signoff_seq order DISAGREE: the second-inserted record
+    # has a LOWER signoff_seq. This rules out an accidental "max signoff_seq wins"
+    # implementation — last-inserted must win, not highest seq.
+    ledger, _ = _ledger(tmp_path)
+    ledger.record(signoff_seq=5, issue_id="ISSUE-7",
+                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="hash-first")
+    ledger.record(signoff_seq=1, issue_id="ISSUE-7",
+                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="hash-second")
+    got = ledger.get_by_issue_id("ISSUE-7")
+    assert got is not None
+    assert got["signoff_seq"] == 1
+    assert got["content_hash"] == "hash-second"

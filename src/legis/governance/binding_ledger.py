@@ -82,3 +82,12 @@ class BindingLedger:
             if p.get("kind") == BINDING_KIND and p.get("signoff_seq") == signoff_seq:
                 return p
         return None
+
+    def get_by_issue_id(self, issue_id: str) -> dict[str, Any] | None:
+        self.verify()  # fail-closed: never return data from a tampered ledger
+        match: dict[str, Any] | None = None
+        for rec in self._store.read_all():
+            p = rec.payload
+            if p.get("kind") == BINDING_KIND and p.get("issue_id") == issue_id:
+                match = p  # last verified binding for this issue wins
+        return match
