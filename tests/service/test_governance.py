@@ -3,11 +3,17 @@ import pytest
 from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.lifecycle import GateStatus
-from legis.enforcement.protected import TamperError
+from legis.enforcement.protected import ProtectedGate, TamperError
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
-from legis.service.errors import AuditIntegrityError
-from legis.service.governance import compute_override_rate, resolve_for_record, submit_override, verified_records
+from legis.service.errors import AuditIntegrityError, InvalidArgumentError
+from legis.service.governance import (
+    compute_override_rate,
+    resolve_for_record,
+    submit_override,
+    submit_protected_override,
+    verified_records,
+)
 from legis.store.audit_store import AuditStore
 
 
@@ -171,6 +177,11 @@ class _BlockingJudge:
         )
 
 
+class _AcceptingJudge:
+    def evaluate(self, record):
+        return JudgeOpinion(verdict=Verdict.ACCEPTED, model="stub-judge", rationale="ok")
+
+
 def test_submit_override_coached_blocks_on_negative_verdict(tmp_path):
     engine = EnforcementEngine(
         AuditStore(f"sqlite:///{tmp_path}/gov.db"), SystemClock(), judge=_BlockingJudge()
@@ -188,3 +199,23 @@ def test_submit_override_coached_blocks_on_negative_verdict(tmp_path):
     assert result.judge_model == "stub-judge"
     # the BLOCKED attempt is still recorded (no silent path)
     assert len(engine.trail()) == 1
+
+
+def test_submit_protected_override_rejects_unverified_source_binding_before_signing(tmp_path):
+    store = AuditStore(f"sqlite:///{tmp_path}/protected.db")
+    gate = ProtectedGate(store, SystemClock(), judge=_AcceptingJudge(), key=b"k")
+
+    with pytest.raises(InvalidArgumentError, match="source binding could not be verified"):
+        submit_protected_override(
+            gate,
+            identity=None,
+            policy="no-eval",
+            entity="src/missing.py:f",
+            rationale="sandboxed",
+            agent_id="agent-7",
+            file_fingerprint="sha256:" + "0" * 64,
+            ast_path="Module/FunctionDef[f]",
+            source_root=tmp_path,
+        )
+
+    assert store.read_all() == []

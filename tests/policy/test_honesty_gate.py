@@ -9,14 +9,26 @@ from legis.policy.decorator import (
 
 # A real, resolvable "test" function the gate will fingerprint.
 def fake_boundary_test():
-    assert handler("payload") == "payload"
-    assert "no-eval" == "no-eval"
+    result = handler("payload")
+    assert result == "payload", "no-eval"
 
 
 def string_only_boundary_test():
     # mentions the decorated function name and policy without exercising either
     handler_under_test = "handler exercises no-eval boundary"
     assert "no-eval" in handler_under_test
+
+
+def weak_policy_boundary_test():
+    assert handler("payload") == "payload"
+    assert "no-eval" == "no-eval"
+
+
+def shadowed_boundary_test():
+    def handler(payload):
+        return payload
+
+    assert handler("payload") == "payload", "no-eval"
 
 
 def resolver(ref):
@@ -43,6 +55,20 @@ def test_gate_passes_with_a_pinned_unmodified_test():
     assert finding.ok is True, finding.reason
 
 
+def test_gate_parses_nested_test_sources_consistently():
+    def nested_boundary_test():
+        result = handler("payload")
+        assert result == "payload", "no-eval"
+
+    good = fingerprint(nested_boundary_test)
+    finding = check_policy_boundary(
+        _decorate(good),
+        lambda ref: {"tests::fake": nested_boundary_test}.get(ref),
+    )
+
+    assert finding.ok is True, finding.reason
+
+
 def test_gate_rejects_string_only_mentions_as_behavioural_evidence():
     def string_resolver(ref):
         return {"tests::fake": string_only_boundary_test}.get(ref)
@@ -51,6 +77,26 @@ def test_gate_rejects_string_only_mentions_as_behavioural_evidence():
     finding = check_policy_boundary(_decorate(stale_proof), string_resolver)
     assert finding.ok is False
     assert "exercise" in finding.reason
+
+
+def test_gate_rejects_policy_mentions_not_bound_to_the_boundary_assertion():
+    def weak_resolver(ref):
+        return {"tests::fake": weak_policy_boundary_test}.get(ref)
+
+    stale_proof = fingerprint(weak_policy_boundary_test)
+    finding = check_policy_boundary(_decorate(stale_proof), weak_resolver)
+    assert finding.ok is False
+    assert "assert" in finding.reason
+
+
+def test_gate_rejects_shadowed_boundary_calls():
+    def shadowed_resolver(ref):
+        return {"tests::fake": shadowed_boundary_test}.get(ref)
+
+    stale_proof = fingerprint(shadowed_boundary_test)
+    finding = check_policy_boundary(_decorate(stale_proof), shadowed_resolver)
+    assert finding.ok is False
+    assert "shadow" in finding.reason
 
 
 def test_gate_fails_on_fingerprint_drift():

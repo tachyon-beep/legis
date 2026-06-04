@@ -13,6 +13,15 @@ class PolicyJudge:
         return JudgeOpinion(v, "judge@2", f"re-judged: {record.rationale}")
 
 
+class CapturingJudge:
+    def __init__(self):
+        self.seen = []
+
+    def evaluate(self, record):
+        self.seen.append(record)
+        return JudgeOpinion(Verdict.ACCEPTED, "judge@2", "ok")
+
+
 def _accepted(policy, entity, rationale):
     rec = OverrideRecord(
         policy=policy,
@@ -39,3 +48,39 @@ def test_decay_flags_kept_suppressions_that_fail_a_fresh_pass(tmp_path):
     assert {f.entity for f in flags} == {"e2"}  # only the ACCEPTED-but-now-stale one
     assert flags[0].seq == 2
     assert "stale" in flags[0].fresh_rationale
+
+
+def test_decay_rejudge_preserves_source_and_identity_evidence(tmp_path):
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    payload = _accepted("p", "e1", "still valid reason")
+    payload["extensions"].update(
+        {
+            "file_fingerprint": "sha256:abc",
+            "ast_path": "Module/FunctionDef[f]",
+            "source_binding": {
+                "status": "verified",
+                "source_path": "src/x.py",
+                "current_fingerprint": "sha256:abc",
+            },
+            "clarion": {
+                "alive": True,
+                "content_hash": "content-hash",
+                "lineage_snapshot": {"length": 1, "hash": "lineage-hash"},
+            },
+            "judge_rationale": "old rationale",
+            "judge_metadata_signature": "hmac-sha256:v2:old",
+        }
+    )
+    store.append(payload)
+    judge = CapturingJudge()
+
+    decay_sweep(store.read_all(), judge)
+
+    assert len(judge.seen) == 1
+    ext = judge.seen[0].extensions
+    assert ext["file_fingerprint"] == "sha256:abc"
+    assert ext["ast_path"] == "Module/FunctionDef[f]"
+    assert ext["source_binding"]["status"] == "verified"
+    assert ext["clarion"]["content_hash"] == "content-hash"
+    assert "judge_rationale" not in ext
+    assert "judge_metadata_signature" not in ext

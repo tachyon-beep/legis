@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from legis.api.app import create_app
 from legis.checks.surface import CheckSurface
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 
 def client(tmp_path):
@@ -60,3 +63,19 @@ def test_check_api_round_trips_rule_set_and_policy_version(tmp_path):
     got = c.get(f"/checks/commit/{'a' * 40}").json()[0]
     assert got["rule_set"] == "wardline@3"
     assert got["policy_version"] == "pv-9"
+
+
+def test_check_api_records_server_owned_writer_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "ci-bot:writer=token-a")
+    c = client(tmp_path)
+
+    post = c.post(
+        "/checks",
+        json={**a_run(), "recorded_by": "spoofed"},
+        headers={"Authorization": "Bearer token-a"},
+    )
+
+    assert post.status_code == 201
+    assert post.json()["recorded_by"] == "ci-bot"
+    got = c.get(f"/checks/commit/{'a' * 40}").json()[0]
+    assert got["recorded_by"] == "ci-bot"

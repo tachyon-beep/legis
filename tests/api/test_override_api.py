@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -5,6 +6,8 @@ from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.store.audit_store import AuditStore
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 
 class ScriptedJudge:
@@ -52,7 +55,7 @@ def test_chill_post_override_returns_201_and_records(tmp_path):
 
 
 def test_authenticated_token_actor_overrides_body_agent_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "agent-a=token-a")
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "agent-a:writer=token-a")
     c = chill_client(tmp_path)
     resp = c.post(
         "/overrides",

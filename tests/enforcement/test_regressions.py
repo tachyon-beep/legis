@@ -38,7 +38,7 @@ def test_signoff_gate_out_of_bounds(tmp_path):
         store._engine.dispose()
 
 
-def test_api_overrides_protected_policies_403(tmp_path, monkeypatch):
+def test_api_overrides_protected_policies_403(tmp_path, monkeypatch, unsafe_dev_auth):
     monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "no-eval,protected-policy")
     monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
     app = create_app()
@@ -174,8 +174,8 @@ class BoundaryClassLocalTest:
 def fake_bound_test():
     # references class_method and no-eval
     instance = BoundaryClassLocalTest()
-    instance.class_method()
-    assert "no-eval" == "no-eval"
+    result = instance.class_method()
+    assert result is None, "no-eval"
 
 
 def test_honesty_gate_bound_methods():

@@ -2,6 +2,7 @@ import json
 import hashlib
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -11,6 +12,8 @@ from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.store.audit_store import GENESIS, AuditStore, _chain
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 
 class ScriptedJudge:
@@ -37,13 +40,21 @@ def _fingerprint(path):
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _source_body(tmp_path, **overrides):
+    source = tmp_path / "src" / "x.py"
+    source.parent.mkdir(exist_ok=True)
+    if not source.exists():
+        source.write_text("def f():\n    return 1\n")
+    return {**PBODY, "file_fingerprint": _fingerprint(source), **overrides}
+
+
 def _app(tmp_path, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"), repo_path=None):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(opinion), key=KEY)
     sg = SignoffGate(store, clock)
     app = create_app(
-        repo_path=repo_path,
+        repo_path=repo_path or tmp_path,
         protected_gate=pg,
         signoff_gate=sg,
         trail_verifier=TrailVerifier(KEY, PROTECTED),
@@ -53,7 +64,7 @@ def _app(tmp_path, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"), repo
 
 def test_protected_post_records_and_verified_read_succeeds(tmp_path):
     c, _ = _app(tmp_path)
-    assert c.post("/protected/overrides", json=PBODY).status_code == 201
+    assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     trail = c.get("/overrides")
     assert trail.status_code == 200
     sig = trail.json()[0]["extensions"]["judge_metadata_signature"]
@@ -95,12 +106,12 @@ def test_protected_post_records_verified_source_binding(tmp_path):
 
 def test_protected_blocked_post_is_409(tmp_path):
     c, _ = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
-    assert c.post("/protected/overrides", json=PBODY).status_code == 409
+    assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 409
 
 
 def test_operator_override_post_is_201_and_distinct(tmp_path):
     c, _ = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
-    body = {**PBODY, "operator_id": "op-1"}
+    body = _source_body(tmp_path, operator_id="op-1")
     del body["agent_id"]
     resp = c.post("/protected/operator-override", json=body)
     assert resp.status_code == 201
@@ -108,9 +119,9 @@ def test_operator_override_post_is_201_and_distinct(tmp_path):
 
 
 def test_authenticated_token_actor_overrides_body_operator_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "op-a=token-a")
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "op-a:operator=token-a")
     c, _ = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
-    body = {**PBODY, "operator_id": "spoofed-op"}
+    body = _source_body(tmp_path, operator_id="spoofed-op")
     del body["agent_id"]
     resp = c.post(
         "/protected/operator-override",
@@ -142,7 +153,7 @@ def test_signoff_request_then_sign_clears(tmp_path):
 
 def test_tampered_protected_read_is_a_500(tmp_path):
     c, store = _app(tmp_path)
-    c.post("/protected/overrides", json=PBODY)
+    c.post("/protected/overrides", json=_source_body(tmp_path))
     db = str(tmp_path / "gov.db")
     con = sqlite3.connect(db)
     con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
@@ -207,7 +218,7 @@ def test_override_rate_gate_fails_closed_on_a_tampered_trail(tmp_path):
     # OVERRIDDEN_BY_OPERATOR to ACCEPTED to lower the apparent rate must be
     # caught, not silently scored.
     c, store = _app(tmp_path, JudgeOpinion(Verdict.BLOCKED, "judge@1", "no"))
-    body = {**PBODY, "operator_id": "op-1"}
+    body = _source_body(tmp_path, operator_id="op-1")
     del body["agent_id"]
     c.post("/protected/operator-override", json=body)
 
@@ -240,11 +251,11 @@ def test_identity_gaps_scan_the_protected_trail(tmp_path):
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(
         JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
-    app = create_app(protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
+    app = create_app(repo_path=tmp_path, protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
                      identity=IdentityResolver(OrphanClient()))
     c = TestClient(app)
     # A protected override keyed on an SEI Clarion now reports dead.
-    assert c.post("/protected/overrides", json=PBODY).status_code == 201
+    assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     gaps = c.get("/governance/identity-gaps").json()
     assert [g["sei"] for g in gaps] == ["clarion:eid:abc123"]
 
@@ -278,10 +289,10 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(
         JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
-    app = create_app(protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
+    app = create_app(repo_path=tmp_path, protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
                      identity=IdentityResolver(ShrinkingClient()))
     c = TestClient(app)
-    assert c.post("/protected/overrides", json=PBODY).status_code == 201
+    assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     body = c.get("/governance/lineage-integrity").json()
     assert [d["sei"] for d in body["divergences"]] == ["clarion:eid:abc123"]
     assert body["divergences"][0]["recorded_length"] == 2

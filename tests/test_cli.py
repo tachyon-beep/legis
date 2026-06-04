@@ -97,6 +97,18 @@ def test_governance_gate_missing_sqlite_db_is_pass_with_notice_without_creating_
     assert "PASS_WITH_NOTICE" in capsys.readouterr().out
 
 
+def test_governance_gate_missing_sqlite_db_fails_closed_in_ci(tmp_path, capsys, monkeypatch):
+    db_path = tmp_path / "missing.db"
+    monkeypatch.setenv("CI", "true")
+
+    rc = main(["governance-gate", "--db", f"sqlite:///{db_path}"])
+
+    assert rc == 1
+    assert not db_path.exists()
+    captured = capsys.readouterr()
+    assert "missing" in captured.err
+
+
 def test_mcp_command_accepts_store_and_policy_cell_flags():
     from legis.cli import build_parser
 

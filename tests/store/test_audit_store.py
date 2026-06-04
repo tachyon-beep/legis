@@ -87,6 +87,23 @@ def test_verify_integrity_detects_out_of_band_tamper(tmp_path):
     assert s.verify_integrity() is False
 
 
+def test_verify_integrity_handles_malformed_json_as_integrity_failure(tmp_path):
+    s = make_store(tmp_path)
+    s.append({"k": "a"})
+    conn = raw_conn(tmp_path)
+    try:
+        conn.execute("DROP TRIGGER audit_log_no_update")
+        conn.execute(
+            "UPDATE audit_log SET payload = :p WHERE seq = 1",
+            {"p": "{not-json"},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert s.verify_integrity() is False
+
+
 def test_audit_store_concurrent_writes(tmp_path):
     import threading
     s = make_store(tmp_path)

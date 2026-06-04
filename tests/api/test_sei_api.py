@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -8,6 +9,8 @@ from legis.enforcement.signoff import SignoffGate
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.resolver import IdentityResolver
 from legis.store.audit_store import AuditStore
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 KEY = b"k"
 PROTECTED = frozenset({"no-eval"})

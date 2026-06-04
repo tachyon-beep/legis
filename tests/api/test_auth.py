@@ -110,7 +110,7 @@ def test_scoped_tokens_separate_writer_and_operator_authority(monkeypatch, tmp_p
     operator = {"Authorization": "Bearer op-token"}
     protected_body = {
         "policy": "no-eval",
-        "entity": "src/x.py:f",
+        "entity": "service:override",
         "rationale": "override",
         "operator_id": "spoofed-op",
         "file_fingerprint": "fp",
@@ -133,6 +133,27 @@ def test_scoped_tokens_separate_writer_and_operator_authority(monkeypatch, tmp_p
     assert client.post(
         "/protected/operator-override", json=protected_body, headers=operator
     ).status_code == 201
+
+
+def test_unscoped_token_actor_does_not_grant_operator_authority(monkeypatch, tmp_path):
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "op-a=token-a")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    client = TestClient(create_app())
+
+    resp = client.post(
+        "/protected/operator-override",
+        json={
+            "policy": "no-eval",
+            "entity": "service:override",
+            "rationale": "operator exception",
+            "file_fingerprint": "fp",
+            "ast_path": "ap",
+        },
+        headers={"Authorization": "Bearer token-a"},
+    )
+
+    assert resp.status_code == 403
 
 
 def test_authenticated_writer_identity_does_not_require_body_agent_id(monkeypatch, tmp_path):
@@ -165,11 +186,11 @@ def test_authenticated_operator_identity_does_not_require_body_operator_id(
 
     resp = client.post(
         "/protected/operator-override",
-        json={
-            "policy": "no-eval",
-            "entity": "src/x.py:f",
-            "rationale": "operator exception",
-            "file_fingerprint": "fp",
+            json={
+                "policy": "no-eval",
+                "entity": "service:override",
+                "rationale": "operator exception",
+                "file_fingerprint": "fp",
             "ast_path": "ap",
         },
         headers={"Authorization": "Bearer op-token"},

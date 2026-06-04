@@ -95,4 +95,4 @@ def test_repository_default_policy_cells_file_loads():
     assert registry.cell_for("import-allowlist") == "coached"
     assert registry.cell_for("protected.source-integrity") == "protected"
     assert registry.cell_for("human.release-signoff") == "structured"
-    assert registry.cell_for("ordinary.policy") == "chill"
+    assert registry.cell_for("ordinary.policy") == "structured"

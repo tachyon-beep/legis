@@ -15,10 +15,21 @@ _ENV_IDENTITY = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _unsafe_dev_auth_for_local_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def unsafe_dev_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEGIS_UNSAFE_DEV_AUTH", "1")
+
+
+@pytest.fixture
+def unsafe_wardline_request_routing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
+
+
+@pytest.fixture
+def unsafe_dev_defaults(
+    unsafe_dev_auth: None, unsafe_wardline_request_routing: None
+) -> None:
+    return None
 
 
 def _git(repo: Path, *args: str) -> str:

@@ -1,6 +1,7 @@
 import json
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -13,6 +14,8 @@ from legis.enforcement.signing import sign
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import GENESIS, AuditStore, _chain
 from legis.wardline.ingest import wardline_artifact_fields
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_defaults")
 
 
 def _client(tmp_path, **kw):
@@ -95,6 +98,52 @@ def test_bind_issue_endpoint_attaches_sei_from_cleared_record(tmp_path):
     # SEI sourced from the trail; content_hash is "" because request() records no
     # clarion ext — the honest behaviour of the real record.
     assert fil.attached == [("ISSUE-1", "clarion:eid:abc", "", "legis", req.seq, None)]
+
+
+def test_bind_issue_endpoint_uses_resolved_backfill_for_locator_keyed_request(tmp_path):
+    fil = _FakeFiligree()
+    store = AuditStore(f"sqlite:///{tmp_path / 'sg.db'}")
+    gate = SignoffGate(store, FixedClock("2026-06-02T12:00:00+00:00"))
+    req = gate.request(
+        policy="PY-WL-101",
+        entity_key=EntityKey.from_locator("python:function:m.f"),
+        rationale="needs a human",
+        agent_id="agent-1",
+    )
+    gate.sign_off(request_seq=req.seq, operator_id="operator-1")
+    store.append(
+        {
+            "event": "SEI_BACKFILL",
+            "original_seq": req.seq,
+            "entity_key": EntityKey.from_sei("clarion:eid:abc").to_dict(),
+            "identity_stable": True,
+            "agent_id": "legis-sei-backfill",
+            "recorded_at": "2026-06-04T12:00:00+00:00",
+            "extensions": {
+                "clarion": {
+                    "alive": True,
+                    "content_hash": "hash-abc",
+                    "lineage_snapshot": {"length": 1, "hash": "lineage"},
+                    "identity_resolution_status": "resolved",
+                    "lineage_snapshot_status": "verified",
+                },
+                "backfill": {
+                    "source": "pre_sei_locator",
+                    "original_seq": req.seq,
+                    "original_entity_key": EntityKey.from_locator("python:function:m.f").to_dict(),
+                },
+            },
+        }
+    )
+
+    c = _client(tmp_path, filigree=fil, signoff_gate=gate)
+    resp = c.post(f"/signoff/{req.seq}/bind-issue", json={"issue_id": "ISSUE-1"})
+
+    assert resp.status_code == 201
+    assert resp.json()["clarion_entity_id"] == "clarion:eid:abc"
+    assert fil.attached == [
+        ("ISSUE-1", "clarion:eid:abc", "hash-abc", "legis", req.seq, None)
+    ]
 
 
 def test_bind_issue_endpoint_transmits_hmac_binding_signature(tmp_path):
@@ -267,14 +316,9 @@ def test_scan_results_surface_only_records_non_gating(tmp_path):
 
 
 def test_scan_results_cell_by_severity_routes_per_finding(tmp_path):
-    from legis.clock import FixedClock
-    from legis.enforcement.signoff import SignoffGate
-    from legis.store.audit_store import AuditStore
-    sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
-                     FixedClock("2026-06-02T12:00:00+00:00"))
-    c = _client(tmp_path, signoff_gate=sg)
+    c = _client(tmp_path)
     body = {"agent_id": "a",
-            "cell_by_severity": {"CRITICAL": "block_escalate", "INFO": "surface_only"},
+            "cell_by_severity": {"CRITICAL": "surface_override", "INFO": "surface_only"},
             "scan": {"findings": [
                 {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
                  "fingerprint": "c", "qualname": "m.f", "properties": {}, "suppressed": "active"},
@@ -283,18 +327,12 @@ def test_scan_results_cell_by_severity_routes_per_finding(tmp_path):
     resp = c.post("/wardline/scan-results", json=body)
     assert resp.status_code == 200
     modes = {r["fingerprint"]: r["mode"] for r in resp.json()["routed"]}
-    assert modes == {"c": "block_escalate", "i": "surface_only"}
+    assert modes == {"c": "surface_override", "i": "surface_only"}
 
 
 def test_scan_results_fail_on_routes_threshold_per_finding(tmp_path):
-    from legis.clock import FixedClock
-    from legis.enforcement.signoff import SignoffGate
-    from legis.store.audit_store import AuditStore
-
-    sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
-                     FixedClock("2026-06-02T12:00:00+00:00"))
-    c = _client(tmp_path, signoff_gate=sg)
-    body = {"agent_id": "a", "cell": "block_escalate", "fail_on": "ERROR",
+    c = _client(tmp_path)
+    body = {"agent_id": "a", "cell": "surface_override", "fail_on": "ERROR",
             "scan": {"findings": [
                 {"rule_id": "R-E", "message": "m", "severity": "ERROR", "kind": "defect",
                  "fingerprint": "e", "qualname": "m.f", "properties": {}, "suppressed": "active"},
@@ -304,15 +342,14 @@ def test_scan_results_fail_on_routes_threshold_per_finding(tmp_path):
     assert resp.status_code == 200
     routed = {r["fingerprint"]: r for r in resp.json()["routed"]}
     assert {fp: r["mode"] for fp, r in routed.items()} == {
-        "e": "block_escalate",
+        "e": "surface_override",
         "w": "surface_only",
     }
-    assert sg.request_record(routed["e"]["seq"])["policy"] == "R-E"
     trail = c.get("/overrides").json()
-    assert len(trail) == 1
-    assert trail[0]["kind"] == "wardline_surfaced"
-    assert trail[0]["policy"] == "R-W"
-    assert trail[0]["extensions"]["wardline"]["fingerprint"] == "w"
+    assert len(trail) == 2
+    by_policy = {row["policy"]: row for row in trail}
+    assert by_policy["R-E"]["extensions"]["wardline"]["fingerprint"] == "e"
+    assert by_policy["R-W"]["kind"] == "wardline_surfaced"
 
 
 def test_scan_results_unknown_fail_on_is_422(tmp_path):

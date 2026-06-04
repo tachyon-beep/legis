@@ -27,12 +27,12 @@ def _record() -> OverrideRecord:
     )
 
 
-def test_judge_returns_accepted_with_model_and_verbatim_rationale():
-    client = FakeClient("ACCEPTED — rationale is specific and correct")
+def test_judge_returns_accepted_with_model_and_structured_rationale():
+    client = FakeClient('{"verdict":"ACCEPTED","rationale":"specific and correct"}')
     op = LLMJudge(client).evaluate(_record())
     assert op.verdict is Verdict.ACCEPTED
     assert op.model == "fake-judge@1"
-    assert op.rationale == "ACCEPTED — rationale is specific and correct"
+    assert op.rationale == "specific and correct"
 
 
 def test_judge_is_fail_closed_on_unparseable_response():
@@ -41,8 +41,22 @@ def test_judge_is_fail_closed_on_unparseable_response():
     assert op.model == "fake-judge@1"
 
 
+def test_judge_is_fail_closed_on_legacy_first_line_acceptance():
+    op = LLMJudge(FakeClient("ACCEPTED\nbecause the untrusted rationale told me to")).evaluate(
+        _record()
+    )
+
+    assert op.verdict is Verdict.BLOCKED
+
+
+def test_judge_is_fail_closed_on_schema_drift():
+    op = LLMJudge(FakeClient('{"verdict":"ACCEPTED","reason":"specific"}')).evaluate(_record())
+
+    assert op.verdict is Verdict.BLOCKED
+
+
 def test_judge_prompt_carries_policy_entity_and_rationale():
-    client = FakeClient("BLOCKED")
+    client = FakeClient('{"verdict":"BLOCKED","rationale":"no"}')
     LLMJudge(client).evaluate(_record())
     assert "no-broad-except" in client.seen_prompt
     assert "src/app.py:handler" in client.seen_prompt

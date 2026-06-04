@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -5,6 +6,8 @@ from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.policy.grammar import AllowlistBoundary, PolicyGrammar
 from legis.store.audit_store import AuditStore
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 
 def _app(tmp_path):

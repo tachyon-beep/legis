@@ -1,4 +1,5 @@
 from legis.canonical import canonical_json, content_hash
+import pytest
 
 
 def test_canonical_json_is_key_order_independent():
@@ -11,3 +12,8 @@ def test_content_hash_is_stable_and_hex():
     assert h1 == h2
     assert len(h1) == 64
     assert all(c in "0123456789abcdef" for c in h1)
+
+
+def test_canonical_json_rejects_non_standard_float_values():
+    with pytest.raises(ValueError):
+        canonical_json({"bad": float("nan")})

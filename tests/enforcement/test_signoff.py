@@ -1,5 +1,6 @@
 from legis.clock import FixedClock
 from legis.enforcement.signoff import SignoffGate
+from legis.canonical import content_hash
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 
@@ -65,6 +66,30 @@ def test_protected_signoff_is_tamper_bound(tmp_path):
     g.sign_off(request_seq=req.seq, operator_id="op-1", rationale="ok")
     ext = store.read_all()[1].payload["extensions"]
     assert ext["signoff_signature"].startswith("hmac-sha256:v2:")
+
+
+def test_protected_signoff_binds_the_original_request_payload(tmp_path):
+    g, store = gate(tmp_path, signer=True, key=b"k")
+    req = g.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_sei("clarion:eid:x"),
+        rationale="ship",
+        agent_id="agent-3",
+        extensions={
+            "clarion": {
+                "alive": True,
+                "content_hash": "source-hash",
+                "lineage_snapshot": {"length": 1, "hash": "lineage-hash"},
+            }
+        },
+    )
+    request_payload = store.read_all()[0].payload
+
+    g.sign_off(request_seq=req.seq, operator_id="op-1", rationale="ok")
+
+    signoff = store.read_all()[1].payload
+    assert signoff["extensions"]["request_payload_hash"] == content_hash(request_payload)
+    assert signoff["extensions"]["signoff_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_signoff_index_bounds_validation(tmp_path):

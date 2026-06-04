@@ -1,4 +1,5 @@
 import pytest
+import sqlite3
 
 from legis.clock import FixedClock
 from legis.enforcement.signing import sign
@@ -101,3 +102,22 @@ def test_malformed_binding_record_is_rejected(tmp_path):
                   "binding_signature": "hmac-sha256:v1:whatever"})
     with pytest.raises(BindingError):
         ledger.verify()
+
+
+def test_broken_append_only_hash_chain_is_rejected(tmp_path):
+    ledger, store = _ledger(tmp_path)
+    ledger.record(signoff_seq=1, issue_id="I-1",
+                  entity_key=EntityKey.from_sei("clarion:eid:x"), content_hash="h1")
+    ledger.record(signoff_seq=2, issue_id="I-2",
+                  entity_key=EntityKey.from_sei("clarion:eid:y"), content_hash="h2")
+    con = sqlite3.connect(tmp_path / "bind.db")
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
+    con.execute("DELETE FROM audit_log WHERE seq=1")
+    con.commit()
+    con.close()
+    assert store.verify_integrity() is False
+
+    with pytest.raises(BindingError, match="hash chain"):
+        ledger.verify()
+    with pytest.raises(BindingError, match="hash chain"):
+        ledger.get(2)

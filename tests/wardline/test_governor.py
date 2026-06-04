@@ -173,19 +173,38 @@ def _mixed_scan():
 
 def test_cell_map_routes_each_finding_by_severity(tmp_path):
     eng = _engine(tmp_path)
-    gate = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
-                       FixedClock("2026-06-02T12:00:00+00:00"))
     cell_map = {
-        WardlineSeverity.CRITICAL: WardlineCellPolicy.BLOCK_ESCALATE,
+        WardlineSeverity.CRITICAL: WardlineCellPolicy.SURFACE_ONLY,
         WardlineSeverity.WARN: WardlineCellPolicy.SURFACE_OVERRIDE,
         WardlineSeverity.INFO: WardlineCellPolicy.SURFACE_ONLY,
     }
     results = route_findings(
         active_defects(_mixed_scan()), cell_map=cell_map, agent_id="a",
         resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
-        engine=eng, signoff=gate)
+        engine=eng)
     by_fp = {r["fingerprint"]: r["mode"] for r in results}
-    assert by_fp == {"c": "block_escalate", "w": "surface_override", "i": "surface_only"}
+    assert by_fp == {"c": "surface_only", "w": "surface_override", "i": "surface_only"}
+
+
+def test_cross_store_cell_map_is_rejected_before_writes(tmp_path):
+    import pytest
+    eng = _engine(tmp_path)
+    gate_store = AuditStore(f"sqlite:///{tmp_path / 's.db'}")
+    gate = SignoffGate(gate_store, FixedClock("2026-06-02T12:00:00+00:00"))
+    cell_map = {
+        WardlineSeverity.CRITICAL: WardlineCellPolicy.BLOCK_ESCALATE,
+        WardlineSeverity.WARN: WardlineCellPolicy.SURFACE_OVERRIDE,
+        WardlineSeverity.INFO: WardlineCellPolicy.SURFACE_ONLY,
+    }
+
+    with pytest.raises(ValueError, match="split cross-store Wardline batches"):
+        route_findings(
+            active_defects(_mixed_scan()), cell_map=cell_map, agent_id="a",
+            resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+            engine=eng, signoff=gate)
+
+    assert eng.trail() == []
+    assert gate_store.read_all() == []
 
 
 def test_unmapped_severity_in_cell_map_is_rejected_before_writes(tmp_path):

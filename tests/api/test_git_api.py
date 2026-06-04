@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
@@ -5,6 +6,8 @@ from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.git.surface import GitError, GitSurface
 from legis.pulls.surface import PullSurface
+
+pytestmark = pytest.mark.usefixtures("unsafe_dev_auth")
 
 
 def client(git_repo):
@@ -108,6 +111,30 @@ def test_git_pulls_recorded_surface_round_trips_and_joins_checks(tmp_path):
     })
     assert update.status_code == 201
     assert c.get("/git/pulls/7").json()["state"] == "merged"
+
+
+def test_git_pulls_record_server_owned_writer_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_API_TOKEN_ACTORS", "forge-sync:writer=token-a")
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    c = TestClient(create_app(pull_surface=pulls))
+
+    post = c.post(
+        "/git/pulls",
+        json={
+            "number": 7,
+            "title": "Add eval guard",
+            "base": "main",
+            "head": "feature/guard",
+            "state": "open",
+            "url": "https://forge/pr/7",
+            "recorded_by": "spoofed",
+        },
+        headers={"Authorization": "Bearer token-a"},
+    )
+
+    assert post.status_code == 201
+    assert post.json()["recorded_by"] == "forge-sync"
+    assert c.get("/git/pulls/7").json()["recorded_by"] == "forge-sync"
 
 
 def test_git_pulls_unknown_pr_is_404(tmp_path):

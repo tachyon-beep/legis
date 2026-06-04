@@ -1,13 +1,16 @@
 import io
 import json
+import sqlite3
 
+from legis.canonical import canonical_json, content_hash
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.cli import build_parser
 from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.protected import ProtectedGate
+from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
+from legis.enforcement.signing import sign
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.git.surface import GitSurface
 from legis.identity.entity_key import EntityKey
@@ -15,7 +18,9 @@ from legis.policy.grammar import AllowlistBoundary, PolicyGrammar
 from legis.policy.cells import PolicyCellRegistry, PolicyCellRule
 from legis.pulls.models import PullRequest, PullRequestState
 from legis.pulls.surface import PullSurface
+from legis.store.audit_store import GENESIS, _chain
 from legis.store.audit_store import AuditStore
+from legis.wardline.ingest import wardline_artifact_fields
 
 
 def _messages(*items):
@@ -41,6 +46,9 @@ class _ScriptedJudge:
         return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
 
 
+KEY = b"protected-key-1"
+
+
 def _runtime(
     tmp_path,
     *,
@@ -56,9 +64,55 @@ def _runtime(
     )
     return McpRuntime(
         agent_id=agent_id,
+        initialized=True,
         engine=engine,
         check_surface=check_surface,
     ), store
+
+
+def _active_scan():
+    return {
+        "findings": [
+            {
+                "rule_id": "PY-WL-101",
+                "message": "untrusted reaches trusted",
+                "severity": "ERROR",
+                "kind": "defect",
+                "fingerprint": "fp1",
+                "qualname": "m.f",
+                "properties": {"actual_return": "UNKNOWN_RAW"},
+                "suppressed": "active",
+            }
+        ]
+    }
+
+
+def _signed_wardline_scan(scan, key=b"wardline-key"):
+    return {**scan, "artifact_signature": sign(wardline_artifact_fields(scan), key)}
+
+
+def _tamper_first_record_and_rechain(db, mutate):
+    con = sqlite3.connect(db)
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
+    seq, payload = con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC LIMIT 1"
+    ).fetchone()
+    p = json.loads(payload)
+    mutate(p)
+    con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(p), seq))
+    prev = GENESIS
+    for s, pl in con.execute(
+        "SELECT seq, payload FROM audit_log ORDER BY seq ASC"
+    ).fetchall():
+        ch = content_hash(json.loads(pl))
+        con.execute(
+            "UPDATE audit_log SET content_hash=?, prev_hash=?, chain_hash=? WHERE seq=?",
+            (ch, prev, _chain(prev, ch), s),
+        )
+        prev = _chain(prev, ch)
+    con.commit()
+    con.close()
 
 
 def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
@@ -69,15 +123,17 @@ def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
 
 def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
     runtime, _store = _runtime(tmp_path)
+    runtime.initialized = False
     responses = _run(
         _messages(
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         ),
         runtime,
     )
 
     assert responses[0]["result"]["serverInfo"]["name"] == "legis"
+    assert responses[0]["result"]["protocolVersion"] == "2025-03-26"
     tools = responses[1]["result"]["tools"]
     by_name = {tool["name"]: tool for tool in tools}
 
@@ -100,7 +156,6 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
     assert "submit_override" not in by_name
     assert "protected_override" not in by_name
     assert "signoff_request" not in by_name
-
     for tool in tools:
         assert not tool["name"].startswith("legis_")
         props = tool["inputSchema"].get("properties", {})
@@ -109,6 +164,59 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
 
     submit_description = by_name["override_submit"]["description"]
     assert "routes to the governing cell" in submit_description
+
+
+def test_tools_reject_before_initialize(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    runtime.initialized = False
+
+    responses = _run(
+        _messages({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
+        runtime,
+    )
+
+    assert responses[0]["error"]["code"] == -32002
+
+
+def test_initialize_rejects_unsupported_protocol_version(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    runtime.initialized = False
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "1999-01-01"},
+            }
+        ),
+        runtime,
+    )
+
+    assert responses[0]["error"]["code"] == -32602
+    assert "2025-03-26" in responses[0]["error"]["data"]["supported"]
+
+
+def test_build_runtime_initialize_does_not_create_local_state(tmp_path, monkeypatch):
+    from legis.mcp import build_runtime
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    monkeypatch.delenv("LEGIS_GOVERNANCE_DB", raising=False)
+    monkeypatch.delenv("LEGIS_CHECK_DB", raising=False)
+    monkeypatch.delenv("LEGIS_PULL_DB", raising=False)
+    runtime = build_runtime("agent-1")
+
+    responses = _run(
+        _messages({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        runtime,
+    )
+
+    assert responses[0]["result"]["serverInfo"]["name"] == "legis"
+    assert not (tmp_path / "legis-governance.db").exists()
+    assert not (tmp_path / "legis-checks.db").exists()
+    assert not (tmp_path / "legis-pulls.db").exists()
 
 
 def test_policy_explain_returns_service_explanation_payload(tmp_path):
@@ -166,7 +274,6 @@ def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tm
                         "policy": "ordinary.policy",
                         "entity": "src/x.py:f",
                         "rationale": "generated file; lint is not applicable",
-                        "agent_id": "spoofed-agent",
                     },
                 },
             }
@@ -183,6 +290,64 @@ def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tm
         "note": "self-cleared; human reviews asynchronously",
     }
     assert store.read_all()[0].payload["agent_id"] == "agent-launch"
+
+
+def test_override_submit_idempotency_key_prevents_duplicate_records(tmp_path):
+    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
+    runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
+    call = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "override_submit",
+            "arguments": {
+                "policy": "ordinary.policy",
+                "entity": "src/x.py:f",
+                "rationale": "generated file; lint is not applicable",
+                "idempotency_key": "retry-1",
+            },
+        },
+    }
+
+    responses = _run(
+        _messages({**call, "id": 1}, {**call, "id": 2}),
+        runtime,
+    )
+
+    assert responses[0]["result"]["structuredContent"]["seq"] == 1
+    assert responses[1]["result"]["structuredContent"]["seq"] == 1
+    assert len(store.read_all()) == 1
+    assert store.read_all()[0].payload["extensions"]["mcp_idempotency_key"] == "retry-1"
+
+
+def test_tools_call_rejects_unexpected_arguments(tmp_path):
+    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
+    runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "ordinary.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "generated file; lint is not applicable",
+                        "agent_id": "spoofed-agent",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert "unexpected" in result["structuredContent"]["message"]
+    assert store.read_all() == []
 
 
 def test_override_submit_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
@@ -337,6 +502,23 @@ def test_override_submit_structured_escalates_and_status_poll_reflects_signoff(t
     assert responses[1]["result"]["structuredContent"] == {"cleared": False, "seq": 1}
     assert store.read_all()[0].payload["agent_id"] == "agent-structured"
 
+    poll_handle = responses[0]["result"]["structuredContent"]["poll_handle"]
+    poll_with_handle = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "signoff_status_get",
+                    "arguments": {"seq": poll_handle},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+    assert poll_with_handle == {"cleared": False, "seq": 1}
+
     runtime.signoff_gate.sign_off(
         request_seq=1, operator_id="op-release", rationale="approved"
     )
@@ -480,22 +662,10 @@ def test_policy_evaluate_returns_unknown_distinct_from_clear(tmp_path):
     assert responses[1]["result"]["structuredContent"]["provenance_gap"] is True
 
 
-def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path):
+def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
     runtime, store = _runtime(tmp_path)
-    scan = {
-        "findings": [
-            {
-                "rule_id": "PY-WL-101",
-                "message": "untrusted reaches trusted",
-                "severity": "ERROR",
-                "kind": "defect",
-                "fingerprint": "fp1",
-                "qualname": "m.f",
-                "properties": {"actual_return": "UNKNOWN_RAW"},
-                "suppressed": "active",
-            }
-        ]
-    }
+    scan = _active_scan()
 
     invalid = _run(
         _messages(
@@ -546,12 +716,144 @@ def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path)
     }
 
 
-def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path):
-    runtime, _store = _runtime(tmp_path)
-    runtime.signoff_gate = SignoffGate(
-        AuditStore(f"sqlite:///{tmp_path / 'signoff.db'}"),
-        FixedClock("2026-06-02T12:00:00+00:00"),
+def test_scan_route_rejects_request_routing_when_server_owned(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+    scan = _active_scan()
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": scan, "cell": "surface_override"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    assert "server-owned" in result["structuredContent"]["message"]
+    assert store.read_all() == []
+
+
+def test_scan_route_defaults_to_server_owned_routing(tmp_path, monkeypatch):
+    monkeypatch.delenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", raising=False)
+    runtime, store = _runtime(tmp_path)
+    scan = _active_scan()
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": scan, "cell": "surface_only"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    assert "server-owned" in result["structuredContent"]["message"]
+    assert store.read_all() == []
+
+
+def test_scan_route_uses_server_owned_cell(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+
+    routed = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _active_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert routed["routed"][0]["mode"] == "surface_only"
+    assert store.read_all()[0].payload["kind"] == "wardline_surfaced"
+
+
+def test_scan_route_requires_signed_artifact_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+    scan = {
+        "scanner_identity": "wardline@1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        **_active_scan(),
+    }
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": scan}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert "artifact signature" in result["structuredContent"]["message"]
+    assert store.read_all() == []
+
+
+def test_scan_route_records_verified_artifact_provenance(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+    scan = _signed_wardline_scan(
+        {
+            "scanner_identity": "wardline@1",
+            "rule_set_version": "rules@abc123",
+            "commit_sha": "a" * 40,
+            "tree_sha": "b" * 40,
+            **_active_scan(),
+        }
     )
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": scan}},
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert result["routed"][0]["mode"] == "surface_only"
+    wardline = store.read_all()[0].payload["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "verified"
+    assert wardline["scanner_identity"] == "wardline@1"
+    assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
+
+
+def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
+    runtime, _store = _runtime(tmp_path)
     scan = {
         "findings": [
             {
@@ -585,11 +887,11 @@ def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path):
                 "method": "tools/call",
                 "params": {
                     "name": "scan_route",
-                    "arguments": {
-                        "scan": scan,
-                        "cell": "block_escalate",
-                        "fail_on": "ERROR",
-                    },
+                        "arguments": {
+                            "scan": scan,
+                            "cell": "surface_override",
+                            "fail_on": "ERROR",
+                        },
                 },
             }
         ),
@@ -597,9 +899,50 @@ def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path):
     )[0]["result"]["structuredContent"]["routed"]
 
     assert {item["fingerprint"]: item["mode"] for item in routed} == {
-        "fp-error": "block_escalate",
+        "fp-error": "surface_override",
         "fp-warn": "surface_only",
     }
+
+
+def test_override_rate_get_fails_closed_on_rechained_protected_tamper(tmp_path):
+    db = tmp_path / "gov.db"
+    store = AuditStore(f"sqlite:///{db}")
+    gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=_ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
+        key=KEY,
+    )
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="original",
+        agent_id="agent-launch",
+        file_fingerprint="fp",
+        ast_path="ap",
+    )
+    _tamper_first_record_and_rechain(db, lambda p: p.update({"rationale": "FORGED"}))
+    assert store.verify_integrity() is True
+
+    runtime, _unused = _runtime(tmp_path)
+    runtime.engine = None
+    runtime.protected_gate = gate
+    runtime.trail_verifier = TrailVerifier(KEY, frozenset({"no-eval"}))
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "override_rate_get", "arguments": {}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
 
 
 def test_read_tools_return_git_pull_checks_and_override_rate(tmp_path, git_repo):
@@ -777,6 +1120,8 @@ def test_check_list_invalid_target_type_is_tool_error(tmp_path):
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
     assert "target_type" in result["structuredContent"]["message"]
+    assert result["structuredContent"]["recoverable"] is True
+    assert "retry" in result["structuredContent"]["next_action"].lower()
 
 
 def test_non_wp_m3_tool_names_are_not_callable(tmp_path):
