@@ -104,6 +104,42 @@ def test_exercise_excludes_uninvoked_nested_helper():
     )
     res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
     assert res.code == "not_exercised"
+
+
+def test_shadowed_when_test_parameter_is_named_after_the_boundary():
+    # A pytest fixture parameter named after the boundary shadows the import;
+    # `guarded(...)` then refers to the fixture, not the real boundary. The
+    # runtime gate flags this today, so the shared evaluator must too.
+    fn = _fn(
+        'def test_x(guarded):\n'
+        '    assert guarded(1) == "ok", "PY-WL-101"\n'
+    )
+    res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
+    assert res.code == "shadowed"
+
+
+# AnnAssign / AugAssign / For-target shadowing and attribute-form boundary calls
+# round out the evaluator's coverage — it is now the single point of failure for
+# both gates. Add one case per construct mirroring the patterns above.
+def test_shadowed_via_for_target():
+    fn = _fn(
+        'def test_x():\n'
+        '    for guarded in range(2):\n'
+        '        pass\n'
+        '    assert True, "PY-WL-101"\n'
+    )
+    res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
+    assert res.code == "shadowed"
+
+
+def test_attribute_form_boundary_call_counts_as_exercise():
+    fn = _fn(
+        'def test_x():\n'
+        '    result = obj.guarded(1)\n'
+        '    assert result == "ok", "PY-WL-101"\n'
+    )
+    res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
+    assert res.ok is True
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -202,8 +238,11 @@ def evaluate_test_evidence(
     if test_fn is not None:
         for node in ast.walk(test_fn):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                if node is test_fn:
-                    continue
+                # NB: do NOT skip `node is test_fn`. The runtime gate checks the
+                # test function's own parameters for boundary-name shadowing
+                # (e.g. `def test_x(guarded):` where `guarded` is the boundary).
+                # The name check below is harmless for the test fn (its name is
+                # never a boundary name), and the arg check below must run on it.
                 if node.name in boundary_names:
                     shadowed = True
                     break
@@ -354,22 +393,61 @@ def test_policy_boundary_exercises_subject():
 
 
 def test_scan_and_runtime_gate_agree_on_a_shared_corpus(tmp_path: Path) -> None:
-    import ast
+    """Convergence keystone: drive BOTH real gates over the same corpus and
+    assert their allow/block verdicts match. This invokes scan_policy_boundaries
+    AND check_policy_boundary (not the shared evaluator alone), so it exercises
+    their differing call sites — the scanner builds boundary_names={node.name};
+    the runtime builds {func.__name__, wrapped.__name__}; the runtime passes a
+    src fallback. Those deltas are exactly what a tautological test would miss.
+    """
+    import inspect
+    import textwrap
 
-    from legis.policy.evidence import evaluate_test_evidence
+    from legis.policy.decorator import check_policy_boundary, fingerprint, policy_boundary
 
-    corpus = {
-        "ok": 'def test_x():\n    result = guarded({"p": "PY-WL-101"})\n    assert result == "ok", "PY-WL-101"\n',
-        "weak": 'def test_x():\n    note = "PY-WL-101"\n    result = guarded(1)\n    assert result == "ok"\n',
-        "unexercised": 'def test_x():\n    assert "PY-WL-101"\n',
-    }
-    for body in corpus.values():
-        fn = next(n for n in ast.parse(body).body if isinstance(n, ast.FunctionDef))
-        # The evaluator is the single source both gates consult; asserting it is
-        # deterministic over the corpus pins their agreement.
-        first = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
-        second = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
-        assert first == second
+    # Corpus: each is a real test function; `guarded` is the boundary subject.
+    # They are inspected, never executed, so the free `guarded`/`note` names are fine.
+    def test_ok():
+        result = guarded({"p": "PY-WL-101"})  # noqa: F821
+        assert result == "ok", "PY-WL-101"
+
+    def test_weak():
+        note = "PY-WL-101"  # noqa: F841 — policy mentioned outside the assert
+        result = guarded(1)  # noqa: F821
+        assert result == "ok"
+
+    def test_unexercised():
+        assert "PY-WL-101"
+
+    for test_fn in (test_ok, test_weak, test_unexercised):
+        name = test_fn.__name__
+        fp = fingerprint(test_fn)
+
+        @policy_boundary(
+            source="docs/spec.md:1",
+            suppresses=("PY-WL-101",),
+            invariant="boundary holds",
+            test_ref=f"tests/test_case.py::{name}",
+            test_fingerprint=fp,
+        )
+        def guarded(payload):
+            return "ok"
+
+        runtime_ok = check_policy_boundary(guarded, lambda ref, _fn=test_fn: _fn).ok
+
+        src_dir = tmp_path / name / "src" / "pkg"
+        tests_dir = tmp_path / name / "tests"
+        tests_dir.mkdir(parents=True)
+        _write_boundary_subject(
+            src_dir, test_ref=f"tests/test_case.py::{name}", test_fingerprint=fp
+        )
+        # Same source on disk (dedented top-level) → matching fingerprint.
+        (tests_dir / "test_case.py").write_text(
+            textwrap.dedent(inspect.getsource(test_fn)), encoding="utf-8"
+        )
+        scanner_ok = scan_policy_boundaries(src_dir, repo_root=tmp_path / name) == []
+
+        assert runtime_ok == scanner_ok, f"gates disagree on {name!r}"
 ```
 
 - [ ] **Step 2: Update the one existing assertion that changes**
@@ -482,6 +560,32 @@ def test_policy_boundary_check_passes_when_no_findings(monkeypatch, capsys, tmp_
 
     assert rc == 0
     assert "policy-boundary-check: PASS" in capsys.readouterr().out
+
+
+def test_policy_boundary_check_end_to_end_flags_weak_boundary(tmp_path):
+    # Non-mocked: prove the CLI's argument wiring actually reaches the scanner.
+    # A monkeypatched-only test would pass even if --root/--repo-root were
+    # mis-wired, because src/ has no real decorators.
+    from legis.cli import main
+
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    (src / "subject.py").write_text(
+        'from legis.policy.decorator import policy_boundary\n\n'
+        '@policy_boundary(source="docs/spec.md:1", suppresses=("PY-WL-101",),\n'
+        '    invariant="x", test_ref="tests/test_subject.py::test_x", test_fingerprint="stale")\n'
+        'def guarded(payload):\n    return "ok"\n',
+        encoding="utf-8",
+    )
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_subject.py").write_text(
+        'def test_x():\n    assert guarded(1) == "ok", "PY-WL-101"\n', encoding="utf-8"
+    )
+
+    rc = main(["policy-boundary-check", "--root", str(src), "--repo-root", str(tmp_path)])
+
+    assert rc == 1  # stale fingerprint → a real finding through the real scanner
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -509,7 +613,7 @@ In `build_parser()`, after the existing subparsers are added (before `return par
     boundary.add_argument("--format", choices=("text", "json"), default="text")
 ```
 
-In `main()`, before the final fall-through `return 1`, add:
+In `main()`, before the final fall-through (`parser.print_help(sys.stderr)` then `return 2`, around line 273), add:
 
 ```python
     if args.command == "policy-boundary-check":
@@ -593,6 +697,20 @@ def test_working_tree_renames_detects_uncommitted_rename(git_repo):
     assert evidence[0].commit_sha == "WORKTREE"
     assert evidence[0].old_path == "renamed.txt"
     assert evidence[0].new_path == "moved.txt"
+
+
+def test_working_tree_renames_rejects_unsafe_base_ref(git_repo):
+    import pytest
+
+    from legis.git.surface import GitError
+
+    s = GitSurface(git_repo)
+    # Mirror the sibling test_git_surface_command_injection_mitigation coverage:
+    # an option-like or metacharacter ref must raise before any git invocation.
+    with pytest.raises(GitError):
+        s.working_tree_renames("-o")
+    with pytest.raises(GitError):
+        s.working_tree_renames("HEAD; echo pwned")
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -752,7 +870,7 @@ git commit -m "feat(git): add Clarion-ready rename feed builder"
 
 - [ ] **Step 1: Write the failing API test**
 
-Create `tests/api/test_git_api.py`:
+Append to `tests/api/test_git_api.py` (the file already exists with git endpoint tests):
 
 ```python
 from fastapi.testclient import TestClient
@@ -858,6 +976,8 @@ def test_git_rename_feed_get_returns_committed_renames(git_repo, monkeypatch):
 
 (`call_tool(runtime, name, args)` is the dispatch entry point; success returns `{"content": [...], "structuredContent": <value>}`, errors return `{"isError": True, "structuredContent": {"error_code": ...}}`.)
 
+ALSO update the existing strict-equality surface assertion in `tests/mcp/test_server.py::test_initialize_and_tools_list_exposes_full_agent_surface` (the `assert set(by_name) == {...}` near line 168) — add `"git_rename_feed_get"` to the expected set. Without this the full suite fails at Task 13.
+
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/mcp/test_server.py -k git_rename_feed -q`
@@ -889,7 +1009,7 @@ In `tool_definitions()`, after the `git_rename_list` entry (line 250), add:
         },
 ```
 
-In the dispatch chain, after the `git_rename_list` block (line 870), add:
+In the dispatch chain, after the `git_rename_list` block (locate by content — `if name == "git_rename_list":`, around line 861), add:
 
 ```python
         if name == "git_rename_feed_get":
@@ -945,9 +1065,23 @@ def test_get_by_issue_id_returns_none_when_absent(binding_ledger_factory):
     ledger, _ = binding_ledger_factory(issue_id="ISSUE-7")
 
     assert ledger.get_by_issue_id("ISSUE-MISSING") is None
+
+
+def test_get_by_issue_id_raises_on_tampered_ledger(binding_ledger_factory):
+    # Fail-closed: get_by_issue_id() calls verify() first, so a forged record
+    # must raise BindingError rather than return data. Mirror the existing
+    # test_forged_signature_is_rejected pattern in this file (mutate a stored
+    # row / signature, then read).
+    from legis.governance.binding_ledger import BindingError
+
+    ledger, _ = binding_ledger_factory(issue_id="ISSUE-7")
+    _tamper_the_ledger_store(ledger)  # corrupt a signature/row as the sibling test does
+
+    with pytest.raises(BindingError):
+        ledger.get_by_issue_id("ISSUE-7")
 ```
 
-Note: if `tests/governance/test_binding_ledger.py` does not exist or has no `binding_ledger_factory`, construct the ledger inline exactly as the existing `record`/`get` tests in the repo do (`BindingLedger(AuditStore(...), clock, key)` then `.record(signoff_seq=..., issue_id=..., entity_key=..., content_hash=...)`), and assert against `get_by_issue_id`.
+Note: this file's existing helper is `_ledger(tmp_path)` returning `(BindingLedger, store)` and there is an existing `test_forged_signature_is_rejected`. Reuse them — do NOT invent `binding_ledger_factory`/`_tamper_the_ledger_store`; mirror the real helper names. Construct the ledger inline as the existing `record`/`get` tests do (`BindingLedger(AuditStore(...), clock, key)` then `.record(...)`), and reproduce the forgery exactly as `test_forged_signature_is_rejected` does.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1104,25 +1238,54 @@ git commit -m "feat(governance): add Filigree closure-gate decision function"
 Append to `tests/api/test_combinations_api.py` (mirror this file's existing app-construction helper that supplies a `binding_ledger`; if it builds the app via a fixture, reuse it):
 
 ```python
-def test_closure_gate_404_when_ledger_disabled():
+def test_closure_gate_404_when_ledger_disabled(monkeypatch):
     from fastapi.testclient import TestClient
 
     from legis.api.app import create_app
 
+    # create_app auto-builds a ledger from LEGIS_HMAC_KEY when binding_ledger is
+    # None — clear it so "disabled" really means disabled (else CI with the key
+    # set returns 409, not 404).
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
     client = TestClient(create_app(binding_ledger=None))
-    # An app with no binding ledger configured (no LEGIS_HMAC_KEY) reports 404.
+
     resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
-    assert resp.status_code in (404,)
+    assert resp.status_code == 404
 
 
-def test_closure_gate_409_when_no_binding(closure_gate_client):
-    # closure_gate_client: a TestClient whose app has an empty-but-enabled ledger.
-    resp = closure_gate_client.get("/filigree/issues/ISSUE-UNBOUND/closure-gate")
+def test_closure_gate_409_when_no_binding():
+    # Empty-but-enabled ledger → blocked.
+    client = _client_with_ledger(_empty_ledger())
+    resp = client.get("/filigree/issues/ISSUE-UNBOUND/closure-gate")
     assert resp.status_code == 409
     assert resp.json()["allowed"] is False
+
+
+def test_closure_gate_200_on_real_verified_binding():
+    # The ALLOW path must be exercised against a REAL recorded binding, not a
+    # fake. Record a binding, then assert the endpoint returns 200/allowed:true.
+    ledger = _empty_ledger()
+    _record_binding(ledger, issue_id="ISSUE-7")  # mirror test_bind_issue_records_to_ledger
+    client = _client_with_ledger(ledger)
+
+    resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
+    assert resp.status_code == 200
+    assert resp.json()["allowed"] is True
+
+
+def test_closure_gate_500_on_integrity_failure():
+    # Tampered ledger → BindingError → 500 (fail-closed). Mirror the existing
+    # test_binding_read_500_on_forged_record in this file.
+    ledger = _empty_ledger()
+    _record_binding(ledger, issue_id="ISSUE-7")
+    _forge_a_ledger_record(ledger)  # recompute the unkeyed chain, break the HMAC
+    client = _client_with_ledger(ledger)
+
+    resp = client.get("/filigree/issues/ISSUE-7/closure-gate")
+    assert resp.status_code == 500
 ```
 
-Note: build `closure_gate_client` by constructing `create_app(binding_ledger=<empty BindingLedger>)` the same way other tests in this file inject governance components. If the file lacks such a helper, construct an in-memory `BindingLedger` (`AuditStore("sqlite://")`, a test `Clock`, a test key) with no records and pass it to `create_app`.
+Note: this file already injects ledger-backed clients and forges records — reuse those exact helpers/patterns (the existing `test_bind_issue_records_to_ledger_and_binding_is_verifiable` and `test_binding_read_500_on_forged_record`, around lines 216-300). Do NOT invent `_empty_ledger`/`_client_with_ledger`/`_record_binding`/`_forge_a_ledger_record` if equivalents exist; bind to the real names. The construction is: in-memory `BindingLedger(AuditStore("sqlite://"), clock, key)`, `.record(...)` a binding, pass via `create_app(binding_ledger=...)`, and reproduce the forgery the sibling 500 test uses.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1198,6 +1361,28 @@ def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):
     assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
 ```
 
+ALSO add a tamper-path MCP test asserting governance-specific error-code parity (see Step 3 for the `_service_error` mapping it depends on):
+
+```python
+def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_path):
+    # A tampered binding ledger must surface AUDIT_INTEGRITY_FAILURE via MCP,
+    # mirroring the HTTP 500 path — not a generic INTERNAL_ERROR.
+    from legis.governance.binding_ledger import BindingError
+    from legis.mcp import McpRuntime, call_tool
+
+    class _TamperedLedger:
+        def get_by_issue_id(self, issue_id):
+            raise BindingError("hash chain integrity check failed")
+
+    runtime = McpRuntime(agent_id="agent-1", binding_ledger=_TamperedLedger())
+    result = call_tool(runtime, "filigree_closure_gate_get", {"issue_id": "ISSUE-7"})
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+```
+
+ALSO update the strict-equality surface assertion in `test_initialize_and_tools_list_exposes_full_agent_surface` (near line 168) — add `"filigree_closure_gate_get"` to the expected set.
+
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/mcp/test_server.py -k filigree_closure_gate -q`
@@ -1260,6 +1445,19 @@ In the dispatch chain, add:
             return _tool_result(
                 evaluate_issue_closure(runtime.binding_ledger, issue_id=_require(args, "issue_id"))
             )
+```
+
+Then map `BindingError` to the governance-specific code so a tampered ledger surfaces `AUDIT_INTEGRITY_FAILURE` (HTTP-parity), not the generic `INTERNAL_ERROR` it currently falls through to. In `src/legis/mcp.py`, in `_service_error`, add a branch alongside the existing `AuditIntegrityError` branch:
+
+```python
+    if isinstance(exc, BindingError):
+        return _tool_error("AUDIT_INTEGRITY_FAILURE", str(exc))
+```
+
+Add the import at the top of `src/legis/mcp.py` if absent:
+
+```python
+from legis.governance.binding_ledger import BindingError
 ```
 
 - [ ] **Step 4: Run the MCP tests**
@@ -1357,6 +1555,11 @@ git commit -m "docs: record legis home closeout implementation notes"
 ## Out of Scope (follow-on specs)
 
 - Filigree's `close_issue` / `api_close_issue` calling the closure gate.
-- Clarion re-pointing from `/git/renames` to `/git/rename-feed`.
+- Clarion re-pointing from `/git/renames` to `/git/rename-feed`. **When that lands, add a contract-lock test for `/git/rename-feed`** — its response is an object `{status, base, head, committed, working_tree}`, whereas `/git/renames` is a flat array, and Clarion's `parse_legis_rename_json` expects an array. The consumer must read `.committed`, not the top-level body.
 - Live cross-repo handshake integration tests.
-- The RC2 MCP parity hardening (C1/C2/C3) — separately scoped on the `rc2-mcp-parity` branch.
+- The RC2 MCP parity hardening (C1/C2/C3) — separately scoped on the `rc2-mcp-parity` branch. Note: Task 12 adds a `BindingLedger` to `build_runtime`, which writes `legis-binding.db` on MCP startup when `LEGIS_HMAC_KEY` is set (extends the audit's L3 side-effect; `create_all` is idempotent, no data risk). Track L3 remediation with the RC2 work.
+
+## Plan-review follow-ups (fold into the named task)
+
+- **Task 9:** add a "last binding wins" test — record two bindings for one `issue_id`, assert `get_by_issue_id` returns the second. This pins the documented rebind semantics.
+- **Task 6:** decide whether `include_worktree=True` with zero working-tree renames should stay `status="committed_only"` (it conflates "checked, clean" with "not checked"). If a consumer needs to distinguish them, add a `worktree_checked: bool` field and a test; otherwise document the conflation in the module docstring.
