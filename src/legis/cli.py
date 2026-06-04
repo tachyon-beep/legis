@@ -11,6 +11,23 @@ from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_
 from legis.store.audit_store import AuditStore
 
 
+def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--judge-provider",
+        choices=("openrouter",),
+        help="LLM judge provider. Omit to keep protected cells fail-closed.",
+    )
+    parser.add_argument(
+        "--judge-model",
+        help="LLM judge model id. Falls back to LEGIS_JUDGE_MODEL.",
+    )
+    parser.add_argument(
+        "--judge-max-tokens",
+        type=int,
+        help="Maximum judge response tokens. Falls back to LEGIS_JUDGE_MAX_TOKENS.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="legis", description="Legis CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -42,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--binding-db",
         help="Signoff-binding ledger URL (falls back to LEGIS_BINDING_DB env var)",
     )
+    _add_judge_flags(serve)
 
     mcp = subparsers.add_parser("mcp", help="Run the Legis MCP stdio server")
     mcp.add_argument("--agent-id", required=True, help="Launch-bound agent identity")
@@ -65,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--clarion-url",
         help="Clarion identity API URL (falls back to CLARION_API_URL env var)",
     )
+    _add_judge_flags(mcp)
 
     import os
     gov_db_default = os.environ.get("LEGIS_GOVERNANCE_DB", "sqlite:///legis-governance.db")
@@ -123,6 +142,17 @@ def _missing_sqlite_db(url: str) -> Path | None:
         return None
     path = Path(database)
     return path if not path.exists() else None
+
+
+def _apply_judge_env(args) -> None:
+    import os
+
+    if getattr(args, "judge_provider", None):
+        os.environ["LEGIS_JUDGE_PROVIDER"] = args.judge_provider
+    if getattr(args, "judge_model", None):
+        os.environ["LEGIS_JUDGE_MODEL"] = args.judge_model
+    if getattr(args, "judge_max_tokens", None) is not None:
+        os.environ["LEGIS_JUDGE_MAX_TOKENS"] = str(args.judge_max_tokens)
 
 
 def _check_override_rate(db_url: str) -> int:
@@ -192,6 +222,7 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
             os.environ["FILIGREE_API_URL"] = args.filigree_url
         if args.binding_db:
             os.environ["LEGIS_BINDING_DB"] = args.binding_db
+        _apply_judge_env(args)
 
         run("legis.api.app:create_app", host=args.host, port=args.port, factory=True)
         return 0
@@ -222,6 +253,7 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
             os.environ["LEGIS_CHECK_DB"] = args.check_db
         if args.policy_cells:
             os.environ["LEGIS_POLICY_CELLS"] = args.policy_cells
+        _apply_judge_env(args)
 
         from legis.mcp import main as mcp_main
 
