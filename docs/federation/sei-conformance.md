@@ -1,5 +1,7 @@
 # Stable Entity Identity (SEI) Conformance Notes
 
+> The authoritative SEI standard lives in the Loom hub at `~/loom/sei-standard.md` (promoted there from the Wardline specs tree, 2026-06-05). All "SEI spec §N" references below are to that document. This file is Legis's own **consumer-side** conformance notes — its obligations, REQ-L-01/02, and resolutions — not a restatement of the standard.
+
 Legis is a **consumer** of Stable Entity Identity (SEI), not the authority.
 
 ## Core posture

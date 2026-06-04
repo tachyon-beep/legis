@@ -2,11 +2,15 @@
 
 Legis is the fourth Loom product: the git/CI and governance side of the suite's common operating picture.
 
+> The authoritative Loom federation roster and axiom live in the hub at `~/loom/doctrine.md`. This README does not independently restate the roster; Legis's "fourth Loom product" framing is its own self-description, consistent with the hub's ruling (Legis is a realized member). See `~/loom/members/legis.md` for Legis's thin briefing.
+
 ## Status
 
 Legis is at **`1.0.0rc1`** — the first release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Clarion is contract-locked, operative pending Clarion's committed-range driving. The transport-agnostic service layer (WP-M1) underpinning the forthcoming agent-facing MCP surface has landed. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
 
 ## The Loom suite
+
+> Federation roster and axiom are authoritative in the hub at `~/loom/doctrine.md`. The framing below describes the substrate from Legis's vantage point and is not the canonical roster — consult the hub for that.
 
 Loom is a suite of four tools that share a single substrate: a codebase modelled as **entities**, each carrying typed facts from different tools, all keyed on one durable identity, all freshness-honest, all consumable in one call.
 

@@ -1,5 +1,7 @@
 # Federation Notes
 
+> The Loom federation hub at `~/loom` is the authoritative source for federation-wide patterns: the roster and axiom (`~/loom/doctrine.md`), the SEI conformance standard (`~/loom/sei-standard.md`), and the contracts index (`~/loom/contracts-index.md`). This directory holds Legis's own participation and consumer-conformance notes; it does not restate those federation-wide patterns.
+
 This directory describes how Legis is expected to participate in Loom as a planned product.
 
 ## Legis in the federation
