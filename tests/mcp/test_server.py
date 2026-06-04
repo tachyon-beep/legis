@@ -71,7 +71,7 @@ def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
     assert args.agent_id == "agent-1"
 
 
-def test_initialize_and_tools_list_hide_actor_identity_arguments(tmp_path):
+def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
     runtime, _store = _runtime(tmp_path)
     responses = _run(
         _messages(
@@ -83,21 +83,24 @@ def test_initialize_and_tools_list_hide_actor_identity_arguments(tmp_path):
     assert responses[0]["result"]["serverInfo"]["name"] == "legis"
     tools = responses[1]["result"]["tools"]
     by_name = {tool["name"]: tool for tool in tools}
-    assert {
-        "submit_override",
-        "protected_override",
-        "policy_evaluate",
-        "wardline_scan_results",
-        "list_overrides",
-    } <= set(by_name)
+
+    assert set(by_name) == {
+        "legis_explain",
+        "legis_submit_override",
+        "legis_checks_for",
+    }
+    assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
+    assert "operator_override" not in by_name
+
     for tool in tools:
+        assert tool["name"].startswith("legis_")
         props = tool["inputSchema"].get("properties", {})
         assert "agent_id" not in props
         assert "operator_id" not in props
-    wardline_props = by_name["wardline_scan_results"]["inputSchema"]["properties"]
-    assert "cell" not in wardline_props
-    assert "cell_by_severity" not in wardline_props
+
+    submit_description = by_name["legis_submit_override"]["description"]
+    assert "records one new chill-cell override attempt" in submit_description
 
 
 def test_submit_override_tool_records_launch_agent_not_tool_arguments(tmp_path):

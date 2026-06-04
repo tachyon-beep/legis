@@ -148,21 +148,28 @@ def _schema(required: list[str], properties: dict[str, dict[str, Any]]) -> dict[
 
 def tool_definitions() -> list[dict[str, Any]]:
     string = {"type": "string"}
-    object_schema = {"type": "object"}
     return [
         {
-            "name": "submit_override",
-            "description": "Submit a simple-tier governance override as the launch-bound agent.",
+            "name": "legis_explain",
+            "description": (
+                "Explain which governance cell controls a policy/entity pair, "
+                "whether that cell is enabled on this server, and which move the "
+                "agent may make next."
+            ),
             "inputSchema": _schema(
-                ["policy", "entity", "rationale"],
-                {"policy": string, "entity": string, "rationale": string},
+                ["policy", "entity"],
+                {"policy": string, "entity": string},
             ),
         },
         {
-            "name": "protected_override",
-            "description": "Submit a protected-cell override as the launch-bound agent.",
+            "name": "legis_submit_override",
+            "description": (
+                "Submit an override as the launch-bound agent. In WP-M3 this "
+                "records one new chill-cell override attempt; repeated calls "
+                "create repeated audit records."
+            ),
             "inputSchema": _schema(
-                ["policy", "entity", "rationale", "file_fingerprint", "ast_path"],
+                ["policy", "entity", "rationale"],
                 {
                     "policy": string,
                     "entity": string,
@@ -173,35 +180,15 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
         },
         {
-            "name": "signoff_request",
-            "description": "Open a structured sign-off request as the launch-bound agent.",
-            "inputSchema": _schema(
-                ["policy", "entity", "rationale"],
-                {"policy": string, "entity": string, "rationale": string},
+            "name": "legis_checks_for",
+            "description": (
+                "Read recorded CI/check outcomes for a commit, branch, or pull "
+                "request target."
             ),
-        },
-        {
-            "name": "policy_evaluate",
-            "description": "Evaluate a policy grammar boundary.",
             "inputSchema": _schema(
-                ["policy", "target"],
-                {"policy": string, "target": object_schema},
+                ["target_type", "target"],
+                {"target_type": string, "target": string},
             ),
-        },
-        {
-            "name": "wardline_scan_results",
-            "description": "Route a Wardline scan using server-owned routing policy.",
-            "inputSchema": _schema(["scan"], {"scan": object_schema}),
-        },
-        {
-            "name": "list_overrides",
-            "description": "Read the verified governance trail.",
-            "inputSchema": _schema([], {}),
-        },
-        {
-            "name": "override_rate",
-            "description": "Evaluate the configured override-rate gate.",
-            "inputSchema": _schema([], {}),
         },
     ]
 
