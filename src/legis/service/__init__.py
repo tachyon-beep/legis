@@ -13,6 +13,7 @@ from legis.service.errors import (
     NotFoundError,
     ServiceError,
 )
+from legis.service.explain import PolicyExplanation, RequiredInput, explain_policy
 from legis.service.governance import (
     compute_override_rate,
     evaluate_policy,
@@ -31,8 +32,11 @@ __all__ = [
     "InvalidArgumentError",
     "NotEnabledError",
     "NotFoundError",
+    "PolicyExplanation",
+    "RequiredInput",
     "compute_override_rate",
     "evaluate_policy",
+    "explain_policy",
     "request_signoff",
     "resolve_for_record",
     "submit_override",

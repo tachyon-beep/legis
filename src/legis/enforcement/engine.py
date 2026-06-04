@@ -45,6 +45,10 @@ class EnforcementEngine:
         self._clock = clock
         self._judge = judge
 
+    @property
+    def has_judge(self) -> bool:
+        return self._judge is not None
+
     def submit_override(
         self,
         *,
