@@ -1,4 +1,5 @@
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -85,3 +86,13 @@ def test_load_policy_cells_propagates_toml_decode_errors(tmp_path):
 
     with pytest.raises(tomllib.TOMLDecodeError):
         load_policy_cells(path)
+
+
+def test_repository_default_policy_cells_file_loads():
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_policy_cells(repo_root / "policy" / "cells.toml")
+
+    assert registry.cell_for("import-allowlist") == "coached"
+    assert registry.cell_for("protected.source-integrity") == "protected"
+    assert registry.cell_for("human.release-signoff") == "structured"
+    assert registry.cell_for("ordinary.policy") == "chill"
