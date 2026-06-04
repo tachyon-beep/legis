@@ -28,6 +28,8 @@ jobs:
         run: uv run pytest tests/conformance/test_live_clarion_oracle.py
       - name: Run type check
         run: uv run mypy src/legis
+      - name: Run policy-boundary honesty gate
+        run: uv run legis policy-boundary-check --root src --repo-root .
 
   override-rate:
     runs-on: ubuntu-latest
