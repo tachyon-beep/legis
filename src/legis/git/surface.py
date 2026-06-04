@@ -172,6 +172,35 @@ class GitSurface:
             )
         return evidence
 
+    def working_tree_renames(self, base: str) -> list[RenameEvidence]:
+        import re
+        if base.startswith("-") or not re.match(r"^[a-zA-Z0-9_/.~^-]+$", base):
+            raise GitError(f"invalid base ref: {base}")
+        out = self._run("diff", "-M", "--name-status", base)
+        evidence: list[RenameEvidence] = []
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            status, _, rest = line.partition("\t")
+            if not status.startswith("R"):
+                continue
+            old_path, _, new_path = rest.partition("\t")
+            similarity = int(status[1:]) if status[1:].isdigit() else 0
+            old_blob = self._blob(base, old_path)
+            new_blob_result = self._run_raw("hash-object", "--", new_path)
+            new_blob = new_blob_result.stdout.strip() if new_blob_result.returncode == 0 else ""
+            evidence.append(
+                RenameEvidence(
+                    commit_sha="WORKTREE",
+                    old_path=old_path,
+                    new_path=new_path,
+                    similarity=similarity,
+                    old_blob=old_blob,
+                    new_blob=new_blob,
+                )
+            )
+        return evidence
+
     def _blob(self, rev: str, path: str) -> str:
         """The git object SHA of ``path`` at ``rev`` ("" if it cannot be resolved)."""
         result = self._run_raw("rev-parse", f"{rev}:{path}")
