@@ -98,6 +98,17 @@ def test_git_pulls_recorded_surface_round_trips_and_joins_checks(tmp_path):
     assert body["state"] == "open"
     assert [ck["check_name"] for ck in body["checks"]] == ["wardline"]
 
+    update = c.post("/git/pulls", json={
+        "number": 7,
+        "title": "Add eval guard",
+        "base": "main",
+        "head": "feature/guard",
+        "state": "merged",
+        "url": "https://forge/pr/7",
+    })
+    assert update.status_code == 201
+    assert c.get("/git/pulls/7").json()["state"] == "merged"
+
 
 def test_git_pulls_unknown_pr_is_404(tmp_path):
     c = TestClient(create_app(pull_surface=PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")))

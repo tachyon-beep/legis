@@ -1,13 +1,22 @@
+import hashlib
+import hmac
+
 import pytest
 
-from legis.identity.clarion_client import ClarionError, HttpClarionIdentity, _urllib_fetch
+from legis.identity.clarion_client import (
+    ClarionError,
+    HttpClarionIdentity,
+    clarion_hmac_key_from_env,
+    sign_clarion_request,
+    _urllib_fetch,
+)
 
 
 def _fake_fetch(responses):
     calls = []
 
-    def fetch(method, url, body):
-        calls.append((method, url, body))
+    def fetch(method, url, body, headers):
+        calls.append((method, url, body, dict(headers)))
         for (m, suffix), resp in responses.items():
             if method == m and url.endswith(suffix):
                 return resp
@@ -32,7 +41,37 @@ def test_resolve_locator_alive_passthrough():
     fetch = _fake_fetch({("POST", "/api/v1/identity/resolve"): body})
     c = HttpClarionIdentity("http://localhost", fetch=fetch)
     assert c.resolve_locator("python:function:m.f") == body
-    assert fetch.calls[-1] == ("POST", "http://localhost/api/v1/identity/resolve", {"locator": "python:function:m.f"})
+    assert fetch.calls[-1] == (
+        "POST",
+        "http://localhost/api/v1/identity/resolve",
+        {"locator": "python:function:m.f"},
+        {},
+    )
+
+
+def test_resolve_batch_posts_locators_to_clarion_batch_endpoint():
+    body = {
+        "resolved": {
+            "python:function:m.f": {
+                "sei": "clarion:eid:abc",
+                "current_locator": "python:function:m.f",
+                "content_hash": "h",
+                "alive": True,
+            }
+        },
+        "invalid": ["malformed"],
+        "not_found": ["python:function:gone"],
+    }
+    fetch = _fake_fetch({("POST", "/api/v1/identity/resolve:batch"): body})
+    c = HttpClarionIdentity("http://localhost", fetch=fetch)
+
+    assert c.resolve_batch(["python:function:m.f", "python:function:gone"]) == body
+    assert fetch.calls[-1] == (
+        "POST",
+        "http://localhost/api/v1/identity/resolve:batch",
+        {"locators": ["python:function:m.f", "python:function:gone"]},
+        {},
+    )
 
 
 def test_resolve_sei_orphaned_carries_lineage():
@@ -54,6 +93,64 @@ def test_resolve_sei_escapes_path_traversal_payload():
     c = HttpClarionIdentity("http://localhost", fetch=fetch)
     c.resolve_sei("../../admin/delete")
     assert fetch.calls[-1][1] == "http://localhost/api/v1/identity/sei/..%2F..%2Fadmin%2Fdelete"
+
+
+def test_sign_clarion_request_matches_clarion_hmac_contract():
+    body = {"locator": "python:function:m.f"}
+    body_bytes = b'{"locator":"python:function:m.f"}'
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    message = (
+        "POST\n/api/v1/identity/resolve\n"
+        f"{body_hash}\n1900000000\nnonce-1"
+    ).encode("utf-8")
+    expected = hmac.new(b"s3cr3t", message, hashlib.sha256).hexdigest()
+
+    headers = sign_clarion_request(
+        b"s3cr3t",
+        "POST",
+        "http://localhost/api/v1/identity/resolve",
+        body,
+        timestamp=1_900_000_000,
+        nonce="nonce-1",
+    )
+
+    assert headers == {
+        "X-Loom-Component": f"clarion:{expected}",
+        "X-Loom-Timestamp": "1900000000",
+        "X-Loom-Nonce": "nonce-1",
+    }
+
+
+def test_resolve_locator_sends_loom_hmac_headers_when_key_is_provisioned():
+    body = {"sei": "clarion:eid:abc", "current_locator": "python:function:m.f", "content_hash": "h", "alive": True}
+    fetch = _fake_fetch({("POST", "/api/v1/identity/resolve"): body})
+    c = HttpClarionIdentity(
+        "http://localhost",
+        fetch=fetch,
+        hmac_key="s3cr3t",
+        clock=lambda: 1_900_000_000,
+        nonce_factory=lambda: "nonce-1",
+    )
+
+    assert c.resolve_locator("python:function:m.f") == body
+
+    headers = fetch.calls[-1][3]
+    expected = sign_clarion_request(
+        b"s3cr3t",
+        "POST",
+        "http://localhost/api/v1/identity/resolve",
+        {"locator": "python:function:m.f"},
+        timestamp=1_900_000_000,
+        nonce="nonce-1",
+    )
+    assert headers == expected
+
+
+def test_clarion_hmac_key_from_env_prefers_clarion_specific_key(monkeypatch):
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "general-secret")
+    monkeypatch.setenv("LEGIS_CLARION_HMAC_KEY", "clarion-secret")
+
+    assert clarion_hmac_key_from_env() == b"clarion-secret"
 
 
 def test_resolve_locator_rejects_non_object_response():

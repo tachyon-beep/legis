@@ -73,6 +73,14 @@ def test_unsafe_dev_flag_allows_unauthenticated_local_writes(monkeypatch):
         }),
         ("post", "/signoff/1/bind-issue", {"issue_id": "ISSUE-1"}),
         ("post", "/policy/evaluate", {"policy": "unknown", "target": {}}),
+        ("post", "/git/pulls", {
+            "number": 7,
+            "title": "Add eval guard",
+            "base": "main",
+            "head": "feature/guard",
+            "state": "open",
+            "url": "https://forge/pr/7",
+        }),
         ("post", "/wardline/scan-results", {
             "cell": "surface_only",
             "agent_id": "agent-1",

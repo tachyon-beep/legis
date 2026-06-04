@@ -1,8 +1,14 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
 import uvicorn
+
+from legis.clock import SystemClock
+from legis.governance.sei_backfill import run_pre_sei_backfill
+from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
+from legis.store.audit_store import AuditStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,6 +83,30 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument(
         "--db", default=gov_db_default,
         help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
+    )
+    backfill = subparsers.add_parser(
+        "sei-backfill",
+        help="Resolve legacy locator-keyed governance records through Clarion batch resolve",
+    )
+    backfill.add_argument(
+        "--db",
+        default=gov_db_default,
+        help="Governance store URL (falls back to LEGIS_GOVERNANCE_DB env var)",
+    )
+    backfill.add_argument(
+        "--clarion-url",
+        required=True,
+        help="Clarion identity API URL",
+    )
+    backfill.add_argument(
+        "--execute",
+        action="store_true",
+        help="Append backfill events. Omit for a dry-run report.",
+    )
+    backfill.add_argument(
+        "--actor",
+        default="legis-sei-backfill",
+        help="Actor stamped on appended backfill events",
     )
 
     return parser
@@ -168,6 +198,17 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
 
     if args.command in {"check-override-rate", "governance-gate"}:
         return _check_override_rate(args.db)
+
+    if args.command == "sei-backfill":
+        report = run_pre_sei_backfill(
+            AuditStore(args.db),
+            HttpClarionIdentity(args.clarion_url, hmac_key=clarion_hmac_key_from_env()),
+            SystemClock(),
+            dry_run=not args.execute,
+            actor=args.actor,
+        )
+        print(json.dumps(report.to_dict(), sort_keys=True))
+        return 0
 
     if args.command == "mcp":
         import os

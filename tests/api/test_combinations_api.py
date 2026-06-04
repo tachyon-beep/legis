@@ -302,8 +302,30 @@ def test_scan_results_fail_on_routes_threshold_per_finding(tmp_path):
                  "fingerprint": "w", "qualname": "m.g", "properties": {}, "suppressed": "active"}]}}
     resp = c.post("/wardline/scan-results", json=body)
     assert resp.status_code == 200
-    modes = {r["fingerprint"]: r["mode"] for r in resp.json()["routed"]}
-    assert modes == {"e": "block_escalate", "w": "surface_only"}
+    routed = {r["fingerprint"]: r for r in resp.json()["routed"]}
+    assert {fp: r["mode"] for fp, r in routed.items()} == {
+        "e": "block_escalate",
+        "w": "surface_only",
+    }
+    assert sg.request_record(routed["e"]["seq"])["policy"] == "R-E"
+    trail = c.get("/overrides").json()
+    assert len(trail) == 1
+    assert trail[0]["kind"] == "wardline_surfaced"
+    assert trail[0]["policy"] == "R-W"
+    assert trail[0]["extensions"]["wardline"]["fingerprint"] == "w"
+
+
+def test_scan_results_unknown_fail_on_is_422(tmp_path):
+    c = _client(tmp_path)
+    body = {"agent_id": "a", "cell": "surface_only", "fail_on": "SEVERE",
+            "scan": {"findings": [
+                {"rule_id": "R-W", "message": "m", "severity": "WARN", "kind": "defect",
+                 "fingerprint": "w", "qualname": "m.g", "properties": {}, "suppressed": "active"}]}}
+
+    resp = c.post("/wardline/scan-results", json=body)
+
+    assert resp.status_code == 422
+    assert "SEVERE" in resp.json()["detail"]
 
 
 def test_scan_results_block_escalate_without_gate_is_409(tmp_path):

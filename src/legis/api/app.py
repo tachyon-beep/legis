@@ -267,9 +267,11 @@ def create_app(
     if identity is None:
         clarion_url = os.environ.get("CLARION_API_URL")
         if clarion_url:
-            from legis.identity.clarion_client import HttpClarionIdentity
+            from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
             from legis.identity.resolver import IdentityResolver
-            identity = IdentityResolver(HttpClarionIdentity(clarion_url))
+            identity = IdentityResolver(
+                HttpClarionIdentity(clarion_url, hmac_key=clarion_hmac_key_from_env())
+            )
 
     if filigree is None:
         filigree_url = os.environ.get("FILIGREE_API_URL")

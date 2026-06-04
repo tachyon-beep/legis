@@ -6,7 +6,15 @@ from legis.checks.surface import CheckSurface
 from legis.cli import build_parser
 from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
+from legis.enforcement.protected import ProtectedGate
+from legis.enforcement.signoff import SignoffGate
+from legis.enforcement.verdict import JudgeOpinion, Verdict
+from legis.git.surface import GitSurface
+from legis.identity.entity_key import EntityKey
+from legis.policy.grammar import AllowlistBoundary, PolicyGrammar
 from legis.policy.cells import PolicyCellRegistry, PolicyCellRule
+from legis.pulls.models import PullRequest, PullRequestState
+from legis.pulls.surface import PullSurface
 from legis.store.audit_store import AuditStore
 
 
@@ -23,11 +31,29 @@ def _run(messages, runtime):
     return [json.loads(line) for line in out.getvalue().splitlines()]
 
 
-def _runtime(tmp_path, *, agent_id="agent-launch", check_surface=None):
+class _ScriptedJudge:
+    def __init__(self, *opinions):
+        self._opinions = list(opinions)
+
+    def evaluate(self, record):
+        if self._opinions:
+            return self._opinions.pop(0)
+        return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
+
+
+def _runtime(
+    tmp_path,
+    *,
+    agent_id="agent-launch",
+    check_surface=None,
+    judge=None,
+):
     from legis.mcp import McpRuntime
 
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
-    engine = EnforcementEngine(store, FixedClock("2026-06-02T12:00:00+00:00"))
+    engine = EnforcementEngine(
+        store, FixedClock("2026-06-02T12:00:00+00:00"), judge=judge
+    )
     return McpRuntime(
         agent_id=agent_id,
         engine=engine,
@@ -41,7 +67,7 @@ def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
     assert args.agent_id == "agent-1"
 
 
-def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
+def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
     runtime, _store = _runtime(tmp_path)
     responses = _run(
         _messages(
@@ -58,11 +84,22 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
     assert set(by_name) == {
         "policy_explain",
         "override_submit",
+        "signoff_status_get",
+        "policy_evaluate",
+        "scan_route",
+        "git_branch_list",
+        "git_commit_get",
+        "git_rename_list",
+        "pull_request_get",
         "check_list",
+        "override_rate_get",
     }
     assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
     assert "operator_override" not in by_name
+    assert "submit_override" not in by_name
+    assert "protected_override" not in by_name
+    assert "signoff_request" not in by_name
 
     for tool in tools:
         assert not tool["name"].startswith("legis_")
@@ -71,7 +108,7 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
         assert "operator_id" not in props
 
     submit_description = by_name["override_submit"]["description"]
-    assert "records one new chill-cell override attempt" in submit_description
+    assert "routes to the governing cell" in submit_description
 
 
 def test_policy_explain_returns_service_explanation_payload(tmp_path):
@@ -108,7 +145,7 @@ def test_policy_explain_returns_service_explanation_payload(tmp_path):
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["override_submit"],
+        "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
     }
 
@@ -179,6 +216,483 @@ def test_override_submit_non_chill_cell_returns_cell_not_enabled_without_write(t
     assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
     assert "structured" in result["structuredContent"]["message"]
     assert store.read_all() == []
+
+
+def test_override_submit_coached_accepts_and_blocks_with_reason_code(tmp_path):
+    runtime, store = _runtime(
+        tmp_path,
+        judge=_ScriptedJudge(
+            JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ship it"),
+            JudgeOpinion(
+                Verdict.BLOCKED,
+                "judge@1",
+                "rationale insufficient for this exception",
+            ),
+        ),
+    )
+    runtime.cell_registry = PolicyCellRegistry(default_cell="coached")
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "reviewed.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "first accepted path",
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "reviewed.policy",
+                        "entity": "src/x.py:g",
+                        "rationale": "trust me",
+                    },
+                },
+            },
+        ),
+        runtime,
+    )
+
+    accepted = responses[0]["result"]["structuredContent"]
+    assert accepted == {
+        "outcome": "ACCEPTED_BY_JUDGE",
+        "cell": "coached",
+        "seq": 1,
+        "judge_model": "judge@1",
+        "judge_rationale": "ship it",
+        "note": "may be re-judged later",
+    }
+
+    blocked = responses[1]["result"]["structuredContent"]
+    assert blocked == {
+        "outcome": "BLOCKED",
+        "cell": "coached",
+        "seq": 2,
+        "judge_model": "judge@1",
+        "judge_rationale": "rationale insufficient for this exception",
+        "blocked_reason_code": "RATIONALE_INSUFFICIENT",
+        "self_clearable": False,
+        "next_actions": ["REVISE_CODE", "REVISE_RATIONALE"],
+        "note": "this attempt does not count toward your override-rate",
+    }
+    assert len(store.read_all()) == 2
+
+
+def test_override_submit_structured_escalates_and_status_poll_reflects_signoff(tmp_path):
+    runtime, store = _runtime(tmp_path, agent_id="agent-structured")
+    runtime.cell_registry = PolicyCellRegistry(default_cell="structured")
+    runtime.signoff_gate = SignoffGate(
+        store, FixedClock("2026-06-02T12:00:00+00:00")
+    )
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "release.signoff",
+                        "entity": "svc/api",
+                        "rationale": "production deploy",
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "signoff_status_get",
+                    "arguments": {"seq": "1"},
+                },
+            },
+        ),
+        runtime,
+    )
+
+    assert responses[0]["result"]["structuredContent"] == {
+        "outcome": "ESCALATED_PENDING",
+        "cell": "structured",
+        "seq": 1,
+        "cleared": False,
+        "human_required": True,
+        "operator_instruction": "Human sign-off required for seq 1.",
+        "poll_tool": "signoff_status_get",
+        "poll_handle": 1,
+    }
+    assert responses[1]["result"]["structuredContent"] == {"cleared": False, "seq": 1}
+    assert store.read_all()[0].payload["agent_id"] == "agent-structured"
+
+    runtime.signoff_gate.sign_off(
+        request_seq=1, operator_id="op-release", rationale="approved"
+    )
+    signed = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "signoff_status_get",
+                    "arguments": {"seq": "1"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+    assert signed == {
+        "cleared": True,
+        "seq": 1,
+        "signed_by": "op-release",
+        "signed_at": "2026-06-02T12:00:00+00:00",
+    }
+
+
+def test_override_submit_protected_needs_inputs_without_write_then_blocks(tmp_path):
+    runtime, store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(default_cell="protected")
+    runtime.protected_gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        _ScriptedJudge(
+            JudgeOpinion(Verdict.BLOCKED, "judge@protected", "code violation: eval")
+        ),
+        b"secret",
+    )
+    source_file = tmp_path / "src" / "x.py"
+    source_file.parent.mkdir()
+    source_file.write_text("print('hello')\n", encoding="utf-8")
+    runtime.source_root = tmp_path
+
+    missing_inputs = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "protected.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "needs exception",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert missing_inputs == {
+        "outcome": "NEED_INPUTS",
+        "cell": "protected",
+        "required_inputs": [
+            {
+                "field": "file_fingerprint",
+                "how": "sha256 of the target file contents",
+            },
+            {"field": "ast_path", "how": "dotted path to the AST node"},
+        ],
+    }
+    assert store.read_all() == []
+
+    blocked = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "protected.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "needs exception",
+                        "file_fingerprint": "sha256:03e693d9f2f687e0f40e36a8df7fcb4d1c22974012b7c2a55c000eb30f305824",
+                        "ast_path": "Module/Expr",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+    assert blocked["outcome"] == "BLOCKED"
+    assert blocked["cell"] == "protected"
+    assert blocked["seq"] == 1
+    assert blocked["judge_model"] == "judge@protected"
+    assert blocked["blocked_reason_code"] == "CODE_VIOLATION"
+    assert len(store.read_all()) == 1
+
+
+def test_policy_evaluate_returns_unknown_distinct_from_clear(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    grammar = PolicyGrammar()
+    grammar.register(AllowlistBoundary("imports", frozenset({"json"})))
+    runtime.grammar = grammar
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "policy_evaluate",
+                    "arguments": {
+                        "policy": "imports",
+                        "target": {"value": "socket"},
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "policy_evaluate",
+                    "arguments": {
+                        "policy": "missing",
+                        "target": {},
+                    },
+                },
+            },
+        ),
+        runtime,
+    )
+
+    assert responses[0]["result"]["structuredContent"]["outcome"] == "VIOLATION"
+    assert responses[0]["result"]["structuredContent"]["provenance_gap"] is False
+    assert responses[1]["result"]["structuredContent"]["outcome"] == "UNKNOWN"
+    assert responses[1]["result"]["structuredContent"]["provenance_gap"] is True
+
+
+def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path):
+    runtime, store = _runtime(tmp_path)
+    scan = {
+        "findings": [
+            {
+                "rule_id": "PY-WL-101",
+                "message": "untrusted reaches trusted",
+                "severity": "ERROR",
+                "kind": "defect",
+                "fingerprint": "fp1",
+                "qualname": "m.f",
+                "properties": {"actual_return": "UNKNOWN_RAW"},
+                "suppressed": "active",
+            }
+        ]
+    }
+
+    invalid = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {
+                        "scan": scan,
+                        "cell": "surface_override",
+                        "severity_map": {"ERROR": "surface_override"},
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+    assert invalid["isError"] is True
+    assert invalid["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    assert store.read_all() == []
+
+    routed = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": scan, "cell": "surface_override"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+    assert routed == {
+        "outcome": "ROUTED",
+        "routed": [
+            {
+                "mode": "surface_override",
+                "fingerprint": "fp1",
+                "seq": 1,
+                "accepted": True,
+            }
+        ],
+    }
+
+
+def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    runtime.signoff_gate = SignoffGate(
+        AuditStore(f"sqlite:///{tmp_path / 'signoff.db'}"),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+    )
+    scan = {
+        "findings": [
+            {
+                "rule_id": "PY-WL-E",
+                "message": "error finding",
+                "severity": "ERROR",
+                "kind": "defect",
+                "fingerprint": "fp-error",
+                "qualname": "m.error",
+                "properties": {},
+                "suppressed": "active",
+            },
+            {
+                "rule_id": "PY-WL-W",
+                "message": "warn finding",
+                "severity": "WARN",
+                "kind": "defect",
+                "fingerprint": "fp-warn",
+                "qualname": "m.warn",
+                "properties": {},
+                "suppressed": "active",
+            },
+        ]
+    }
+
+    routed = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {
+                        "scan": scan,
+                        "cell": "block_escalate",
+                        "fail_on": "ERROR",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]["routed"]
+
+    assert {item["fingerprint"]: item["mode"] for item in routed} == {
+        "fp-error": "block_escalate",
+        "fp-warn": "surface_only",
+    }
+
+
+def test_read_tools_return_git_pull_checks_and_override_rate(tmp_path, git_repo):
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    checks.record(
+        CheckRun(
+            check_name="unit",
+            run_id="run-1",
+            commit_sha="abc123",
+            outcome=CheckOutcome.PASS,
+            pr=7,
+            ran_against="abc123",
+        )
+    )
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    pulls.record(
+        PullRequest(
+            number=7,
+            title="Feature",
+            base="main",
+            head="feature",
+            state=PullRequestState.OPEN,
+            url="https://example.test/pr/7",
+        )
+    )
+    runtime, _store = _runtime(tmp_path, check_surface=checks)
+    runtime.git_surface = GitSurface(git_repo)
+    runtime.pull_surface = pulls
+    runtime.engine.submit_override(
+        policy="ordinary.policy",
+        entity_key=EntityKey.from_locator("x"),
+        rationale="r",
+        agent_id="agent-launch",
+    )
+
+    head = GitSurface(git_repo).commits(limit=1)[0].sha
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "git_branch_list", "arguments": {}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "git_commit_get",
+                    "arguments": {"sha": head},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "git_rename_list",
+                    "arguments": {"rev_range": "HEAD~1..HEAD"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "pull_request_get",
+                    "arguments": {"number": "7"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": "override_rate_get", "arguments": {}},
+            },
+        ),
+        runtime,
+    )
+
+    assert {b["name"] for b in responses[0]["result"]["structuredContent"]["branches"]} == {
+        "main",
+        "feature",
+    }
+    assert responses[1]["result"]["structuredContent"]["commit"]["sha"] == head
+    assert responses[2]["result"]["structuredContent"]["renames"][0]["old_path"] == "a.txt"
+    pr = responses[3]["result"]["structuredContent"]
+    assert pr["number"] == 7
+    assert pr["checks"][0]["check_name"] == "unit"
+    rate = responses[4]["result"]["structuredContent"]
+    assert rate["sample_size"] == 0
+    assert rate["note"] == "measures operator force-pasts; not movable by agent retries"
 
 
 def test_check_list_reads_recorded_checks_by_commit_and_pr(tmp_path):
@@ -272,7 +786,6 @@ def test_non_wp_m3_tool_names_are_not_callable(tmp_path):
         "submit_override",
         "protected_override",
         "signoff_request",
-        "policy_evaluate",
         "wardline_scan_results",
         "list_overrides",
         "override_rate",

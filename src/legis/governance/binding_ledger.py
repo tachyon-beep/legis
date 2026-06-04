@@ -2,11 +2,13 @@
 
 A governed sign-off bound to a Filigree issue is recorded here as a signed,
 append-only ``BindingRecord`` — the legis-side tamper-bound attestation. The row
-legis posts to Filigree is an opaque ``{entity_id, content_hash, actor}`` POINTER;
-this ledger is where the binding's integrity lives, using the same HMAC scheme as
-protected verdicts. A forged or mutated binding record is rejected at read time
-(``BindingError``). The ledger is a DEDICATED append-only store, isolated from the
-override/gap governance trail, so binding records never pollute those reads.
+legis posts to Filigree is an opaque pointer that also carries ``signoff_seq`` and
+the binding HMAC so the sibling can persist the attestation leg when it supports
+the extended shape. This ledger remains the local tamper-bound source of truth,
+using the same HMAC scheme as protected verdicts. A forged or mutated binding
+record is rejected at read time (``BindingError``). The ledger is a DEDICATED
+append-only store, isolated from the override/gap governance trail, so binding
+records never pollute those reads.
 """
 
 from __future__ import annotations

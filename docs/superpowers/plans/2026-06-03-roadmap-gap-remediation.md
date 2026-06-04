@@ -40,7 +40,7 @@ binding tuple and transmit both `signoff_seq` and the signature.
 - Modify tests: `tests/governance/test_signoff_binding.py`, `tests/api/test_combinations_api.py`,
   `tests/filigree/test_client.py`
 
-- [ ] **Step 1: Write failing test** in `tests/governance/test_signoff_binding.py`. Update the existing
+- [x] **Step 1: Write failing test** in `tests/governance/test_signoff_binding.py`. Update the existing
   `FakeFiligree.attach` to accept the new kwargs and record them, then add a signed-binding test:
 
 ```python
@@ -70,10 +70,10 @@ def test_binding_is_hmac_signed_when_a_key_is_supplied():
   `test_locator_keyed_signoff_is_rejected_as_unstable`) to the 6-tuple shape; the unsigned case sends
   `signoff_seq=7, signature=None`.
 
-- [ ] **Step 2: Run, expect FAIL** — `.venv/bin/python -m pytest tests/governance/test_signoff_binding.py -q`
+- [x] **Step 2: Run, expect FAIL** — `.venv/bin/python -m pytest tests/governance/test_signoff_binding.py -q`
   (TypeError: unexpected `key`).
 
-- [ ] **Step 3: Implement.** In `src/legis/filigree/client.py`, extend the Protocol and client:
+- [x] **Step 3: Implement.** In `src/legis/filigree/client.py`, extend the Protocol and client:
 
 ```python
 # Protocol
@@ -115,7 +115,7 @@ def bind_signoff_to_issue(filigree, *, issue_id, entity_key, content_hash, signo
   In `src/legis/api/app.py`: add `binding_key: bytes | None = None` to `create_app(...)`, and pass
   `key=binding_key` in the `bind_signoff_to_issue(...)` call inside `bind_issue`.
 
-- [ ] **Step 4: Run, expect PASS** — same path. Then update `tests/api/test_combinations_api.py`
+- [x] **Step 4: Run, expect PASS** — same path. Then update `tests/api/test_combinations_api.py`
   (`_FakeFiligree.attach` to the new kwargs; the `fil.attached == [...]` assertion to the 6-tuple with
   `signoff_seq=req.seq, signature=None`) and `tests/filigree/test_client.py` (the `attach` round-trip
   asserts `signoff_seq`/`signature` ride the POST body when supplied). Run full suite, expect PASS.
@@ -499,8 +499,10 @@ severity get the configured gate cell; below it, `surface_only`.
 - Create: `src/legis/wardline/policy.py` (the cell-resolution function)
 - Modify: `src/legis/api/app.py` (`ScanResultsIn` gains optional `fail_on`; route per finding)
 - Create: `tests/wardline/test_policy.py`; modify `tests/api/test_combinations_api.py` (add case)
+- Modify: `src/legis/mcp.py` and `tests/mcp/test_server.py` so the agent-facing `scan_route`
+  tool accepts `cell + fail_on`, not just a single cell or explicit `severity_map`.
 
-- [ ] **Step 1: Write failing test** `tests/wardline/test_policy.py`:
+- [x] **Step 1: Write failing test** `tests/wardline/test_policy.py`:
 
 ```python
 from legis.wardline.ingest import WardlineSeverity, active_defects
@@ -523,9 +525,13 @@ def test_below_fail_on_is_surface_only():
                         gate_cell=WardlineCellPolicy.BLOCK_ESCALATE) is WardlineCellPolicy.SURFACE_ONLY
 ```
 
-- [ ] **Step 2: Run, expect FAIL** (ModuleNotFoundError).
+- [x] **Step 2: Run, expect FAIL.** The resolver/API pieces were already present in the current
+  worktree; the missing agent-facing threshold path was MCP `scan_route`. Red verification:
+  `uv run pytest tests/mcp/test_server.py::test_scan_route_fail_on_threshold_routes_each_finding -q`
+  failed because the WARN finding still routed to `block_escalate` instead of `surface_only`.
 
-- [ ] **Step 3: Implement** `src/legis/wardline/policy.py`:
+- [x] **Step 3: Implement** `src/legis/wardline/policy.py` and wire the resolver through service,
+  API, and MCP surfaces:
 
 ```python
 """Map a Wardline finding's severity to a 2x2 cell — the `--fail-on` input.
@@ -547,15 +553,17 @@ def resolve_cell(finding: WardlineFinding, *, fail_on: WardlineSeverity,
     return WardlineCellPolicy.SURFACE_ONLY
 ```
 
-  In `app.py`: add `fail_on: str | None = None` to `ScanResultsIn`. In `wardline_scan_results`, when
-  `body.fail_on` is set, group findings by `resolve_cell(...)` and route each group with its cell
-  (calling `route_findings` per group, passing `engine`/`signoff` as that group's cell requires);
-  when unset, keep today's single-cell behaviour. Validate `fail_on` against `WardlineSeverity[...]`
-  (422 on unknown). `body.cell` is the `gate_cell` for the at/above-threshold group.
+  In `app.py`: add `fail_on: str | None = None` to `ScanResultsIn`. In the service layer, when
+  `fail_on` is set, resolve each active finding through `resolve_cell(...)` and feed the result into
+  the same per-severity routing path used by explicit maps; when unset, keep today's single-cell
+  behaviour. Validate `fail_on` against `WardlineSeverity[...]` (422 on unknown). `body.cell` is the
+  `gate_cell` for the at/above-threshold group.
 
-- [ ] **Step 4: Run, expect PASS.** Add an API test in `tests/api/test_combinations_api.py`: a scan with
-  one `ERROR` + one `WARN` finding and `fail_on="ERROR"`, `cell="block_escalate"` → the ERROR opens a
-  sign-off (needs `signoff_gate` wired) and the WARN records a `WARDLINE_SURFACED` event.
+- [x] **Step 4: Run, expect PASS.** Added API and MCP tests. Focused verification:
+  `uv run pytest tests/wardline tests/api/test_combinations_api.py tests/mcp/test_server.py -q`
+  → `65 passed in 1.79s`. Full verification:
+  `uv run pytest -q` → `368 passed, 2 skipped in 6.80s`;
+  `uv run mypy` → `Success: no issues found in 56 source files`.
 
 - [ ] **Step 5: Commit** — `git commit -m "feat(wardline): severity fail_on resolves the 2x2 cell per finding (R-2.2-05)"`
 
@@ -662,7 +670,7 @@ PRs are forge-reported (not in git), so mirror `CheckSurface`: a relational stor
 - Modify: `src/legis/api/app.py` (inject `pull_surface`; add `/git/pulls` routes joining check outcomes)
 - Create: `tests/pulls/test_pull_surface.py`; modify `tests/api/test_git_api.py` (route test)
 
-- [ ] **Step 1: Write failing test** `tests/pulls/test_pull_surface.py` (mirror
+- [x] **Step 1: Write failing test** `tests/pulls/test_pull_surface.py` (mirror
   `tests/checks/test_check_surface.py`):
 
 ```python
@@ -680,9 +688,11 @@ def test_get_unknown_pr_is_none(tmp_path):
     assert PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}").get(999) is None
 ```
 
-- [ ] **Step 2: Run, expect FAIL.**
+- [x] **Step 2: Run, expect FAIL.** In the current worktree the PullSurface implementation was
+  already present; this step is retained as the original TDD intent. Additional completion tests
+  were added for `/git/pulls` route upsert and writer-auth coverage.
 
-- [ ] **Step 3: Implement.** `src/legis/pulls/models.py`:
+- [x] **Step 3: Implement.** `src/legis/pulls/models.py`:
 
 ```python
 """Pull-request facts (forge-reported, like CheckRun — not in git)."""
@@ -727,8 +737,14 @@ class PullRequest:
   check outcomes via the existing `CheckSurface.for_pr`, satisfying "PR metadata **and** the check
   outcomes associated with it.")
 
-- [ ] **Step 4: Run, expect PASS** — `tests/pulls`, then add a `/git/pulls` round-trip + checks-join
-  test to `tests/api/test_git_api.py` and run it.
+- [x] **Step 4: Run, expect PASS** — Added/verified `/git/pulls` round-trip, check-join,
+  API upsert, unknown-PR 404, and mutating-route auth coverage. Focused verification:
+  `uv run pytest tests/pulls/test_pull_surface.py tests/api/test_git_api.py tests/api/test_auth.py -q`
+  → `24 passed in 0.95s`. Broader focused verification:
+  `uv run pytest tests/pulls/test_pull_surface.py tests/api/test_git_api.py tests/api/test_auth.py tests/mcp/test_server.py tests/git/test_pull_request_api.py -q`
+  → `45 passed in 1.42s`. Full verification:
+  `uv run pytest -q` → `369 passed, 2 skipped in 6.12s`;
+  `uv run mypy` → `Success: no issues found in 56 source files`.
 
 - [ ] **Step 5: Commit** — `git commit -m "feat(pulls): recorded PR metadata surface joined to check outcomes (R-1.1-10)"`
 

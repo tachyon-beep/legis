@@ -167,3 +167,87 @@ def test_main_mcp_sets_store_and_policy_cell_env(monkeypatch):
             "policy_cells": "policy/cells.toml",
         }
     ]
+
+
+def test_sei_backfill_command_defaults_to_dry_run():
+    args = build_parser().parse_args(
+        ["sei-backfill", "--db", "sqlite:///gov.db", "--clarion-url", "http://localhost"]
+    )
+
+    assert args.command == "sei-backfill"
+    assert args.db == "sqlite:///gov.db"
+    assert args.clarion_url == "http://localhost"
+    assert args.execute is False
+    assert args.actor == "legis-sei-backfill"
+
+
+def test_main_sei_backfill_dispatches_service(monkeypatch, capsys):
+    import legis.cli as cli_module
+
+    calls = []
+
+    class FakeStore:
+        def __init__(self, db):
+            self.db = db
+
+    class FakeClient:
+        def __init__(self, url, *, hmac_key=None):
+            self.url = url
+            self.hmac_key = hmac_key
+
+    class FakeClock:
+        pass
+
+    class FakeReport:
+        def to_dict(self):
+            return {"dry_run": False, "appended": 2}
+
+    def fake_run_pre_sei_backfill(store, client, clock, *, dry_run, actor):
+        calls.append(
+            {
+                "db": store.db,
+                "url": client.url,
+                "hmac_key": client.hmac_key,
+                "clock_type": type(clock).__name__,
+                "dry_run": dry_run,
+                "actor": actor,
+            }
+        )
+        return FakeReport()
+
+    monkeypatch.setattr(cli_module, "AuditStore", FakeStore, raising=False)
+    monkeypatch.setattr(cli_module, "HttpClarionIdentity", FakeClient, raising=False)
+    monkeypatch.setattr(cli_module, "SystemClock", FakeClock, raising=False)
+    monkeypatch.setenv("LEGIS_CLARION_HMAC_KEY", "clarion-secret")
+    monkeypatch.setattr(
+        cli_module,
+        "run_pre_sei_backfill",
+        fake_run_pre_sei_backfill,
+        raising=False,
+    )
+
+    rc = main(
+        [
+            "sei-backfill",
+            "--db",
+            "sqlite:///gov.db",
+            "--clarion-url",
+            "http://localhost",
+            "--execute",
+            "--actor",
+            "operator-1",
+        ]
+    )
+
+    assert rc == 0
+    assert calls == [
+        {
+            "db": "sqlite:///gov.db",
+            "url": "http://localhost",
+            "hmac_key": b"clarion-secret",
+            "clock_type": "FakeClock",
+            "dry_run": False,
+            "actor": "operator-1",
+        }
+    ]
+    assert '"appended": 2' in capsys.readouterr().out
