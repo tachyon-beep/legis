@@ -2,7 +2,7 @@
 
 ## Summary
 
-Legis is the planned fourth Loom product. It is responsible for project change provenance and the git/CI common operating picture.
+Legis is the planned fourth Loom product. It is responsible for project change provenance and the git/CI common operating picture. (The authoritative federation roster and axiom live in the Loom hub at `~/loom/doctrine.md`; this "fourth product" framing is Legis's own self-description, consistent with the hub's roster ruling.)
 
 ## Authority boundary
 
