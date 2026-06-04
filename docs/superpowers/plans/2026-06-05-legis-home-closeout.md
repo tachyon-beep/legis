@@ -393,12 +393,18 @@ def test_policy_boundary_exercises_subject():
 
 
 def test_scan_and_runtime_gate_agree_on_a_shared_corpus(tmp_path: Path) -> None:
-    """Convergence keystone: drive BOTH real gates over the same corpus and
-    assert their allow/block verdicts match. This invokes scan_policy_boundaries
-    AND check_policy_boundary (not the shared evaluator alone), so it exercises
-    their differing call sites — the scanner builds boundary_names={node.name};
-    the runtime builds {func.__name__, wrapped.__name__}; the runtime passes a
-    src fallback. Those deltas are exactly what a tautological test would miss.
+    """Convergence keystone: drive BOTH real public gates over the same corpus
+    and assert their allow/block verdicts match. This invokes scan_policy_boundaries
+    AND check_policy_boundary end-to-end (not the shared evaluator alone), so it
+    verifies the WIRING of both callers: that each correctly resolves/extracts the
+    test function node, constructs boundary_names, and that the scanner's on-disk
+    fingerprint recompute aligns with the runtime's in-memory fingerprint. After
+    the Task-2-Step-4 convergence both callers delegate to evaluate_test_evidence,
+    so this test goes from RED (pre-convergence: the old _test_mentions_policy
+    allows `test_weak` while the runtime blocks it) to GREEN. It is the regression
+    guard that keeps the two callers wired to the single evaluator. (It does NOT
+    test independent semantics — by design there is only one implementation now;
+    `test_weak` is the case that proves the old token-anywhere scanner is gone.)
     """
     import inspect
     import textwrap
@@ -467,7 +473,7 @@ to:
 - [ ] **Step 3: Run to verify the new test fails**
 
 Run: `uv run pytest tests/policy/test_boundary_scan.py -k "outside_the_assert or agree_on_a_shared" -q`
-Expected: FAIL — `test_scan_rejects_policy_mention_outside_the_assert` currently gets zero findings (old scanner passes it).
+Expected: BOTH FAIL (TDD red). `test_scan_rejects_policy_mention_outside_the_assert` gets zero findings (the old `_test_mentions_policy` passes it), and `test_scan_and_runtime_gate_agree_on_a_shared_corpus` fails on `test_weak` (the old scanner allows the out-of-context policy mention while the runtime blocks it). Both go GREEN after Step 4 converges the scanner onto the shared evaluator — that convergence is exactly what the parity test pins.
 
 - [ ] **Step 4: Converge the scanner**
 
@@ -1285,7 +1291,11 @@ def test_closure_gate_500_on_integrity_failure():
     assert resp.status_code == 500
 ```
 
-Note: this file already injects ledger-backed clients and forges records — reuse those exact helpers/patterns (the existing `test_bind_issue_records_to_ledger_and_binding_is_verifiable` and `test_binding_read_500_on_forged_record`, around lines 216-300). Do NOT invent `_empty_ledger`/`_client_with_ledger`/`_record_binding`/`_forge_a_ledger_record` if equivalents exist; bind to the real names. The construction is: in-memory `BindingLedger(AuditStore("sqlite://"), clock, key)`, `.record(...)` a binding, pass via `create_app(binding_ledger=...)`, and reproduce the forgery the sibling 500 test uses.
+Note: the four `_empty_ledger`/`_client_with_ledger`/`_record_binding`/`_forge_a_ledger_record` names above are illustrative placeholders — do NOT create them. Construct directly:
+- **ledger:** `BindingLedger(AuditStore("sqlite:///" + str(tmp_path / "binding.db")), FixedClock(...), key=b"k")` (mirror `tests/governance/test_binding_ledger.py`'s `_ledger`). The `record`/forge tests there use a `sqlite://` file so the row can be tampered.
+- **record a binding (ALLOW path):** call `ledger.record(signoff_seq=1, issue_id="ISSUE-7", entity_key=EntityKey.from_sei(...), content_hash="...")` **directly** — do NOT drive the heavyweight `POST /signoff/N/bind-issue` HTTP flow that `test_bind_issue_records_to_ledger_and_binding_is_verifiable` uses; the closure-gate test only needs a recorded binding.
+- **client:** pass the ledger via `create_app(binding_ledger=ledger)` and wrap in `TestClient`.
+- **forge (500 path):** reproduce the tamper exactly as `test_binding_read_500_on_forged_record` (~line 288) and `test_forged_signature_is_rejected` do — mutate a stored row / recompute the unkeyed chain so `verify()` raises `BindingError`.
 
 - [ ] **Step 2: Run to verify they fail**
 
