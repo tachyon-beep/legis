@@ -297,3 +297,38 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
     assert [d["sei"] for d in body["divergences"]] == ["clarion:eid:abc123"]
     assert body["divergences"][0]["recorded_length"] == 2
     assert body["divergences"][0]["current_length"] == 1
+
+
+def test_create_app_wires_env_configured_openrouter_judge_for_protected_overrides(
+    tmp_path, monkeypatch
+):
+    from legis.enforcement.llm_client import OpenRouterLLMClient
+
+    source = tmp_path / "src" / "x.py"
+    source.parent.mkdir()
+    source.write_text("def f():\n    return 1\n")
+
+    def fake_init(self, config, *, fetch=None):
+        self.model_id = "openrouter:test-model"
+
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret")
+    monkeypatch.setenv("LEGIS_JUDGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_JUDGE_MODEL", "anthropic/claude-opus-4.7")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov-env.db'}")
+    monkeypatch.setattr(OpenRouterLLMClient, "__init__", fake_init)
+    monkeypatch.setattr(
+        OpenRouterLLMClient,
+        "complete",
+        lambda self, prompt: '{"verdict":"ACCEPTED","rationale":"ok"}',
+    )
+
+    client = TestClient(create_app(repo_path=tmp_path))
+    resp = client.post(
+        "/protected/overrides",
+        json={**PBODY, "file_fingerprint": _fingerprint(source)},
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["verdict"] == "ACCEPTED"
+    assert resp.json()["judge_model"] == "openrouter:test-model"

@@ -20,8 +20,10 @@ from legis.checks.models import CheckRun
 from legis.checks.surface import CheckSurface
 from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
+from legis.enforcement.judge_factory import build_judge_from_env
 from legis.enforcement.protected import ProtectedGate, TrailVerifier, TamperError
-from legis.enforcement.verdict import JudgeOpinion, SignoffState, Verdict
+from legis.enforcement.signoff import SignoffGate
+from legis.enforcement.verdict import SignoffState, Verdict
 from legis.git.surface import GitError, GitSurface
 from legis.policy.cells import (
     PolicyCellRegistry,
@@ -30,7 +32,6 @@ from legis.policy.cells import (
 )
 from legis.policy.grammar import PolicyGrammar, default_grammar
 from legis.pulls.surface import PullSurface
-from legis.records.override_record import OverrideRecord
 from legis.service.errors import (
     AuditIntegrityError,
     InvalidArgumentError,
@@ -133,17 +134,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
         )
         trail_verifier = TrailVerifier(key, protected_policies)
 
-        class FailClosedJudge:
-            def evaluate(self, record: OverrideRecord) -> JudgeOpinion:
-                return JudgeOpinion(
-                    verdict=Verdict.BLOCKED,
-                    model="fail-closed-fallback",
-                    rationale="No LLM judge client is configured on this MCP server.",
-                )
-
-        from legis.enforcement.signoff import SignoffGate
-
-        protected_gate = ProtectedGate(store, clock, FailClosedJudge(), key)
+        protected_gate = ProtectedGate(store, clock, build_judge_from_env("MCP"), key)
         signoff_gate = SignoffGate(store, clock, signer=True, key=key)
 
     return McpRuntime(

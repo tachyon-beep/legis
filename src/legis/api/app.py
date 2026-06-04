@@ -328,19 +328,12 @@ def create_app(
             trail_verifier = TrailVerifier(hmac_key, protected_policies)
 
         if protected_gate is None:
+            from legis.enforcement.judge_factory import build_judge_from_env
             from legis.enforcement.protected import ProtectedGate
-            from legis.enforcement.verdict import JudgeOpinion, Verdict
-            from legis.records.override_record import OverrideRecord
 
-            class FailClosedJudge:
-                def evaluate(self, record: OverrideRecord) -> JudgeOpinion:
-                    return JudgeOpinion(
-                        verdict=Verdict.BLOCKED,
-                        model="fail-closed-fallback",
-                        rationale="No LLM judge client is configured on this server.",
-                    )
-
-            protected_gate = ProtectedGate(gov_store, clock, FailClosedJudge(), hmac_key)
+            protected_gate = ProtectedGate(
+                gov_store, clock, build_judge_from_env("API"), hmac_key
+            )
 
         if signoff_gate is None:
             from legis.enforcement.signoff import SignoffGate

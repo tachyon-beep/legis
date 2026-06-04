@@ -181,6 +181,110 @@ def test_main_mcp_sets_store_and_policy_cell_env(monkeypatch):
     ]
 
 
+def test_serve_accepts_judge_configuration_flags():
+    args = build_parser().parse_args(
+        [
+            "serve",
+            "--judge-provider",
+            "openrouter",
+            "--judge-model",
+            "anthropic/claude-opus-4.7",
+            "--judge-max-tokens",
+            "2048",
+        ]
+    )
+
+    assert args.judge_provider == "openrouter"
+    assert args.judge_model == "anthropic/claude-opus-4.7"
+    assert args.judge_max_tokens == 2048
+
+
+def test_main_serve_sets_judge_env(monkeypatch):
+    import os
+
+    calls = []
+
+    def fake_run(app, **kw):
+        calls.append(
+            {
+                "provider": os.environ.get("LEGIS_JUDGE_PROVIDER"),
+                "model": os.environ.get("LEGIS_JUDGE_MODEL"),
+                "max_tokens": os.environ.get("LEGIS_JUDGE_MAX_TOKENS"),
+            }
+        )
+
+    monkeypatch.delenv("LEGIS_JUDGE_PROVIDER", raising=False)
+    monkeypatch.delenv("LEGIS_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("LEGIS_JUDGE_MAX_TOKENS", raising=False)
+
+    rc = main(
+        [
+            "serve",
+            "--judge-provider",
+            "openrouter",
+            "--judge-model",
+            "anthropic/claude-opus-4.7",
+            "--judge-max-tokens",
+            "2048",
+        ],
+        run=fake_run,
+    )
+
+    assert rc == 0
+    assert calls == [
+        {
+            "provider": "openrouter",
+            "model": "anthropic/claude-opus-4.7",
+            "max_tokens": "2048",
+        }
+    ]
+
+
+def test_main_mcp_sets_judge_env(monkeypatch):
+    import os
+
+    import legis.mcp as mcp_module
+
+    calls = []
+
+    def fake_mcp_main(agent_id):
+        calls.append(
+            {
+                "provider": os.environ.get("LEGIS_JUDGE_PROVIDER"),
+                "model": os.environ.get("LEGIS_JUDGE_MODEL"),
+                "max_tokens": os.environ.get("LEGIS_JUDGE_MAX_TOKENS"),
+            }
+        )
+        return 0
+
+    monkeypatch.delenv("LEGIS_JUDGE_PROVIDER", raising=False)
+    monkeypatch.delenv("LEGIS_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("LEGIS_JUDGE_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(mcp_module, "main", fake_mcp_main)
+    rc = main(
+        [
+            "mcp",
+            "--agent-id",
+            "agent-1",
+            "--judge-provider",
+            "openrouter",
+            "--judge-model",
+            "anthropic/claude-opus-4.7",
+            "--judge-max-tokens",
+            "2048",
+        ]
+    )
+
+    assert rc == 0
+    assert calls == [
+        {
+            "provider": "openrouter",
+            "model": "anthropic/claude-opus-4.7",
+            "max_tokens": "2048",
+        }
+    ]
+
+
 def test_sei_backfill_command_defaults_to_dry_run():
     args = build_parser().parse_args(
         ["sei-backfill", "--db", "sqlite:///gov.db", "--clarion-url", "http://localhost"]
