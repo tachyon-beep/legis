@@ -1,4 +1,4 @@
-"""Service-level discovery contract for the MCP ``legis_explain`` tool."""
+"""Service-level discovery contract for the MCP ``policy_explain`` tool."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def explain_policy(
             self_clearable=True,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=(),
         )
     if cell == "coached":
@@ -89,7 +89,7 @@ def explain_policy(
             self_clearable=False,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=(),
         )
     if cell == "structured":
@@ -101,8 +101,8 @@ def explain_policy(
             human_in_loop=True,
             enabled=enabled,
             available_moves=(
-                "legis_submit_override",
-                "legis_signoff_status",
+                "override_submit",
+                "signoff_status_get",
             )
             if enabled
             else (),
@@ -116,7 +116,7 @@ def explain_policy(
             self_clearable=False,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=_PROTECTED_INPUTS,
         )
     raise AssertionError(f"unknown policy cell {cell!r}")

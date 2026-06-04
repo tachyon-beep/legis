@@ -41,7 +41,7 @@ def test_explain_chill_policy_reports_enabled_self_clearable_cell(tmp_path):
         "self_clearable": True,
         "human_in_loop": False,
         "enabled": True,
-        "available_moves": ["legis_submit_override"],
+        "available_moves": ["override_submit"],
         "required_inputs": [],
     }
 
@@ -83,7 +83,7 @@ def test_explain_coached_policy_reports_disabled_without_judge_and_enabled_with_
     )
 
     assert enabled.enabled is True
-    assert enabled.available_moves == ("legis_submit_override",)
+    assert enabled.available_moves == ("override_submit",)
 
 
 def test_explain_protected_policy_reports_required_inputs_even_when_gate_disabled(
@@ -146,6 +146,6 @@ def test_explain_structured_policy_reports_human_loop_when_signoff_gate_wired(
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["legis_submit_override", "legis_signoff_status"],
+        "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
     }

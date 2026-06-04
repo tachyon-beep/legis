@@ -30,9 +30,4 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Enforce override-rate gate
-        run: |
-          if [ -f legis-governance.db ]; then
-            uv run legis check-override-rate --db sqlite:///legis-governance.db
-          else
-            echo "::notice::No governance DB artifact found; override-rate gate skipped."
-          fi
+        run: uv run legis governance-gate --db sqlite:///legis-governance.db

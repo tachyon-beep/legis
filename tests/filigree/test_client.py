@@ -28,6 +28,28 @@ def test_attach_posts_entity_id_and_hash():
                                {"entity_id": "clarion:eid:abc", "content_hash": "h", "actor": "legis"})
 
 
+def test_attach_posts_signoff_attestation_when_supplied():
+    resp = {"attached": True}
+    fetch = _fake_fetch({("POST", "/api/issue/ISSUE-1/entity-associations"): resp})
+    c = HttpFiligreeClient("http://localhost", fetch=fetch)
+    out = c.attach(
+        "ISSUE-1",
+        "clarion:eid:abc",
+        "h",
+        actor="legis",
+        signoff_seq=7,
+        signature="hmac-sha256:v2:abc",
+    )
+    assert out == resp
+    assert fetch.calls[-1][2] == {
+        "entity_id": "clarion:eid:abc",
+        "content_hash": "h",
+        "actor": "legis",
+        "signoff_seq": 7,
+        "signature": "hmac-sha256:v2:abc",
+    }
+
+
 def test_associations_for_entity_url_encodes_colons():
     fetch = _fake_fetch({("GET", "/api/entity-associations"): {"associations": []}})
     c = HttpFiligreeClient("http://localhost", fetch=fetch)

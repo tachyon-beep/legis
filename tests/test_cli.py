@@ -56,6 +56,23 @@ def test_check_override_rate_exits_1_on_fail(tmp_path, capsys):
     assert "FAIL" in capsys.readouterr().out
 
 
+def test_governance_gate_alias_exits_1_on_fail(tmp_path, capsys):
+    from legis.clock import FixedClock
+    from legis.enforcement.engine import EnforcementEngine
+    from legis.enforcement.verdict import Verdict
+    from legis.identity.entity_key import EntityKey
+    from legis.store.audit_store import AuditStore
+
+    db = f"sqlite:///{tmp_path / 'gov.db'}"
+    eng = EnforcementEngine(AuditStore(db), FixedClock("2026-06-02T12:00:00+00:00"))
+    for i in range(25):
+        eng.record_event({"policy": "p", "entity_key": EntityKey.from_locator(f"x{i}").to_dict(),
+                          "extensions": {"judge_verdict": Verdict.OVERRIDDEN_BY_OPERATOR.value}})
+    rc = main(["governance-gate", "--db", db])
+    assert rc == 1
+    assert "FAIL" in capsys.readouterr().out
+
+
 def test_check_override_rate_exits_0_when_clean(tmp_path, capsys):
     from legis.clock import FixedClock
     from legis.enforcement.engine import EnforcementEngine
@@ -72,12 +89,12 @@ def test_check_override_rate_exits_0_when_clean(tmp_path, capsys):
     assert "PASS" in capsys.readouterr().out
 
 
-def test_check_override_rate_fails_for_missing_sqlite_db_without_creating_it(tmp_path, capsys):
+def test_governance_gate_missing_sqlite_db_is_pass_with_notice_without_creating_it(tmp_path, capsys):
     db_path = tmp_path / "missing.db"
-    rc = main(["check-override-rate", "--db", f"sqlite:///{db_path}"])
-    assert rc == 1
+    rc = main(["governance-gate", "--db", f"sqlite:///{db_path}"])
+    assert rc == 0
     assert not db_path.exists()
-    assert "missing" in capsys.readouterr().err.lower()
+    assert "PASS_WITH_NOTICE" in capsys.readouterr().out
 
 
 def test_mcp_command_accepts_store_and_policy_cell_flags():

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the pre-spec MCP tool surface with the first ratified agent-facing vertical slice: `legis_explain`, chill-only `legis_submit_override` returning `ACCEPTED_SELF`, `legis_checks_for`, launch-bound `agent_id`, and the operator-surface-absent invariant.
+**Goal:** Replace the pre-spec MCP tool surface with the first ratified agent-facing vertical slice: `policy_explain`, chill-only `override_submit` returning `ACCEPTED_SELF`, `check_list`, launch-bound `agent_id`, and the operator-surface-absent invariant.
 
-**Architecture:** Keep the dependency-free JSON-RPC-over-stdio server in `src/legis/mcp.py`, but make its discovered and callable surface match the approved `legis_*` WP-M3 contract in one atomic slice. `legis_explain` calls the WP-M2 service explanation contract, `legis_submit_override` routes through the registry and only executes enabled chill-cell writes, and `legis_checks_for` reads the check store. Legacy pre-spec tool names must not remain callable.
+**Architecture:** Keep the dependency-free JSON-RPC-over-stdio server in `src/legis/mcp.py`, but make its discovered and callable surface match the approved `<entity>_<verb>` WP-M3 contract in one atomic slice, with no `legis_` prefix because MCP hosts already expose server identity as `mcp__legis__<tool>`. `policy_explain` calls the WP-M2 service explanation contract, `override_submit` routes through the registry and only executes enabled chill-cell writes, and `check_list` reads the check store. Legacy pre-spec tool names must not remain callable.
 
 **Tech Stack:** Python 3.12+, stdlib JSON/stdio MCP framing, pytest, existing `CheckSurface`, existing `EnforcementEngine`, existing `PolicyCellRegistry`, no new runtime dependencies.
 
@@ -94,25 +94,25 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
     by_name = {tool["name"]: tool for tool in tools}
 
     assert set(by_name) == {
-        "legis_explain",
-        "legis_submit_override",
-        "legis_checks_for",
+        "policy_explain",
+        "override_submit",
+        "check_list",
     }
     assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
     assert "operator_override" not in by_name
 
     for tool in tools:
-        assert tool["name"].startswith("legis_")
+        assert not tool["name"].startswith("legis_")
         props = tool["inputSchema"].get("properties", {})
         assert "agent_id" not in props
         assert "operator_id" not in props
 
-    submit_description = by_name["legis_submit_override"]["description"]
+    submit_description = by_name["override_submit"]["description"]
     assert "records one new chill-cell override attempt" in submit_description
 
 
-def test_legis_explain_returns_service_explanation_payload(tmp_path):
+def test_policy_explain_returns_service_explanation_payload(tmp_path):
     runtime, _store = _runtime(tmp_path)
     runtime.cell_registry = PolicyCellRegistry(
         default_cell="chill",
@@ -127,7 +127,7 @@ def test_legis_explain_returns_service_explanation_payload(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_explain",
+                    "name": "policy_explain",
                     "arguments": {
                         "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
@@ -146,12 +146,12 @@ def test_legis_explain_returns_service_explanation_payload(tmp_path):
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["legis_submit_override"],
+        "available_moves": ["override_submit"],
         "required_inputs": [],
     }
 
 
-def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
+def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
     runtime, store = _runtime(tmp_path, agent_id="agent-launch")
     runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
 
@@ -162,7 +162,7 @@ def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_s
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_submit_override",
+                    "name": "override_submit",
                     "arguments": {
                         "policy": "ordinary.policy",
                         "entity": "src/x.py:f",
@@ -186,7 +186,7 @@ def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_s
     assert store.read_all()[0].payload["agent_id"] == "agent-launch"
 
 
-def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
+def test_override_submit_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
     runtime, store = _runtime(tmp_path)
     runtime.cell_registry = PolicyCellRegistry(
         default_cell="chill",
@@ -200,7 +200,7 @@ def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_w
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_submit_override",
+                    "name": "override_submit",
                     "arguments": {
                         "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
@@ -219,7 +219,7 @@ def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_w
     assert store.read_all() == []
 
 
-def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
+def test_check_list_reads_recorded_checks_by_commit_and_pr(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     checks.record(
         CheckRun(
@@ -241,7 +241,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "commit", "target": "abc123"},
                 },
             },
@@ -250,7 +250,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "pr", "target": "7"},
                 },
             },
@@ -278,7 +278,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
         ]
 
 
-def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
+def test_check_list_invalid_target_type_is_tool_error(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     runtime, _store = _runtime(tmp_path, check_surface=checks)
 
@@ -289,7 +289,7 @@ def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "tag", "target": "v1"},
                 },
             }
@@ -318,10 +318,10 @@ def test_tools_call_with_non_object_params_returns_invalid_argument(tmp_path):
     assert "params" in result["structuredContent"]["message"]
 
 
-def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
+def test_non_wp_m3_tool_names_are_not_callable(tmp_path):
     runtime, store = _runtime(tmp_path)
 
-    for legacy_name in (
+    for non_m3_name in (
         "submit_override",
         "protected_override",
         "signoff_request",
@@ -334,9 +334,9 @@ def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
             _messages(
                 {
                     "jsonrpc": "2.0",
-                    "id": legacy_name,
+                    "id": non_m3_name,
                     "method": "tools/call",
-                    "params": {"name": legacy_name, "arguments": {}},
+                    "params": {"name": non_m3_name, "arguments": {}},
                 }
             ),
             runtime,
@@ -507,7 +507,7 @@ def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
     return runtime.cell_registry or default_policy_cells()
 
 
-_WP_M3_TOOLS = frozenset({"legis_explain", "legis_submit_override", "legis_checks_for"})
+_WP_M3_TOOLS = frozenset({"policy_explain", "override_submit", "check_list"})
 
 
 def _wp_m3_explanation_payload(explanation) -> dict[str, Any]:
@@ -523,7 +523,7 @@ Replace `call_tool()` with:
 ```python
 def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
-        if name == "legis_explain":
+        if name == "policy_explain":
             explanation = explain_policy(
                 _registry(runtime),
                 policy=_require(args, "policy"),
@@ -534,7 +534,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             )
             return _tool_result(_wp_m3_explanation_payload(explanation))
 
-        if name == "legis_submit_override":
+        if name == "override_submit":
             policy = _require(args, "policy")
             entity = _require(args, "entity")
             explanation = explain_policy(
@@ -568,7 +568,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 }
             )
 
-        if name == "legis_checks_for":
+        if name == "check_list":
             if runtime.check_surface is None:
                 raise NotEnabledError("check surface is not enabled")
             target_type = _require(args, "target_type")
@@ -793,6 +793,7 @@ If verification passed without edits, do not create an empty commit.
 
 Dispatch a read-only reviewer over the full WP-M3 diff from `6105b61..HEAD`. The reviewer must check:
 - listed tools are callable;
+- listed tools follow Filigree ADR-016-style `<entity>_<verb>` names with no `legis_` project prefix;
 - legacy pre-spec tools are not callable;
 - operator authority is absent structurally;
 - launch-bound `agent_id` is used for writes;
@@ -805,10 +806,10 @@ Expected: Approved, or concrete findings fixed and re-reviewed.
 
 ## Self-Review
 
-**Spec coverage:** This plan implements WP-M3: ratified MCP stdio surface over the existing hand-rolled JSON-RPC server, `legis_explain`, chill-only `legis_submit_override` with `ACCEPTED_SELF`, `legis_checks_for`, launch-bound agent identity, and the structural absence test for `operator_id`, operator sign-off, and operator override tools. It deliberately leaves WP-M4/M5 tools and cells out.
+**Spec coverage:** This plan implements WP-M3: ratified MCP stdio surface over the existing hand-rolled JSON-RPC server, `policy_explain`, chill-only `override_submit` with `ACCEPTED_SELF`, `check_list`, launch-bound agent identity, and the structural absence test for `operator_id`, operator sign-off, and operator override tools. It deliberately leaves WP-M4/M5 tools and cells out.
 
-**MCP engineering gate:** The side-effecting tool description states its retry/idempotency behavior: repeated `legis_submit_override` calls create repeated audit records because idempotency keys are explicitly out of v1 scope. Error envelopes are structured through `structuredContent.error_code`; expected governance outcomes do not set `isError`. Return shapes are bounded for this WP: one explain object, one submit object, and check rows for one selected target.
+**MCP engineering gate:** The side-effecting tool description states its retry/idempotency behavior: repeated `override_submit` calls create repeated audit records because idempotency keys are explicitly out of v1 scope. Error envelopes are structured through `structuredContent.error_code`; expected governance outcomes do not set `isError`. Return shapes are bounded for this WP: one explain object, one submit object, and check rows for one selected target.
 
 **Placeholder scan:** The plan has no forbidden marker text, undefined helper names, or generic test-writing instructions. Every code-writing step names exact files and includes concrete code.
 
-**Type consistency:** The runtime field is consistently `check_surface`; the registry helper is `_registry`; the three tool names are consistently `legis_explain`, `legis_submit_override`, and `legis_checks_for`; the submit outcome is consistently `ACCEPTED_SELF`; disabled non-chill submit maps to `CELL_NOT_ENABLED`.
+**Type consistency:** The runtime field is consistently `check_surface`; the registry helper is `_registry`; the three tool names are consistently `policy_explain`, `override_submit`, and `check_list`; the submit outcome is consistently `ACCEPTED_SELF`; disabled non-chill submit maps to `CELL_NOT_ENABLED`.

@@ -48,6 +48,8 @@ from legis.service.governance import submit_protected_override as _submit_protec
 from legis.service.governance import verified_records as _verified_records
 from legis.service.wardline import route_wardline_scan as _route_wardline_scan
 from legis.policy.grammar import PolicyGrammar, default_grammar
+from legis.pulls.models import PullRequest, PullRequestState
+from legis.pulls.surface import PullSurface
 from legis.wardline.governor import WardlineCellPolicy
 from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity
 
@@ -185,10 +187,20 @@ class ScanResultsIn(BaseModel):
     scan: dict
     cell: str | None = None
     cell_by_severity: dict[str, str] | None = None
+    fail_on: str | None = None
 
 
 class BindIssueIn(BaseModel):
     issue_id: str
+
+
+class PullRequestIn(BaseModel):
+    number: int
+    title: str
+    base: str
+    head: str
+    state: PullRequestState
+    url: str | None = None
 
 
 class CheckRunIn(BaseModel):
@@ -227,6 +239,12 @@ def _check_to_dict(run: CheckRun) -> dict:
     return d
 
 
+def _pull_to_dict(pr: PullRequest) -> dict:
+    d = asdict(pr)
+    d["state"] = pr.state.value
+    return d
+
+
 def create_app(
     repo_path: str | Path | None = None,
     check_surface: CheckSurface | None = None,
@@ -238,7 +256,9 @@ def create_app(
     identity: IdentityResolver | None = None,
     filigree: FiligreeClient | None = None,
     binding_ledger: BindingLedger | None = None,
+    binding_key: bytes | None = None,
     pull_requests: PullRequestSource | None = None,
+    pull_surface: PullSurface | None = None,
 ) -> FastAPI:
     app = FastAPI(title="legis", version=__version__)
     source_root = Path(repo_path) if repo_path is not None else Path(os.getcwd())
@@ -259,6 +279,8 @@ def create_app(
 
     hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
     hmac_key = hmac_key_str.encode("utf-8") if hmac_key_str else None
+    if binding_key is None:
+        binding_key = hmac_key
 
     if hmac_key:
         from legis.clock import SystemClock
@@ -303,6 +325,7 @@ def create_app(
         "checks": check_surface,
         "enforcement": enforcement,
         "grammar": grammar,
+        "pulls": pull_surface,
     }
 
     def git() -> GitSurface:
@@ -313,6 +336,12 @@ def create_app(
             check_db = os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
             state["checks"] = CheckSurface(check_db)
         return state["checks"]
+
+    def pulls() -> PullSurface:
+        if state["pulls"] is None:
+            pull_db = os.environ.get("LEGIS_PULL_DB", "sqlite:///legis-pulls.db")
+            state["pulls"] = PullSurface(pull_db)
+        return state["pulls"]
 
     def engine() -> EnforcementEngine:
         if state["enforcement"] is None:
@@ -371,6 +400,24 @@ def create_app(
         # join the recorded CI check runs for this PR onto the forge context.
         return {**asdict(pr),
                 "checks": [_check_to_dict(r) for r in checks().for_pr(number)]}
+
+    @app.post("/git/pulls", status_code=201)
+    def post_recorded_pull_request(
+        pr: PullRequestIn, actor: str = Depends(verify_writer)
+    ) -> dict:
+        recorded = PullRequest(**pr.model_dump())
+        pulls().record(recorded)
+        return _pull_to_dict(recorded)
+
+    @app.get("/git/pulls/{number}")
+    def get_recorded_pull_request(number: int) -> dict:
+        pr = pulls().get(number)
+        if pr is None:
+            raise HTTPException(status_code=404, detail=f"unknown PR: {number}")
+        return {
+            **_pull_to_dict(pr),
+            "checks": [_check_to_dict(r) for r in checks().for_pr(number)],
+        }
 
     # --- CI/check surface (WP-1.2) ---
 
@@ -548,6 +595,7 @@ def create_app(
                 entity_key=entity_key,
                 content_hash=content_hash,
                 signoff_seq=request_seq,
+                key=binding_key,
                 ledger=binding_ledger,
             )
         except ValueError as exc:
@@ -647,7 +695,9 @@ def create_app(
         if server_cell and server_cell_by_severity:
             raise HTTPException(status_code=500, detail="server Wardline routing is misconfigured")
         server_routing = server_cell is not None or server_cell_by_severity is not None
-        if server_routing and (body.cell is not None or body.cell_by_severity is not None):
+        if server_routing and (
+            body.cell is not None or body.cell_by_severity is not None or body.fail_on is not None
+        ):
             raise HTTPException(status_code=403, detail="Wardline routing is server-owned")
         if not server_routing:
             if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
@@ -655,7 +705,13 @@ def create_app(
                     status_code=403,
                     detail="Wardline routing is server-owned; configure LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
                 )
-            if (body.cell is None) == (body.cell_by_severity is None):
+            if body.fail_on is not None:
+                if body.cell is None or body.cell_by_severity is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="fail_on routing requires cell and forbids cell_by_severity",
+                    )
+            elif (body.cell is None) == (body.cell_by_severity is None):
                 raise HTTPException(status_code=422,
                                     detail="provide exactly one of cell or cell_by_severity")
             if body.cell_by_severity is not None and not body.cell_by_severity:
@@ -663,6 +719,7 @@ def create_app(
 
         policy: WardlineCellPolicy | None = None
         cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
+        fail_on: WardlineSeverity | None = None
         try:
             if server_cell_by_severity is not None:
                 cell_map = _parse_wardline_cell_map(server_cell_by_severity)
@@ -676,7 +733,11 @@ def create_app(
                 cells = set(cell_map.values())
             else:
                 policy = WardlineCellPolicy(body.cell)
-                cells = {policy}
+                if body.fail_on is not None:
+                    fail_on = WardlineSeverity[body.fail_on]
+                    cells = {policy, WardlineCellPolicy.SURFACE_ONLY}
+                else:
+                    cells = {policy}
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=f"unknown cell/severity: {exc}")
 
@@ -694,6 +755,7 @@ def create_app(
                 signoff=signoff_gate,
                 policy=policy,
                 cell_map=cell_map,
+                fail_on=fail_on,
                 artifact_key=(
                     os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
                     if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")

@@ -1,3 +1,5 @@
+import pytest
+
 from legis.policy.decorator import (
     check_policy_boundary,
     fingerprint,
@@ -97,8 +99,24 @@ def _decorate_src(source, invariant="rejects bad input"):
     return handler
 
 
+def test_decoration_rejects_empty_source():
+    with pytest.raises(TypeError, match="source"):
+        @policy_boundary(source="  ", suppresses=("no-eval",), invariant="rejects bad input")
+        def handler(payload):
+            return payload
+
+
+def test_decoration_rejects_empty_invariant():
+    with pytest.raises(TypeError, match="invariant"):
+        @policy_boundary(source="src/legis/x.py:1", suppresses=("no-eval",), invariant="  ")
+        def handler(payload):
+            return payload
+
+
 def test_gate_rejects_empty_source():
-    finding = check_policy_boundary(_decorate_src(""), resolver)
+    h = _decorate_src("src/legis/x.py:1")
+    object.__setattr__(h.__policy_boundary__, "source", "   ")
+    finding = check_policy_boundary(h, resolver)
     assert finding.ok is False
     assert "source" in finding.reason.lower()
 
@@ -119,7 +137,9 @@ def test_gate_accepts_url_sha_and_repo_path_citations():
 
 
 def test_gate_rejects_empty_invariant():
-    finding = check_policy_boundary(_decorate_src("src/legis/x.py:1", invariant=""), resolver)
+    h = _decorate_src("src/legis/x.py:1", invariant="rejects bad input")
+    object.__setattr__(h.__policy_boundary__, "invariant", "   ")
+    finding = check_policy_boundary(h, resolver)
     assert finding.ok is False
     assert "invariant" in finding.reason.lower()
 

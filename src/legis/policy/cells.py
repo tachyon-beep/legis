@@ -2,7 +2,7 @@
 
 The registry is deliberately declarative and stdlib-only. Agents submit opaque
 policy names; the server maps them to governance cells and reports the mapping
-back through ``legis_explain`` and ``legis_submit_override``.
+back through ``policy_explain`` and ``override_submit``.
 """
 
 from __future__ import annotations

@@ -56,25 +56,25 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
     by_name = {tool["name"]: tool for tool in tools}
 
     assert set(by_name) == {
-        "legis_explain",
-        "legis_submit_override",
-        "legis_checks_for",
+        "policy_explain",
+        "override_submit",
+        "check_list",
     }
     assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
     assert "operator_override" not in by_name
 
     for tool in tools:
-        assert tool["name"].startswith("legis_")
+        assert not tool["name"].startswith("legis_")
         props = tool["inputSchema"].get("properties", {})
         assert "agent_id" not in props
         assert "operator_id" not in props
 
-    submit_description = by_name["legis_submit_override"]["description"]
+    submit_description = by_name["override_submit"]["description"]
     assert "records one new chill-cell override attempt" in submit_description
 
 
-def test_legis_explain_returns_service_explanation_payload(tmp_path):
+def test_policy_explain_returns_service_explanation_payload(tmp_path):
     runtime, _store = _runtime(tmp_path)
     runtime.cell_registry = PolicyCellRegistry(
         default_cell="chill",
@@ -89,7 +89,7 @@ def test_legis_explain_returns_service_explanation_payload(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_explain",
+                    "name": "policy_explain",
                     "arguments": {
                         "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
@@ -108,12 +108,12 @@ def test_legis_explain_returns_service_explanation_payload(tmp_path):
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["legis_submit_override"],
+        "available_moves": ["override_submit"],
         "required_inputs": [],
     }
 
 
-def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
+def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
     runtime, store = _runtime(tmp_path, agent_id="agent-launch")
     runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
 
@@ -124,7 +124,7 @@ def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_s
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_submit_override",
+                    "name": "override_submit",
                     "arguments": {
                         "policy": "ordinary.policy",
                         "entity": "src/x.py:f",
@@ -148,7 +148,7 @@ def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_s
     assert store.read_all()[0].payload["agent_id"] == "agent-launch"
 
 
-def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
+def test_override_submit_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
     runtime, store = _runtime(tmp_path)
     runtime.cell_registry = PolicyCellRegistry(
         default_cell="chill",
@@ -162,7 +162,7 @@ def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_w
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_submit_override",
+                    "name": "override_submit",
                     "arguments": {
                         "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
@@ -181,7 +181,7 @@ def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_w
     assert store.read_all() == []
 
 
-def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
+def test_check_list_reads_recorded_checks_by_commit_and_pr(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     checks.record(
         CheckRun(
@@ -203,7 +203,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "commit", "target": "abc123"},
                 },
             },
@@ -212,7 +212,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "pr", "target": "7"},
                 },
             },
@@ -240,7 +240,7 @@ def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
         ]
 
 
-def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
+def test_check_list_invalid_target_type_is_tool_error(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     runtime, _store = _runtime(tmp_path, check_surface=checks)
 
@@ -251,7 +251,7 @@ def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "legis_checks_for",
+                    "name": "check_list",
                     "arguments": {"target_type": "tag", "target": "v1"},
                 },
             }
@@ -265,10 +265,10 @@ def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
     assert "target_type" in result["structuredContent"]["message"]
 
 
-def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
+def test_non_wp_m3_tool_names_are_not_callable(tmp_path):
     runtime, store = _runtime(tmp_path)
 
-    for legacy_name in (
+    for non_m3_name in (
         "submit_override",
         "protected_override",
         "signoff_request",
@@ -281,9 +281,9 @@ def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
             _messages(
                 {
                     "jsonrpc": "2.0",
-                    "id": legacy_name,
+                    "id": non_m3_name,
                     "method": "tools/call",
-                    "params": {"name": legacy_name, "arguments": {}},
+                    "params": {"name": non_m3_name, "arguments": {}},
                 }
             ),
             runtime,

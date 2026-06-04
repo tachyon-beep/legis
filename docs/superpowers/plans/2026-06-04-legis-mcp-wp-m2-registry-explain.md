@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the declarative `policy/cells.toml` registry from the MCP surface design spec and expose a service-layer `legis_explain` contract that reports the mapped cell, required inputs, legal moves, and whether the mapped cell is actually wired.
+**Goal:** Build the declarative `policy/cells.toml` registry from the MCP surface design spec and expose a service-layer `policy_explain` contract that reports the mapped cell, required inputs, legal moves, and whether the mapped cell is actually wired.
 
-**Architecture:** Add a small stdlib-only `legis.policy.cells` module that loads policy-name or glob rules from TOML and fails closed on malformed configuration. Add a focused `legis.service.explain` module that turns a registry decision plus deployment wiring (`EnforcementEngine`, `ProtectedGate`, `SignoffGate`) into the exact discovery payload shape required by the MCP surface. The existing MCP runtime gains a startup-loaded registry field, but this WP does not rename or complete the full MCP tool surface; WP-M3 uses this seam to expose `legis_explain` over JSON-RPC.
+**Architecture:** Add a small stdlib-only `legis.policy.cells` module that loads policy-name or glob rules from TOML and fails closed on malformed configuration. Add a focused `legis.service.explain` module that turns a registry decision plus deployment wiring (`EnforcementEngine`, `ProtectedGate`, `SignoffGate`) into the exact discovery payload shape required by the MCP surface. The existing MCP runtime gains a startup-loaded registry field, but this WP does not rename or complete the full MCP tool surface; WP-M3 uses this seam to expose `policy_explain` over JSON-RPC.
 
 **Tech Stack:** Python 3.12, stdlib `tomllib`, stdlib `fnmatch`, dataclasses, pytest. No new runtime dependency.
 
@@ -26,7 +26,7 @@
 - **Modify** `src/legis/mcp.py:18-117` — add a startup-loaded `cell_registry` field to `McpRuntime`, using `LEGIS_POLICY_CELLS` when set and `policy/cells.toml` under `LEGIS_SOURCE_ROOT` or cwd when present.
 - **Modify** `tests/mcp/test_server.py` — add a focused startup-loading test for `LEGIS_POLICY_CELLS`.
 
-This WP delivers the service-level explain contract and runtime-loaded registry. The JSON-RPC tool name cleanup and final `legis_explain` tool exposure are part of WP-M3, which also rewrites the existing pre-spec MCP tool names into the ratified `legis_*` surface.
+This WP delivers the service-level explain contract and runtime-loaded registry. The JSON-RPC tool name cleanup and final `policy_explain` tool exposure are part of WP-M3, which also rewrites the existing pre-spec MCP tool names into the ratified `<entity>_<verb>` surface with no project prefix, matching Filigree ADR-016.
 
 ---
 
@@ -143,7 +143,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'legis.policy.cells'`.
 
 The registry is deliberately declarative and stdlib-only. Agents submit opaque
 policy names; the server maps them to governance cells and reports the mapping
-back through ``legis_explain`` and ``legis_submit_override``.
+back through ``policy_explain`` and ``override_submit``.
 """
 
 from __future__ import annotations
@@ -322,7 +322,7 @@ git commit -m "chore(policy): add default policy cell routing config (WP-M2)"
 
 ---
 
-### Task 3: Service-Level `legis_explain` Contract
+### Task 3: Service-Level `policy_explain` Contract
 
 **Files:**
 - Create: `src/legis/service/explain.py`
@@ -377,7 +377,7 @@ def test_explain_chill_policy_reports_enabled_self_clearable_cell(tmp_path):
         "self_clearable": True,
         "human_in_loop": False,
         "enabled": True,
-        "available_moves": ["legis_submit_override"],
+        "available_moves": ["override_submit"],
         "required_inputs": [],
     }
 
@@ -417,7 +417,7 @@ def test_explain_coached_policy_reports_disabled_without_judge_and_enabled_with_
     )
 
     assert enabled.enabled is True
-    assert enabled.available_moves == ("legis_submit_override",)
+    assert enabled.available_moves == ("override_submit",)
 
 
 def test_explain_protected_policy_reports_required_inputs_even_when_gate_disabled(tmp_path):
@@ -476,7 +476,7 @@ def test_explain_structured_policy_reports_human_loop_when_signoff_gate_wired(tm
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["legis_submit_override", "legis_signoff_status"],
+        "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
     }
 ```
@@ -501,7 +501,7 @@ Insert this property in `src/legis/enforcement/engine.py` immediately after `__i
 
 ```python
 # src/legis/service/explain.py
-"""Service-level discovery contract for the MCP ``legis_explain`` tool."""
+"""Service-level discovery contract for the MCP ``policy_explain`` tool."""
 
 from __future__ import annotations
 
@@ -579,7 +579,7 @@ def explain_policy(
             self_clearable=True,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=(),
         )
     if cell == "coached":
@@ -590,7 +590,7 @@ def explain_policy(
             self_clearable=False,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=(),
         )
     if cell == "structured":
@@ -601,7 +601,7 @@ def explain_policy(
             self_clearable=False,
             human_in_loop=True,
             enabled=enabled,
-            available_moves=("legis_submit_override", "legis_signoff_status")
+            available_moves=("override_submit", "signoff_status_get")
             if enabled
             else (),
             required_inputs=(),
@@ -614,7 +614,7 @@ def explain_policy(
             self_clearable=False,
             human_in_loop=False,
             enabled=enabled,
-            available_moves=("legis_submit_override",) if enabled else (),
+            available_moves=("override_submit",) if enabled else (),
             required_inputs=_PROTECTED_INPUTS,
         )
     raise AssertionError(f"unknown policy cell {cell!r}")
@@ -799,7 +799,7 @@ If Step 1 and Step 2 passed without edits, do not create an empty commit.
 
 ## Self-Review
 
-**Spec coverage:** This plan implements the line-85 `policy/cells.toml` registry, policy-name and glob mapping, default for unlisted policies, stdlib `tomllib` loading, fail-closed malformed config handling, service-level `legis_explain`, and enabled/disabled deployment wiring for mapped cells. `legis_submit_override` routing is intentionally left for WP-M3/WP-M4 because the spec sequences submit after the registry and explain brain exists.
+**Spec coverage:** This plan implements the line-85 `policy/cells.toml` registry, policy-name and glob mapping, default for unlisted policies, stdlib `tomllib` loading, fail-closed malformed config handling, service-level `policy_explain`, and enabled/disabled deployment wiring for mapped cells. `override_submit` routing is intentionally left for WP-M3/WP-M4 because the spec sequences submit after the registry and explain brain exists.
 
 **Placeholder scan:** The plan has no forbidden marker text, undefined helper names, or generic test-writing instructions. Every code-writing step names the exact file and includes concrete code.
 

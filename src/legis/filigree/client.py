@@ -29,7 +29,8 @@ MAX_RESPONSE_BYTES = 1_000_000
 @runtime_checkable
 class FiligreeClient(Protocol):
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
-               *, actor: str) -> dict[str, Any]: ...
+               *, actor: str, signoff_seq: int | None = None,
+               signature: str | None = None) -> dict[str, Any]: ...
     def associations_for_entity(self, entity_id: str) -> list[dict[str, Any]]: ...
 
 
@@ -88,12 +89,22 @@ class HttpFiligreeClient:
         self._fetch = fetch or _urllib_fetch
 
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
-               *, actor: str) -> dict[str, Any]:
+               *, actor: str, signoff_seq: int | None = None,
+               signature: str | None = None) -> dict[str, Any]:
         quoted_issue_id = urllib.parse.quote(issue_id, safe="")
+        body: dict[str, Any] = {
+            "entity_id": entity_id,
+            "content_hash": content_hash,
+            "actor": actor,
+        }
+        if signoff_seq is not None:
+            body["signoff_seq"] = signoff_seq
+        if signature is not None:
+            body["signature"] = signature
         return _require_dict(
             self._fetch(
                 "POST", f"{self._base}/api/issue/{quoted_issue_id}/entity-associations",
-                {"entity_id": entity_id, "content_hash": content_hash, "actor": actor},
+                body,
             ),
             "Filigree attach",
         )

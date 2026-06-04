@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from legis.enforcement.signing import sign
 from legis.filigree.client import FiligreeClient
 from legis.governance.binding_ledger import BindingLedger
 from legis.identity.entity_key import EntityKey
@@ -31,6 +32,7 @@ def bind_signoff_to_issue(
     entity_key: EntityKey,
     content_hash: str,
     signoff_seq: int,
+    key: bytes | None = None,
     ledger: BindingLedger | None = None,
 ) -> dict[str, Any]:
     if not entity_key.identity_stable:
@@ -38,10 +40,26 @@ def bind_signoff_to_issue(
             "cannot bind a sign-off on an identity_stable=False (locator) key — "
             "the binding would orphan on rename; resolve to an SEI first"
         )
+    signature = None
+    if key is not None:
+        signature = sign(
+            {
+                "issue_id": issue_id,
+                "entity_id": entity_key.value,
+                "content_hash": content_hash,
+                "signoff_seq": signoff_seq,
+            },
+            key,
+        )
     result = filigree.attach(
-        issue_id, entity_key.value, content_hash, actor=BINDING_ACTOR
+        issue_id,
+        entity_key.value,
+        content_hash,
+        actor=BINDING_ACTOR,
+        signoff_seq=signoff_seq,
+        signature=signature,
     )
-    out = {**result, "signoff_seq": signoff_seq}
+    out = {**result, "signoff_seq": signoff_seq, "binding_signature": signature}
     if ledger is not None:
         # Validate → attach → record. If this record() raises after attach() succeeded,
         # Filigree already holds the pointer while legis has no local binding record;

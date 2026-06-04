@@ -41,7 +41,7 @@ from legis.store.audit_store import AuditStore
 
 
 _WP_M3_TOOLS = frozenset(
-    {"legis_explain", "legis_submit_override", "legis_checks_for"}
+    {"policy_explain", "override_submit", "check_list"}
 )
 
 
@@ -128,7 +128,7 @@ def tool_definitions() -> list[dict[str, Any]]:
     string = {"type": "string"}
     return [
         {
-            "name": "legis_explain",
+            "name": "policy_explain",
             "description": (
                 "Explain which governance cell controls a policy/entity pair, "
                 "whether that cell is enabled on this server, and which move the "
@@ -140,7 +140,7 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
         },
         {
-            "name": "legis_submit_override",
+            "name": "override_submit",
             "description": (
                 "Submit an override as the launch-bound agent. In WP-M3 this "
                 "records one new chill-cell override attempt; repeated calls "
@@ -158,7 +158,7 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
         },
         {
-            "name": "legis_checks_for",
+            "name": "check_list",
             "description": (
                 "Read recorded CI/check outcomes for a commit, branch, or pull "
                 "request target."
@@ -251,7 +251,7 @@ def _wp_m3_explanation_payload(explanation) -> dict[str, Any]:
 
 def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
-        if name == "legis_explain":
+        if name == "policy_explain":
             explanation = explain_policy(
                 _registry(runtime),
                 policy=_require(args, "policy"),
@@ -262,7 +262,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             )
             return _tool_result(_wp_m3_explanation_payload(explanation))
 
-        if name == "legis_submit_override":
+        if name == "override_submit":
             policy = _require(args, "policy")
             entity = _require(args, "entity")
             explanation = explain_policy(
@@ -296,7 +296,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 }
             )
 
-        if name == "legis_checks_for":
+        if name == "check_list":
             if runtime.check_surface is None:
                 raise NotEnabledError("check surface is not enabled")
             target_type = _require(args, "target_type")

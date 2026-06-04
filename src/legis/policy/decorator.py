@@ -58,10 +58,20 @@ def policy_boundary(
     test_ref: str | None = None,
     test_fingerprint: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    if not source or not source.strip():
+        raise TypeError(
+            "@policy_boundary requires a non-empty source; empty provenance "
+            "is vibe-justification."
+        )
     if not suppresses:
         raise TypeError(
             "@policy_boundary must declare at least one suppressed policy; "
             "an empty boundary is a whole-function exemption cloak."
+        )
+    if not invariant or not invariant.strip():
+        raise TypeError(
+            "@policy_boundary requires a non-empty invariant; empty evidence "
+            "is vibe-justification."
         )
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -149,14 +159,14 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
 
     if meta.qualname != func.__qualname__:
         return GateFinding(False, f"scope/qualname mismatch: {meta.qualname!r}")
-    if not meta.source:
+    if not meta.source or not meta.source.strip():
         return GateFinding(False, "no source citation: source is required")
     if not _is_citation(meta.source):
         return GateFinding(
             False,
             f"source is not a resolvable citation (URL, git SHA, or repo path): {meta.source!r}",
         )
-    if not meta.invariant:
+    if not meta.invariant or not meta.invariant.strip():
         return GateFinding(False, "no invariant: a non-empty invariant statement is required")
     if not meta.test_ref:
         return GateFinding(False, "no behavioural evidence: test_ref is required")

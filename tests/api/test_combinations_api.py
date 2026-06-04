@@ -25,8 +25,11 @@ class _FakeFiligree:
     def __init__(self):
         self.attached = []
 
-    def attach(self, issue_id, entity_id, content_hash, *, actor):
-        self.attached.append((issue_id, entity_id, content_hash, actor))
+    def attach(self, issue_id, entity_id, content_hash, *, actor,
+               signoff_seq=None, signature=None):
+        self.attached.append(
+            (issue_id, entity_id, content_hash, actor, signoff_seq, signature)
+        )
         return {"issue_id": issue_id, "clarion_entity_id": entity_id,
                 "content_hash_at_attach": content_hash, "attached_at": "t",
                 "attached_by": actor}
@@ -91,7 +94,43 @@ def test_bind_issue_endpoint_attaches_sei_from_cleared_record(tmp_path):
     assert resp.json()["clarion_entity_id"] == "clarion:eid:abc"
     # SEI sourced from the trail; content_hash is "" because request() records no
     # clarion ext — the honest behaviour of the real record.
-    assert fil.attached == [("ISSUE-1", "clarion:eid:abc", "", "legis")]
+    assert fil.attached == [("ISSUE-1", "clarion:eid:abc", "", "legis", req.seq, None)]
+
+
+def test_bind_issue_endpoint_transmits_hmac_binding_signature(tmp_path):
+    from legis.enforcement.signing import verify
+
+    key = b"k" * 32
+    fil = _FakeFiligree()
+    gate = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 'sg.db'}"),
+                       FixedClock("2026-06-02T12:00:00+00:00"))
+    req = gate.request(
+        policy="PY-WL-101",
+        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        rationale="needs a human",
+        agent_id="agent-1",
+        extensions={"clarion": {"content_hash": "blake3"}},
+    )
+    gate.sign_off(request_seq=req.seq, operator_id="operator-1")
+
+    c = _client(tmp_path, filigree=fil, signoff_gate=gate, binding_key=key)
+    resp = c.post(f"/signoff/{req.seq}/bind-issue", json={"issue_id": "ISSUE-1"})
+
+    assert resp.status_code == 201
+    sig = resp.json()["binding_signature"]
+    assert verify(
+        {
+            "issue_id": "ISSUE-1",
+            "entity_id": "clarion:eid:abc",
+            "content_hash": "blake3",
+            "signoff_seq": req.seq,
+        },
+        sig,
+        key,
+    )
+    assert fil.attached == [
+        ("ISSUE-1", "clarion:eid:abc", "blake3", "legis", req.seq, sig)
+    ]
 
 
 def test_bind_issue_endpoint_rejects_uncleared_request(tmp_path):
@@ -147,7 +186,7 @@ def test_bind_issue_records_to_ledger_and_binding_is_verifiable(tmp_path):
     assert resp.status_code == 201
     assert resp.json()["binding_seq"] == 1
     # Full tuple: the cleared "blake3" wins at index [2], NOT "ATTACKER-SUPPLIED".
-    assert fil.attached[0] == ("ISSUE-1", "clarion:eid:abc", "blake3", "legis")
+    assert fil.attached[0] == ("ISSUE-1", "clarion:eid:abc", "blake3", "legis", 1, None)
 
     got = c.get("/signoff/1/binding")
     assert got.status_code == 200
@@ -245,6 +284,26 @@ def test_scan_results_cell_by_severity_routes_per_finding(tmp_path):
     assert resp.status_code == 200
     modes = {r["fingerprint"]: r["mode"] for r in resp.json()["routed"]}
     assert modes == {"c": "block_escalate", "i": "surface_only"}
+
+
+def test_scan_results_fail_on_routes_threshold_per_finding(tmp_path):
+    from legis.clock import FixedClock
+    from legis.enforcement.signoff import SignoffGate
+    from legis.store.audit_store import AuditStore
+
+    sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
+                     FixedClock("2026-06-02T12:00:00+00:00"))
+    c = _client(tmp_path, signoff_gate=sg)
+    body = {"agent_id": "a", "cell": "block_escalate", "fail_on": "ERROR",
+            "scan": {"findings": [
+                {"rule_id": "R-E", "message": "m", "severity": "ERROR", "kind": "defect",
+                 "fingerprint": "e", "qualname": "m.f", "properties": {}, "suppressed": "active"},
+                {"rule_id": "R-W", "message": "m", "severity": "WARN", "kind": "defect",
+                 "fingerprint": "w", "qualname": "m.g", "properties": {}, "suppressed": "active"}]}}
+    resp = c.post("/wardline/scan-results", json=body)
+    assert resp.status_code == 200
+    modes = {r["fingerprint"]: r["mode"] for r in resp.json()["routed"]}
+    assert modes == {"e": "block_escalate", "w": "surface_only"}
 
 
 def test_scan_results_block_escalate_without_gate_is_409(tmp_path):

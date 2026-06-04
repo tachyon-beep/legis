@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
 
 from legis.api.app import create_app
+from legis.checks.models import CheckOutcome, CheckRun
+from legis.checks.surface import CheckSurface
 from legis.git.surface import GitError, GitSurface
+from legis.pulls.surface import PullSurface
 
 
 def client(git_repo):
@@ -57,3 +60,45 @@ def test_git_branches_errors_are_mapped_to_4xx(git_repo, monkeypatch):
     resp = c.get("/git/branches")
     assert resp.status_code == 400
     assert "bad repo" in resp.json()["detail"]
+
+
+def test_git_pulls_recorded_surface_round_trips_and_joins_checks(tmp_path):
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    checks.record(CheckRun(
+        check_name="wardline",
+        run_id="r1",
+        commit_sha="a" * 40,
+        outcome=CheckOutcome.FAIL,
+        pr=7,
+    ))
+    checks.record(CheckRun(
+        check_name="lint",
+        run_id="r2",
+        commit_sha="b" * 40,
+        outcome=CheckOutcome.PASS,
+        pr=99,
+    ))
+    c = TestClient(create_app(check_surface=checks, pull_surface=pulls))
+    post = c.post("/git/pulls", json={
+        "number": 7,
+        "title": "Add eval guard",
+        "base": "main",
+        "head": "feature/guard",
+        "state": "open",
+        "url": "https://forge/pr/7",
+    })
+    assert post.status_code == 201
+    assert post.json()["number"] == 7
+
+    got = c.get("/git/pulls/7")
+    assert got.status_code == 200
+    body = got.json()
+    assert body["title"] == "Add eval guard"
+    assert body["state"] == "open"
+    assert [ck["check_name"] for ck in body["checks"]] == ["wardline"]
+
+
+def test_git_pulls_unknown_pr_is_404(tmp_path):
+    c = TestClient(create_app(pull_surface=PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")))
+    assert c.get("/git/pulls/999").status_code == 404

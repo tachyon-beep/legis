@@ -70,6 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--db", default=gov_db_default,
         help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
     )
+    gate = subparsers.add_parser(
+        "governance-gate",
+        help="Run governance CI gates; currently the override-rate gate",
+    )
+    gate.add_argument(
+        "--db", default=gov_db_default,
+        help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
+    )
 
     return parser
 
@@ -85,6 +93,52 @@ def _missing_sqlite_db(url: str) -> Path | None:
         return None
     path = Path(database)
     return path if not path.exists() else None
+
+
+def _check_override_rate(db_url: str) -> int:
+    import os
+    from legis.enforcement.lifecycle import GateStatus, evaluate_override_rate
+    from legis.governance import params
+    from legis.store.audit_store import AuditStore
+
+    missing_db = _missing_sqlite_db(db_url)
+    if missing_db is not None:
+        print(
+            "override-rate gate: PASS_WITH_NOTICE "
+            f"(governance database is missing: {missing_db})"
+        )
+        return 0
+
+    store = AuditStore(db_url)
+    if not store.verify_integrity():
+        print("Error: Database hash chain integrity check failed!", file=sys.stderr)
+        return 1
+
+    records = store.read_all()
+
+    hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
+    if hmac_key_str:
+        from legis.enforcement.protected import TrailVerifier, TamperError
+        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+        protected_policies = frozenset(
+            p.strip() for p in protected_policies_str.split(",") if p.strip()
+        )
+        verifier = TrailVerifier(hmac_key_str.encode("utf-8"), protected_policies)
+        try:
+            verifier.verify(records)
+        except TamperError as exc:
+            print(f"Error: Protected audit trail verification failed: {exc}", file=sys.stderr)
+            return 1
+
+    res = evaluate_override_rate(
+        records,
+        threshold=params.OVERRIDE_RATE_THRESHOLD,
+        window=params.OVERRIDE_RATE_WINDOW,
+        min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
+    )
+    print(f"override-rate gate: {res.status.value} "
+          f"(rate={res.rate:.3f}, sample={res.sample_size})")
+    return 1 if res.status is GateStatus.FAIL else 0
 
 
 def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
@@ -112,47 +166,8 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         run("legis.api.app:create_app", host=args.host, port=args.port, factory=True)
         return 0
 
-    if args.command == "check-override-rate":
-        import os
-        from legis.enforcement.lifecycle import GateStatus, evaluate_override_rate
-        from legis.governance import params
-        from legis.store.audit_store import AuditStore
-
-        missing_db = _missing_sqlite_db(args.db)
-        if missing_db is not None:
-            print(f"Error: Governance database is missing: {missing_db}", file=sys.stderr)
-            return 1
-
-        store = AuditStore(args.db)
-        if not store.verify_integrity():
-            print("Error: Database hash chain integrity check failed!", file=sys.stderr)
-            return 1
-
-        records = store.read_all()
-
-        hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
-        if hmac_key_str:
-            from legis.enforcement.protected import TrailVerifier, TamperError
-            protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-            protected_policies = frozenset(
-                p.strip() for p in protected_policies_str.split(",") if p.strip()
-            )
-            verifier = TrailVerifier(hmac_key_str.encode("utf-8"), protected_policies)
-            try:
-                verifier.verify(records)
-            except TamperError as exc:
-                print(f"Error: Protected audit trail verification failed: {exc}", file=sys.stderr)
-                return 1
-
-        res = evaluate_override_rate(
-            records,
-            threshold=params.OVERRIDE_RATE_THRESHOLD,
-            window=params.OVERRIDE_RATE_WINDOW,
-            min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
-        )
-        print(f"override-rate gate: {res.status.value} "
-              f"(rate={res.rate:.3f}, sample={res.sample_size})")
-        return 1 if res.status is GateStatus.FAIL else 0
+    if args.command in {"check-override-rate", "governance-gate"}:
+        return _check_override_rate(args.db)
 
     if args.command == "mcp":
         import os

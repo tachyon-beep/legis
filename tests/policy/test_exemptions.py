@@ -2,7 +2,13 @@ import tomllib
 
 import pytest
 
-from legis.policy.exemptions import Exemption, ExemptionRegistry, load_exemptions
+from legis.policy.exemptions import (
+    Exemption,
+    ExemptionAllowlist,
+    ExemptionError,
+    ExemptionRegistry,
+    load_exemptions,
+)
 
 
 def _write(tmp_path, text):
@@ -54,3 +60,32 @@ def test_scalar_array_entry_fails_clearly(tmp_path):
 def test_empty_file_is_an_empty_registry(tmp_path):
     reg = load_exemptions(_write(tmp_path, ""))
     assert reg.is_exempt("import-allowlist", "requests") is None
+
+
+YAML = """
+exemptions:
+  - policy: import-allowlist
+    entity: "python:function:m.legacy"
+    rationale: "one-off: vendored module pending rewrite, tracked in ISSUE-42"
+"""
+
+
+def test_yaml_allowlist_loads_and_matches_one_off_exemption(tmp_path):
+    p = tmp_path / "exemptions.yaml"
+    p.write_text(YAML)
+    al = ExemptionAllowlist.from_file(p)
+    assert al.is_exempt("import-allowlist", "python:function:m.legacy") is True
+    assert al.is_exempt("import-allowlist", "python:function:m.other") is False
+    assert al.is_exempt("other-policy", "python:function:m.legacy") is False
+
+
+def test_yaml_allowlist_rejects_missing_rationale(tmp_path):
+    p = tmp_path / "bad.yaml"
+    p.write_text("exemptions:\n  - policy: p\n    entity: e\n")
+    with pytest.raises(ExemptionError, match="rationale"):
+        ExemptionAllowlist.from_file(p)
+
+
+def test_yaml_allowlist_missing_file_is_empty(tmp_path):
+    al = ExemptionAllowlist.from_file(tmp_path / "nope.yaml")
+    assert al.is_exempt("any", "thing") is False

@@ -18,6 +18,7 @@ from legis.wardline.ingest import (
     verify_wardline_artifact,
     wardline_artifact_fields,
 )
+from legis.wardline.policy import resolve_cell
 
 
 def route_wardline_scan(
@@ -29,6 +30,7 @@ def route_wardline_scan(
     signoff: SignoffGate | None,
     policy: WardlineCellPolicy | None = None,
     cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None,
+    fail_on: WardlineSeverity | None = None,
     artifact_key: bytes | None = None,
 ) -> list[dict[str, Any]]:
     artifact_provenance = verify_wardline_artifact(scan, artifact_key)
@@ -46,6 +48,15 @@ def route_wardline_scan(
         "active_count": len(findings),
         **artifact_provenance,
     }
+    if fail_on is not None:
+        if policy is None or cell_map is not None:
+            raise ValueError("fail_on routing requires policy and forbids cell_map")
+        cell_map = {
+            f.severity: resolve_cell(f, fail_on=fail_on, gate_cell=policy)
+            for f in findings
+        }
+        policy = None
+
     return route_findings(
         findings,
         policy=policy,

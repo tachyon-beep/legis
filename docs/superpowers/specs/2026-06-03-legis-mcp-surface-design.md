@@ -31,7 +31,7 @@ declarative policy→cell registry, an in-process MCP stdio server, the structur
 and the safety invariants in §4.
 
 Out of scope (named-and-deferred, NOT built in v1; no design owed here): idempotency keys, batch
-policy evaluation, `trail_id` correlation handles, `identity_stable` warnings on `legis_explain`.
+policy evaluation, `trail_id` correlation handles, `identity_stable` warnings on `policy_explain`.
 These are real but speculative; YAGNI applies. `identity_stable` is deferred, not killed — both users
 flagged it as a future nice-to-have, not a v1 blocker.
 
@@ -79,24 +79,29 @@ alongside the existing `legis serve` and `legis check-override-rate`.
 There is **no policy→cell mapping in legis today.** The cell is determined by (a) what is wired into
 `create_app` on a deployment (is a judge attached? are `protected_gate`/`signoff_gate` wired?) and
 (b) which endpoint the caller chose. The Wardline path keys cells on *severity*, not policy name. So
-the users' headline ask — `legis_explain(policy) → "this policy is in the structured cell"` —
+the users' headline ask — `policy_explain(policy) → "this policy is in the structured cell"` —
 presumes a registry that does not exist and must be built.
 
 Design: a declarative **`policy/cells.toml`** mapping policy-name (or glob) → cell, with a default
 for unlisted policies, loaded at startup via stdlib `tomllib` (the `policy/exemptions.py` pattern:
-fails closed on malformed input). It backs both `legis_explain` (report the cell) and
-`legis_submit_override` (route transparently). A policy's cell is still also constrained by
-deployment wiring — `legis_explain.enabled` reports whether the mapped cell's gate is actually wired,
+fails closed on malformed input). It backs both `policy_explain` (report the cell) and
+`override_submit` (route transparently). A policy's cell is still also constrained by
+deployment wiring — `policy_explain.enabled` reports whether the mapped cell's gate is actually wired,
 so the agent never discovers a disabled cell by a `404` surprise.
 
 ## §3. The tool surface (ratified by both agent users)
+
+Tool names follow the Filigree MCP convention: lowercase `<entity>_<verb>` with
+no project prefix. MCP hosts already surface server identity as
+`mcp__legis__<tool>`, so names like `legis_policy_explain` would repeat the
+server token and fight cross-suite consistency.
 
 Result envelope convention, all tools: a discriminated `outcome` enum; `isError:true` reserved for
 infrastructure/integrity failure only; `seq` returned on any trail-writing call; `agent_id` injected
 by the server at launch (§4.2), never a tool input.
 
 ### Discovery
-- **`legis_explain(policy, entity)`** — *Optional, never a precondition.* Look-before-leap, justified
+- **`policy_explain(policy, entity)`** — *Optional, never a precondition.* Look-before-leap, justified
   because every override attempt is an attributable trail write.
   - → `{cell, judge_inline, self_clearable, human_in_loop, enabled, available_moves[], required_inputs[]}`
     where `required_inputs` is the same `[{field, how}]` shape `NEED_INPUTS` returns, so the agent's
@@ -104,13 +109,13 @@ by the server at launch (§4.2), never a tool input.
   - error: `{isError:true, error_code:"LEGIS_UNAVAILABLE"}`
 
 ### The unified write path
-- **`legis_submit_override(policy, entity, rationale, [file_fingerprint, ast_path])`** — ONE tool,
+- **`override_submit(policy, entity, rationale, [file_fingerprint, ast_path])`** — ONE tool,
   opaque input / transparent output. Consults the registry, routes to the governing cell, always
   names the cell in the result. `rationale` is free-text.
   - `{outcome:"ACCEPTED_SELF", cell:"chill", seq, ...}` — self-cleared, no judge, human reviews async
   - `{outcome:"ACCEPTED_BY_JUDGE", cell:"coached", seq, judge_model, judge_rationale, note:"may be re-judged later"}`
   - `{outcome:"BLOCKED", cell, seq, judge_model, judge_rationale, blocked_reason_code, self_clearable:false, next_actions:["REVISE_CODE","REVISE_RATIONALE"], note:"this attempt does not count toward your override-rate"}`
-  - `{outcome:"ESCALATED_PENDING", cell:"structured", seq, cleared:false, human_required:true, operator_instruction:"<verbatim string to surface to the operator>", poll_tool:"legis_signoff_status", poll_handle:<seq>}`
+  - `{outcome:"ESCALATED_PENDING", cell:"structured", seq, cleared:false, human_required:true, operator_instruction:"<verbatim string to surface to the operator>", poll_tool:"signoff_status_get", poll_handle:<seq>}`
   - `{outcome:"NEED_INPUTS", cell:"protected", required_inputs:[{field:"file_fingerprint", how:"sha256 of the target file contents"}, {field:"ast_path", how:"dotted path to the AST node"}]}` — non-error guided result; resubmit with the fields. No attributable failed write on the trail.
   - error: `{isError:true, error_code:"CELL_NOT_ENABLED"|"AUDIT_INTEGRITY_FAILURE"|"LEGIS_UNAVAILABLE"}`
 
@@ -119,27 +124,27 @@ by the server at launch (§4.2), never a tool input.
   upgrade, never a schema change.
 
 ### Escalation lifecycle
-- **`legis_signoff_status(seq)`** — cheap, idempotent poll. Vocabulary consistent with
+- **`signoff_status_get(seq)`** — cheap, idempotent poll. Vocabulary consistent with
   `ESCALATED_PENDING` (`cleared:true`, no third synonym for "the human signed").
   - → `{cleared:false, seq}` | `{cleared:true, seq, signed_by, signed_at}`
   - error: `{isError:true, error_code:"NO_SUCH_REQUEST"}`
 
 ### Pre-commit check
-- **`legis_evaluate_policy(policy, target)`** — distinct pre-commit "am I in violation *right now*"
+- **`policy_evaluate(policy, target)`** — distinct pre-commit "am I in violation *right now*"
   niche (the fix-first-vs-override decision); does not record an override.
   - → `{outcome:"CLEAR"|"VIOLATION"|"UNKNOWN", detail, provenance_gap}` — `UNKNOWN` explicitly
     distinct from `CLEAR`, with guidance: do not treat `UNKNOWN` as permission.
 
 ### Wardline handoff
-- **`legis_route_scan(scan, [cell], [severity_map])`** — exactly one of `cell` (force one cell) or
+- **`scan_route(scan, [cell], [severity_map])`** — exactly one of `cell` (force one cell) or
   `severity_map` (route by severity); two named optional params, NOT an overloaded union; server-side
   validation errors if both or neither.
   - → `{outcome:"ROUTED", routed:[…]}` | `{isError:true, error_code:"INVALID_CELL_SPEC"}`
 
 ### Reads (thin, 1:1)
-- `legis_git_branches`, `legis_git_commit(sha)`, `legis_git_renames(rev_range)`,
-  `legis_pull_request(number)` (PR + joined check outcomes), `legis_checks_for(target_type, target)`.
-- **`legis_override_rate`** — no tuning inputs. Result carries the lock-note in-payload:
+- `git_branch_list`, `git_commit_get(sha)`, `git_rename_list(rev_range)`,
+  `pull_request_get(number)` (PR + joined check outcomes), `check_list(target_type, target)`.
+- **`override_rate_get`** — no tuning inputs. Result carries the lock-note in-payload:
   `{status, rate, sample_size, note:"measures operator force-pasts; not movable by agent retries"}`.
 
 ### Deliberately ABSENT from the agent surface (the single most important honesty property)
@@ -179,17 +184,17 @@ a proven pattern.
   refactor `legis.api.app` to a thin adapter. Behavior-preserving; existing 214 tests stay green.
   *Foundational — everything sits on it.*
 - **WP-M2 — Registry + explain.** `policy/cells.toml` + stdlib `tomllib` loader (fails closed);
-  `legis_explain` over the service layer. *The routing brain `submit` depends on.*
+  `policy_explain` over the service layer. *The routing brain `submit` depends on.*
 - **WP-M3 — Vertical slice.** Hand-rolled MCP JSON-RPC/stdio server + `legis mcp` console script +
-  the outcome envelope + **`legis_submit_override` for the chill cell only** (`ACCEPTED_SELF`) +
-  `legis_explain` + ONE read tool (`legis_checks_for`) to prove the read path. `agent_id` bound at
+  the outcome envelope + **`override_submit` for the chill cell only** (`ACCEPTED_SELF`) +
+  `policy_explain` + ONE read tool (`check_list`) to prove the read path. `agent_id` bound at
   launch. The operator-absent structural test (§4.1) wired here and riding from now on. *First real
   user value: discover → attempt override → transparent governed result, end-to-end over MCP, on the
   path legis exists for.*
-- **WP-M4 — Widen the write path.** Extend `legis_submit_override` through coached
+- **WP-M4 — Widen the write path.** Extend `override_submit` through coached
   (`ACCEPTED_BY_JUDGE` / `BLOCKED` with the `blocked_reason_code` field present, populated
   `UNCLASSIFIED`), structured (`ESCALATED_PENDING`), and protected (`NEED_INPUTS` + signature) cells;
-  add `legis_signoff_status`, `legis_evaluate_policy`, `legis_route_scan`. *Extending a proven path,
+  add `signoff_status_get`, `policy_evaluate`, `scan_route`. *Extending a proven path,
   not building the envelope and the hard cells at once.*
 - **WP-M5 — Reads + safety hardening.** Fold in remaining read tools (`git_*`, `pull_request`,
   `override_rate` with its in-payload note) — low-risk, slot in once the envelope is proven. Land the
@@ -221,5 +226,5 @@ Two agent instances were interviewed as the customer, two rounds each with cross
   reality: the override-rate gate measures **operator force-pasts**, not agent retries (so a blocked
   agent cannot inflate it), and `agent_id` is today free-text in the payload with no auth anywhere
   (grounding §4.2).
-- **Ratification:** both accepted the unified `legis_submit_override` + `NEED_INPUTS` over separate
+- **Ratification:** both accepted the unified `override_submit` + `NEED_INPUTS` over separate
   per-cell tools, and both independently demanded the M3 chill-write vertical slice over reads-first.
