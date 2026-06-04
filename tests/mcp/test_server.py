@@ -108,7 +108,7 @@ def test_legis_explain_returns_service_explanation_payload(tmp_path):
         "self_clearable": False,
         "human_in_loop": True,
         "enabled": True,
-        "available_moves": ["legis_submit_override", "legis_signoff_status"],
+        "available_moves": ["legis_submit_override"],
         "required_inputs": [],
     }
 
@@ -293,6 +293,21 @@ def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
         assert result["structuredContent"]["error_code"] == "UNKNOWN_TOOL"
 
     assert store.read_all() == []
+
+
+def test_tools_call_with_non_object_params_returns_invalid_argument(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    responses = _run(
+        _messages(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": "bad"}
+        ),
+        runtime,
+    )
+
+    result = responses[0]["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert "params" in result["structuredContent"]["message"]
 
 
 def test_build_runtime_loads_policy_cells_from_configured_path(tmp_path, monkeypatch):

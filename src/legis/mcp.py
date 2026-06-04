@@ -8,7 +8,7 @@ identity from call arguments.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -38,6 +38,11 @@ from legis.service.errors import (
 from legis.service.explain import explain_policy
 from legis.service.governance import submit_override
 from legis.store.audit_store import AuditStore
+
+
+_WP_M3_TOOLS = frozenset(
+    {"legis_explain", "legis_submit_override", "legis_checks_for"}
+)
 
 
 @dataclass
@@ -198,6 +203,8 @@ def _service_error(exc: Exception) -> dict[str, Any]:
 
 
 def _arguments(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    if not isinstance(params, dict):
+        raise ValueError("tools/call params must be an object")
     name = params.get("name")
     arguments = params.get("arguments", {})
     if not isinstance(name, str):
@@ -215,13 +222,31 @@ def _require(args: dict[str, Any], key: str) -> str:
 
 
 def _check_to_dict(run: CheckRun) -> dict[str, Any]:
-    payload = asdict(run)
-    payload["outcome"] = run.outcome.value
-    return payload
+    return {
+        "check_name": run.check_name,
+        "run_id": run.run_id,
+        "commit_sha": run.commit_sha,
+        "outcome": run.outcome.value,
+        "branch": run.branch,
+        "pr": run.pr,
+        "ran_against": run.ran_against,
+        "rule_set": run.rule_set,
+        "policy_version": run.policy_version,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
 
 
 def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
     return runtime.cell_registry or default_policy_cells()
+
+
+def _wp_m3_explanation_payload(explanation) -> dict[str, Any]:
+    payload = explanation.to_payload()
+    payload["available_moves"] = [
+        move for move in payload["available_moves"] if move in _WP_M3_TOOLS
+    ]
+    return payload
 
 
 def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -235,7 +260,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 protected_gate=runtime.protected_gate,
                 signoff_gate=runtime.signoff_gate,
             )
-            return _tool_result(explanation.to_payload())
+            return _tool_result(_wp_m3_explanation_payload(explanation))
 
         if name == "legis_submit_override":
             policy = _require(args, "policy")
