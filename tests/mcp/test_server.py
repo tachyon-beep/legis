@@ -174,6 +174,7 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
         "git_branch_list",
         "git_commit_get",
         "git_rename_list",
+        "git_rename_feed_get",
         "pull_request_get",
         "check_list",
         "override_rate_get",
@@ -1219,3 +1220,22 @@ cell = "protected"
     assert runtime.cell_registry is not None
     assert runtime.cell_registry.cell_for("secure.source") == "protected"
     assert runtime.cell_registry.cell_for("ordinary.policy") == "chill"
+
+
+def test_git_rename_feed_get_is_listed():
+    from legis.mcp import tool_definitions
+
+    names = {t["name"] for t in tool_definitions()}
+    assert "git_rename_feed_get" in names
+
+
+def test_git_rename_feed_get_returns_committed_renames(git_repo, monkeypatch):
+    from legis.mcp import build_runtime, call_tool
+
+    monkeypatch.setenv("LEGIS_SOURCE_ROOT", str(git_repo))
+    runtime = build_runtime("agent-1")
+
+    result = call_tool(runtime, "git_rename_feed_get", {"base": "HEAD~1", "head": "HEAD"})
+
+    assert result["structuredContent"]["committed"][0]["new_path"] == "renamed.txt"
+    assert result["structuredContent"]["status"] == "committed_only"

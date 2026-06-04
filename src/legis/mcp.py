@@ -64,6 +64,7 @@ _AGENT_TOOLS = frozenset(
         "git_branch_list",
         "git_commit_get",
         "git_rename_list",
+        "git_rename_feed_get",
         "pull_request_get",
         "check_list",
         "override_rate_get",
@@ -247,6 +248,21 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "git_rename_list",
             "description": "List git rename evidence for a revision range.",
             "inputSchema": _schema(["rev_range"], {"rev_range": string}),
+        },
+        {
+            "name": "git_rename_feed_get",
+            "description": (
+                "Clarion-ready rename feed: committed renames over base..head plus "
+                "optional uncommitted working-tree renames."
+            ),
+            "inputSchema": _schema(
+                ["base"],
+                {
+                    "base": string,
+                    "head": string,
+                    "include_worktree": {"type": "boolean"},
+                },
+            ),
         },
         {
             "name": "pull_request_get",
@@ -866,6 +882,18 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                         for rename in _git(runtime).renames(_require(args, "rev_range"))
                     ]
                 }
+            )
+
+        if name == "git_rename_feed_get":
+            from legis.git.rename_feed import build_rename_feed
+
+            return _tool_result(
+                build_rename_feed(
+                    runtime.source_root or os.getcwd(),
+                    base=_require(args, "base"),
+                    head=args.get("head", "HEAD"),
+                    include_worktree=bool(args.get("include_worktree", False)),
+                )
             )
 
         if name == "pull_request_get":
