@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, Security
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -657,6 +658,20 @@ def create_app(
         if binding is None:
             raise HTTPException(status_code=404, detail="no binding at seq")
         return binding
+
+    @app.get("/filigree/issues/{issue_id}/closure-gate")
+    def filigree_closure_gate(issue_id: str) -> Any:
+        from legis.governance.filigree_gate import evaluate_issue_closure
+
+        if binding_ledger is None:
+            raise HTTPException(status_code=404, detail="binding ledger not enabled")
+        try:
+            decision = evaluate_issue_closure(binding_ledger, issue_id=issue_id)
+        except BindingError as exc:
+            raise HTTPException(status_code=500, detail=f"binding integrity failure: {exc}")
+        if not decision["allowed"]:
+            return JSONResponse(status_code=409, content=decision)
+        return decision
 
     @app.post("/signoff/{request_seq}/sign")
     def post_signoff_sign(request_seq: int, body: SignoffSignIn, operator: str = Depends(verify_operator)) -> dict:
