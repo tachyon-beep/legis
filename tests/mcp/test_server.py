@@ -178,6 +178,7 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
         "pull_request_get",
         "check_list",
         "override_rate_get",
+        "filigree_closure_gate_get",
     }
     assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
@@ -1239,3 +1240,40 @@ def test_git_rename_feed_get_returns_committed_renames(git_repo, monkeypatch):
 
     assert result["structuredContent"]["committed"][0]["new_path"] == "renamed.txt"
     assert result["structuredContent"]["status"] == "committed_only"
+
+
+def test_filigree_closure_gate_get_is_listed():
+    from legis.mcp import tool_definitions
+
+    names = {t["name"] for t in tool_definitions()}
+    assert "filigree_closure_gate_get" in names
+
+
+def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):
+    from legis.mcp import build_runtime, call_tool
+
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    runtime = build_runtime("agent-1")
+
+    result = call_tool(runtime, "filigree_closure_gate_get", {"issue_id": "ISSUE-7"})
+
+    # NotEnabledError is mapped to an error envelope, not raised.
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+
+
+def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_path):
+    # A tampered binding ledger must surface AUDIT_INTEGRITY_FAILURE via MCP,
+    # mirroring the HTTP 500 path — not a generic INTERNAL_ERROR.
+    from legis.governance.binding_ledger import BindingError
+    from legis.mcp import McpRuntime, call_tool
+
+    class _TamperedLedger:
+        def get_by_issue_id(self, issue_id):
+            raise BindingError("hash chain integrity check failed")
+
+    runtime = McpRuntime(agent_id="agent-1", binding_ledger=_TamperedLedger())
+    result = call_tool(runtime, "filigree_closure_gate_get", {"issue_id": "ISSUE-7"})
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
