@@ -140,3 +140,18 @@ def test_git_pulls_record_server_owned_writer_provenance(tmp_path, monkeypatch):
 def test_git_pulls_unknown_pr_is_404(tmp_path):
     c = TestClient(create_app(pull_surface=PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")))
     assert c.get("/git/pulls/999").status_code == 404
+
+
+def test_git_rename_feed_returns_committed_renames(git_repo):
+    resp = client(git_repo).get("/git/rename-feed", params={"base": "HEAD~1", "head": "HEAD"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "committed_only"
+    assert body["committed"][0]["new_path"] == "renamed.txt"
+
+
+def test_git_rename_feed_rejects_bad_ref(git_repo):
+    resp = client(git_repo).get("/git/rename-feed", params={"base": "--bad"})
+
+    assert resp.status_code == 400

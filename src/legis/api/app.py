@@ -31,6 +31,7 @@ from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
+from legis.git.rename_feed import build_rename_feed
 from legis.git.surface import GitError, GitSurface
 from legis.governance.gaps import find_lineage_integrity, find_orphan_gaps
 from legis.filigree.client import FiligreeClient
@@ -408,6 +409,22 @@ def create_app(
     def git_renames(rev_range: str = Query(...)) -> list[dict]:
         try:
             return [asdict(r) for r in git().renames(rev_range)]
+        except GitError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/git/rename-feed")
+    def git_rename_feed(
+        base: str = Query(...),
+        head: str = Query("HEAD"),
+        include_worktree: bool = Query(False),
+    ) -> dict:
+        try:
+            return build_rename_feed(
+                repo_path or os.getcwd(),
+                base=base,
+                head=head,
+                include_worktree=include_worktree,
+            )
         except GitError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
