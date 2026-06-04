@@ -20,6 +20,11 @@ from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.verdict import JudgeOpinion, Verdict
+from legis.policy.cells import (
+    PolicyCellRegistry,
+    default_policy_cells,
+    load_policy_cells,
+)
 from legis.policy.grammar import default_grammar
 from legis.records.override_record import OverrideRecord
 from legis.service.errors import (
@@ -52,10 +57,24 @@ class McpRuntime:
     signoff_gate: Any | None = None
     trail_verifier: TrailVerifier | None = None
     grammar: Any | None = None
+    cell_registry: PolicyCellRegistry | None = None
     source_root: str | Path | None = None
     wardline_artifact_key: bytes | None = None
     wardline_cell: str | None = None
     wardline_cell_by_severity: str | None = None
+
+
+def _load_policy_cell_registry() -> PolicyCellRegistry:
+    configured = os.environ.get("LEGIS_POLICY_CELLS")
+    if configured:
+        return load_policy_cells(configured)
+
+    root = Path(os.environ.get("LEGIS_SOURCE_ROOT") or os.getcwd())
+    default_path = root / "policy" / "cells.toml"
+    if default_path.exists():
+        return load_policy_cells(default_path)
+
+    return default_policy_cells()
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
@@ -106,6 +125,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
         signoff_gate=signoff_gate,
         trail_verifier=trail_verifier,
         grammar=default_grammar(),
+        cell_registry=_load_policy_cell_registry(),
         source_root=os.environ.get("LEGIS_SOURCE_ROOT") or os.getcwd(),
         wardline_artifact_key=(
             os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")

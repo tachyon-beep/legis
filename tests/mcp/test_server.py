@@ -277,3 +277,27 @@ def test_wardline_tool_invalid_server_cell_maps_to_mcp_error(tmp_path):
     result = responses[0]["result"]
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_build_runtime_loads_policy_cells_from_configured_path(tmp_path, monkeypatch):
+    cells = tmp_path / "cells.toml"
+    cells.write_text(
+        """
+default_cell = "chill"
+
+[[policy]]
+pattern = "secure.*"
+cell = "protected"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LEGIS_POLICY_CELLS", str(cells))
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+
+    from legis.mcp import build_runtime
+
+    runtime = build_runtime("agent-1")
+
+    assert runtime.cell_registry is not None
+    assert runtime.cell_registry.cell_for("secure.source") == "protected"
+    assert runtime.cell_registry.cell_for("ordinary.policy") == "chill"
