@@ -2,7 +2,7 @@
 # Default policy-to-cell routing for local Legis startup.
 # Exact policy names beat globs; unlisted policies use default_cell.
 
-default_cell = "chill"
+default_cell = "structured"
 
 [[policy]]
 pattern = "import-allowlist"

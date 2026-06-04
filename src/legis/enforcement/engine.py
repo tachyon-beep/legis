@@ -22,7 +22,7 @@ from legis.enforcement.judge import Judge
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
-from legis.store.audit_store import AuditStore
+from legis.store.protocol import AppendOnlyStore
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class EnforcementResult:
 class EnforcementEngine:
     def __init__(
         self,
-        store: AuditStore,
+        store: AppendOnlyStore,
         clock: Clock,
         judge: Judge | None = None,
     ) -> None:

@@ -31,4 +31,10 @@ class EntityKey:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "EntityKey":
-        return cls(value=d["value"], identity_stable=bool(d["identity_stable"]))
+        value = d.get("value")
+        identity_stable = d.get("identity_stable")
+        if not isinstance(value, str) or not value:
+            raise ValueError("entity key value must be a non-empty string")
+        if not isinstance(identity_stable, bool):
+            raise ValueError("entity key identity_stable must be a boolean")
+        return cls(value=value, identity_stable=identity_stable)

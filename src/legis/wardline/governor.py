@@ -78,6 +78,14 @@ def route_findings(
         raise ValueError("surface cell(s) require an engine")
     if signoff is None and WardlineCellPolicy.BLOCK_ESCALATE in cells_needed:
         raise ValueError("block_escalate cell requires a signoff gate")
+    surface_cells = {
+        WardlineCellPolicy.SURFACE_OVERRIDE,
+        WardlineCellPolicy.SURFACE_ONLY,
+    }
+    if WardlineCellPolicy.BLOCK_ESCALATE in cells_needed and cells_needed & surface_cells:
+        raise ValueError(
+            "split cross-store Wardline batches by cell before routing"
+        )
 
     def cell_for(f: WardlineFinding) -> WardlineCellPolicy:
         if cell_map is not None:

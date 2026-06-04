@@ -77,3 +77,13 @@ def verify_current_source_binding(
         "source_path": rel,
         "current_fingerprint": current_fingerprint,
     }
+
+
+def require_verified_source_binding(entity: str, source_binding: dict[str, Any]) -> None:
+    """Fail closed when a source-shaped protected entity was not verified."""
+    if _source_path_from_entity(entity) is None:
+        return
+    if source_binding.get("status") == "verified":
+        return
+    reason = source_binding.get("reason") or "unknown reason"
+    raise InvalidArgumentError(f"source binding could not be verified: {reason}")

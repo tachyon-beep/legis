@@ -77,6 +77,11 @@ def _token_actor_from_mapping(
         if hmac.compare_digest(credentials.credentials, token):
             actor, scope_sep, scope_raw = actor_spec.partition(":")
             scopes = {scope.strip() for scope in scope_raw.split("|") if scope.strip()}
+            if not scope_sep and os.environ.get("LEGIS_ALLOW_UNSCOPED_API_TOKENS") != "1":
+                raise HTTPException(
+                    status_code=403,
+                    detail="API token actor mappings must declare an explicit scope.",
+                )
             if scope_sep and required_scope not in scopes:
                 raise HTTPException(
                     status_code=403,
@@ -245,6 +250,28 @@ def _pull_to_dict(pr: PullRequest) -> dict:
     return d
 
 
+def _binding_entity_from_backfill(
+    records: list[Any], original_seq: int
+) -> tuple[EntityKey, str] | None:
+    for rec in reversed(records):
+        payload = rec.payload
+        if payload.get("event") != "SEI_BACKFILL":
+            continue
+        if payload.get("original_seq") != original_seq:
+            continue
+        try:
+            entity_key = EntityKey.from_dict(payload["entity_key"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not entity_key.identity_stable:
+            continue
+        content_hash = payload.get("extensions", {}).get("clarion", {}).get(
+            "content_hash"
+        ) or ""
+        return entity_key, content_hash
+    return None
+
+
 def create_app(
     repo_path: str | Path | None = None,
     check_surface: CheckSurface | None = None,
@@ -407,7 +434,7 @@ def create_app(
     def post_recorded_pull_request(
         pr: PullRequestIn, actor: str = Depends(verify_writer)
     ) -> dict:
-        recorded = PullRequest(**pr.model_dump())
+        recorded = PullRequest(**pr.model_dump(), recorded_by=actor)
         pulls().record(recorded)
         return _pull_to_dict(recorded)
 
@@ -425,7 +452,7 @@ def create_app(
 
     @app.post("/checks", status_code=201)
     def post_check(run: CheckRunIn, actor: str = Depends(verify_writer)) -> dict:
-        cr = CheckRun(**run.model_dump())
+        cr = CheckRun(**run.model_dump(), recorded_by=actor)
         checks().record(cr)
         return _check_to_dict(cr)
 
@@ -569,9 +596,10 @@ def create_app(
                 status_code=500,
                 detail="sign-off trail integrity failure: database hash chain verification failed",
             )
+        records = signoff_gate.records()
         if trail_verifier is not None:
             try:
-                trail_verifier.verify(signoff_gate.records())
+                trail_verifier.verify(records)
             except TamperError as exc:
                 raise HTTPException(
                     status_code=500,
@@ -590,6 +618,10 @@ def create_app(
         content_hash = req.get("extensions", {}).get("clarion", {}).get(
             "content_hash"
         ) or ""
+        if not entity_key.identity_stable:
+            backfilled = _binding_entity_from_backfill(records, request_seq)
+            if backfilled is not None:
+                entity_key, content_hash = backfilled
         try:
             return bind_signoff_to_issue(
                 filigree,

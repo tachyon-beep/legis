@@ -10,11 +10,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from legis.enforcement.judge import Judge
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
+
+_DECISION_EXTENSION_KEYS = frozenset(
+    {
+        "judge_verdict",
+        "judge_model",
+        "judge_rationale",
+        "judge_metadata_signature",
+        "signoff_signature",
+    }
+)
+
+
+def _rejudge_extensions(ext: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in ext.items()
+        if key not in _DECISION_EXTENSION_KEYS
+    }
 
 
 @dataclass(frozen=True)
@@ -39,6 +58,7 @@ def decay_sweep(records, judge: Judge) -> list[DecayFlag]:
             rationale=p["rationale"],
             agent_id=p["agent_id"],
             recorded_at=p["recorded_at"],
+            extensions=_rejudge_extensions(ext),
         )
         opinion = judge.evaluate(proposed)
         if opinion.verdict is not Verdict.ACCEPTED:

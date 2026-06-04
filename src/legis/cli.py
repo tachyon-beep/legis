@@ -133,6 +133,16 @@ def _check_override_rate(db_url: str) -> int:
 
     missing_db = _missing_sqlite_db(db_url)
     if missing_db is not None:
+        if (
+            os.environ.get("CI", "").lower() == "true"
+            and os.environ.get("LEGIS_ALLOW_MISSING_GOVERNANCE_DB") != "1"
+        ):
+            print(
+                "override-rate gate: FAIL "
+                f"(governance database is missing: {missing_db})",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "override-rate gate: PASS_WITH_NOTICE "
             f"(governance database is missing: {missing_db})"

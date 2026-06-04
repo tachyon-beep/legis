@@ -20,7 +20,7 @@ from legis.enforcement.signoff import signoff_signing_fields
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
-from legis.store.audit_store import AuditStore
+from legis.store.protocol import AppendOnlyStore
 
 
 class TamperError(RuntimeError):
@@ -164,7 +164,7 @@ class TrailVerifier:
 
 class ProtectedGate:
     def __init__(
-        self, store: AuditStore, clock: Clock, judge: Judge, key: bytes
+        self, store: AppendOnlyStore, clock: Clock, judge: Judge, key: bytes
     ) -> None:
         self._store = store
         self._clock = clock

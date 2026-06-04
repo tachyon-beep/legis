@@ -57,6 +57,8 @@ class BindingLedger:
         return self._store.append(payload)
 
     def verify(self) -> None:
+        if not self._store.verify_integrity():
+            raise BindingError("binding ledger hash chain integrity check failed")
         for rec in self._store.read_all():
             payload = rec.payload
             if payload.get("kind") != BINDING_KIND:

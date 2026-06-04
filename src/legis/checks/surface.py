@@ -44,8 +44,19 @@ class CheckSurface:
             Column("policy_version", Text, nullable=True),
             Column("started_at", Text, nullable=True),
             Column("finished_at", Text, nullable=True),
+            Column("recorded_by", Text, nullable=True),
         )
         self._md.create_all(self._engine)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._engine.begin() as conn:
+            cols = {
+                row[1]
+                for row in conn.exec_driver_sql("PRAGMA table_info(check_runs)").all()
+            }
+            if "recorded_by" not in cols:
+                conn.exec_driver_sql("ALTER TABLE check_runs ADD COLUMN recorded_by TEXT")
 
     def record(self, run: CheckRun) -> int:
         with self._engine.begin() as conn:
@@ -62,6 +73,7 @@ class CheckSurface:
                     policy_version=run.policy_version,
                     started_at=run.started_at,
                     finished_at=run.finished_at,
+                    recorded_by=run.recorded_by,
                 )
             )
             primary_key = result.inserted_primary_key
@@ -90,6 +102,7 @@ class CheckSurface:
             policy_version=r.policy_version,
             started_at=r.started_at,
             finished_at=r.finished_at,
+            recorded_by=r.recorded_by,
         )
 
     def for_commit(self, sha: str) -> list[CheckRun]:

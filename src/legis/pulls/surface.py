@@ -21,8 +21,19 @@ class PullSurface:
             Column("head", String(256), nullable=False, index=True),
             Column("state", String(32), nullable=False, index=True),
             Column("url", Text, nullable=True),
+            Column("recorded_by", Text, nullable=True),
         )
         self._md.create_all(self._engine)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        with self._engine.begin() as conn:
+            cols = {
+                row[1]
+                for row in conn.exec_driver_sql("PRAGMA table_info(pull_requests)").all()
+            }
+            if "recorded_by" not in cols:
+                conn.exec_driver_sql("ALTER TABLE pull_requests ADD COLUMN recorded_by TEXT")
 
     def record(self, pr: PullRequest) -> None:
         with self._engine.begin() as conn:
@@ -35,6 +46,7 @@ class PullSurface:
                     head=pr.head,
                     state=pr.state.value,
                     url=pr.url,
+                    recorded_by=pr.recorded_by,
                 )
             )
 
@@ -52,4 +64,5 @@ class PullSurface:
             head=row.head,
             state=PullRequestState(row.state),
             url=row.url,
+            recorded_by=row.recorded_by,
         )

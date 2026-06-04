@@ -11,12 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from legis.canonical import content_hash
 from legis.clock import Clock
 from legis.enforcement.signing import sign
 from legis.enforcement.verdict import SignoffState
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
-from legis.store.audit_store import AuditStore
+from legis.store.protocol import AppendOnlyStore
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ def signoff_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "actor": payload.get("agent_id"),
         "signoff_state": ext.get("signoff_state"),
         "request_seq": ext.get("request_seq"),
+        "request_payload_hash": ext.get("request_payload_hash"),
         "clarion_content_hash": clar.get("content_hash"),
         "clarion_lineage_hash": snap.get("hash"),
         "clarion_lineage_len": snap.get("length"),
@@ -46,7 +48,7 @@ def signoff_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
 class SignoffGate:
     def __init__(
         self,
-        store: AuditStore,
+        store: AppendOnlyStore,
         clock: Clock,
         signer: bool | None = None,
         key: bytes | None = None,
@@ -115,6 +117,7 @@ class SignoffGate:
             ext={
                 "signoff_state": SignoffState.SIGNED_OFF.value,
                 "request_seq": request_seq,
+                "request_payload_hash": content_hash(req),
             },
         )
         return SignoffResult(seq=seq, cleared=True)

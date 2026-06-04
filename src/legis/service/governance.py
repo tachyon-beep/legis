@@ -20,7 +20,10 @@ from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyEvaluation, PolicyGrammar, PolicyResult
 from legis.service.errors import AuditIntegrityError, NotEnabledError
-from legis.service.source_binding import verify_current_source_binding
+from legis.service.source_binding import (
+    require_verified_source_binding,
+    verify_current_source_binding,
+)
 
 
 def resolve_for_record(
@@ -111,6 +114,7 @@ def submit_override(
     entity: str,
     rationale: str,
     agent_id: str,
+    extra_extensions: dict[str, Any] | None = None,
 ) -> EnforcementResult:
     """Resolve-then-key, then submit the override to the simple-tier engine.
 
@@ -129,7 +133,7 @@ def submit_override(
         entity_key=entity_key,
         rationale=rationale,
         agent_id=agent_id,
-        extensions=ext,
+        extensions={**ext, **(extra_extensions or {})},
     )
 
 
@@ -144,6 +148,7 @@ def submit_protected_override(
     file_fingerprint: str,
     ast_path: str,
     source_root: str | Path | None = None,
+    extra_extensions: dict[str, Any] | None = None,
 ) -> ProtectedResult:
     """Submit a protected-cell override using transport-bound agent identity."""
     if protected_gate is None:
@@ -154,6 +159,7 @@ def submit_protected_override(
         file_fingerprint=file_fingerprint,
         source_root=source_root,
     )
+    require_verified_source_binding(entity, source_binding)
     return protected_gate.submit(
         policy=policy,
         entity_key=entity_key,
@@ -161,7 +167,7 @@ def submit_protected_override(
         agent_id=agent_id,
         file_fingerprint=file_fingerprint,
         ast_path=ast_path,
-        extensions={**ext, "source_binding": source_binding},
+        extensions={**ext, "source_binding": source_binding, **(extra_extensions or {})},
     )
 
 
@@ -186,6 +192,7 @@ def submit_operator_override(
         file_fingerprint=file_fingerprint,
         source_root=source_root,
     )
+    require_verified_source_binding(entity, source_binding)
     return protected_gate.operator_override(
         policy=policy,
         entity_key=entity_key,
@@ -205,6 +212,7 @@ def request_signoff(
     entity: str,
     rationale: str,
     agent_id: str,
+    extra_extensions: dict[str, Any] | None = None,
 ) -> SignoffResult:
     """Open a structured sign-off request for a launch-bound agent."""
     if signoff_gate is None:
@@ -215,7 +223,7 @@ def request_signoff(
         entity_key=entity_key,
         rationale=rationale,
         agent_id=agent_id,
-        extensions=ext,
+        extensions={**ext, **(extra_extensions or {})},
     )
 
 

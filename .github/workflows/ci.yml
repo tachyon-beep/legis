@@ -16,7 +16,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Run test suite
-        run: uv run pytest
+        run: uv run pytest --cov=legis --cov-report=term-missing --cov-fail-under=70
+      - name: Run SEI conformance oracle
+        run: uv run pytest tests/conformance/test_sei_oracle.py
+      - name: Run live Clarion oracle
+        if: ${{ vars.CLARION_URL != '' }}
+        env:
+          CLARION_URL: ${{ vars.CLARION_URL }}
+          CLARION_LIVE_ORACLE_LOCATOR: ${{ vars.CLARION_LIVE_ORACLE_LOCATOR }}
+          LEGIS_CLARION_HMAC_KEY: ${{ secrets.LEGIS_CLARION_HMAC_KEY }}
+        run: uv run pytest tests/conformance/test_live_clarion_oracle.py
       - name: Run type check
         run: uv run mypy src/legis
 

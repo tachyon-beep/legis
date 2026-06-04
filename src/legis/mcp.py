@@ -20,7 +20,7 @@ from legis.checks.models import CheckRun
 from legis.checks.surface import CheckSurface
 from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.protected import ProtectedGate
+from legis.enforcement.protected import ProtectedGate, TrailVerifier, TamperError
 from legis.enforcement.verdict import JudgeOpinion, SignoffState, Verdict
 from legis.git.surface import GitError, GitSurface
 from legis.policy.cells import (
@@ -45,11 +45,12 @@ from legis.service.governance import (
     submit_override,
     submit_protected_override,
     request_signoff,
+    verified_records as service_verified_records,
 )
 from legis.service.wardline import route_wardline_scan
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import WardlineSeverity
+from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity
 
 
 _AGENT_TOOLS = frozenset(
@@ -68,14 +69,19 @@ _AGENT_TOOLS = frozenset(
     }
 )
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
+_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26")
+_DEFAULT_PROTOCOL_VERSION = _SUPPORTED_PROTOCOL_VERSIONS[-1]
 
 
 @dataclass
 class McpRuntime:
     agent_id: str
+    initialized: bool = False
+    protocol_version: str | None = None
     engine: EnforcementEngine | None = None
     identity: Any | None = None
     protected_gate: ProtectedGate | None = None
+    trail_verifier: TrailVerifier | None = None
     signoff_gate: Any | None = None
     cell_registry: PolicyCellRegistry | None = None
     check_surface: CheckSurface | None = None
@@ -83,6 +89,7 @@ class McpRuntime:
     pull_surface: PullSurface | None = None
     grammar: PolicyGrammar | None = None
     source_root: str | Path | None = None
+    wardline_artifact_key: bytes | None = None
 
 
 def _load_policy_cell_registry() -> PolicyCellRegistry:
@@ -99,11 +106,10 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
-    from legis.api.app import DEFAULT_CHECK_DB, DEFAULT_GOVERNANCE_DB
+    from legis.api.app import DEFAULT_GOVERNANCE_DB
 
     clock = SystemClock()
-    store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
-    engine = EnforcementEngine(store, clock)
+    engine = None
     identity = None
     clarion_url = os.environ.get("CLARION_API_URL")
     if clarion_url:
@@ -115,10 +121,17 @@ def build_runtime(agent_id: str) -> McpRuntime:
         )
 
     protected_gate = None
+    trail_verifier = None
     signoff_gate = None
     hmac_key = os.environ.get("LEGIS_HMAC_KEY")
     if hmac_key:
         key = hmac_key.encode("utf-8")
+        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
+        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+        protected_policies = frozenset(
+            p.strip() for p in protected_policies_str.split(",") if p.strip()
+        )
+        trail_verifier = TrailVerifier(key, protected_policies)
 
         class FailClosedJudge:
             def evaluate(self, record: OverrideRecord) -> JudgeOpinion:
@@ -138,17 +151,19 @@ def build_runtime(agent_id: str) -> McpRuntime:
         engine=engine,
         identity=identity,
         protected_gate=protected_gate,
+        trail_verifier=trail_verifier,
         signoff_gate=signoff_gate,
         cell_registry=_load_policy_cell_registry(),
-        check_surface=CheckSurface(
-            os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
-        ),
+        check_surface=None,
         git_surface=GitSurface(os.environ.get("LEGIS_SOURCE_ROOT") or os.getcwd()),
-        pull_surface=PullSurface(
-            os.environ.get("LEGIS_PULL_DB", "sqlite:///legis-pulls.db")
-        ),
+        pull_surface=None,
         grammar=default_grammar(),
         source_root=os.environ.get("LEGIS_SOURCE_ROOT") or os.getcwd(),
+        wardline_artifact_key=(
+            os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
+            if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
+            else None
+        ),
     )
 
 
@@ -163,6 +178,7 @@ def _schema(required: list[str], properties: dict[str, dict[str, Any]]) -> dict[
 
 def tool_definitions() -> list[dict[str, Any]]:
     string = {"type": "string"}
+    integer = {"type": "integer", "minimum": 1}
     object_schema = {"type": "object"}
     return [
         {
@@ -192,13 +208,14 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "rationale": string,
                     "file_fingerprint": string,
                     "ast_path": string,
+                    "idempotency_key": string,
                 },
             ),
         },
         {
             "name": "signoff_status_get",
             "description": "Poll whether a structured sign-off request has been cleared.",
-            "inputSchema": _schema(["seq"], {"seq": string}),
+            "inputSchema": _schema(["seq"], {"seq": integer}),
         },
         {
             "name": "policy_evaluate",
@@ -271,11 +288,34 @@ def _tool_result(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _recovery_for(code: str) -> dict[str, Any]:
+    recoverable = code not in {"AUDIT_INTEGRITY_FAILURE", "INTERNAL_ERROR"}
+    next_actions = {
+        "INVALID_ARGUMENT": "Correct the tool arguments and retry.",
+        "INVALID_CELL_SPEC": "Use server-owned routing or a valid cell configuration.",
+        "CELL_NOT_ENABLED": "Ask the operator to enable the required governance cell.",
+        "NO_SUCH_REQUEST": "Poll a known sign-off sequence returned by override_submit.",
+        "NOT_FOUND": "Refresh the target identifier and retry.",
+        "UNKNOWN_TOOL": "Call tools/list and use one of the advertised tool names.",
+        "AUDIT_INTEGRITY_FAILURE": "Stop and ask an operator to inspect the governance trail.",
+        "GIT_ERROR": "Check the git ref or revision range and retry.",
+    }
+    return {
+        "recoverable": recoverable,
+        "next_action": next_actions.get(code, "Inspect the error message before retrying."),
+    }
+
+
 def _tool_error(code: str, message: str) -> dict[str, Any]:
+    recovery = _recovery_for(code)
     return {
         "isError": True,
         "content": [{"type": "text", "text": f"{code}: {message}"}],
-        "structuredContent": {"error_code": code, "message": message},
+        "structuredContent": {
+            "error_code": code,
+            "message": message,
+            **recovery,
+        },
     }
 
 
@@ -295,6 +335,23 @@ def _service_error(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, ValueError):
         return _tool_error("INVALID_ARGUMENT", str(exc))
     return _tool_error("INTERNAL_ERROR", str(exc))
+
+
+def _allowed_tool_arguments(name: str) -> set[str] | None:
+    for tool in tool_definitions():
+        if tool["name"] == name:
+            return set(tool["inputSchema"].get("properties", {}))
+    return None
+
+
+def _validate_argument_keys(name: str, args: dict[str, Any]) -> None:
+    allowed = _allowed_tool_arguments(name)
+    if allowed is None:
+        return
+    unexpected = sorted(set(args) - allowed)
+    if unexpected:
+        joined = ", ".join(unexpected)
+        raise InvalidArgumentError(f"unexpected argument(s) for {name}: {joined}")
 
 
 def _arguments(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -326,11 +383,16 @@ def _optional_string(args: dict[str, Any], key: str) -> str | None:
 
 
 def _require_int(args: dict[str, Any], key: str) -> int:
-    raw = _require(args, key)
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise InvalidArgumentError(f"argument {key!r} must be an integer") from exc
+    raw = args.get(key)
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        value = raw
+    elif isinstance(raw, str) and raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise InvalidArgumentError(f"argument {key!r} must be an integer") from exc
+    else:
+        raise InvalidArgumentError(f"argument {key!r} must be an integer")
     if value < 1:
         raise InvalidArgumentError(f"argument {key!r} must be a positive integer")
     return value
@@ -363,6 +425,22 @@ def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
     return runtime.cell_registry or default_policy_cells()
 
 
+def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
+    mapping: dict[WardlineSeverity, WardlineCellPolicy] = {}
+    for part in raw.split(","):
+        if not part.strip():
+            continue
+        severity_raw, sep, cell_raw = part.partition("=")
+        if not sep:
+            raise ValueError("cell map entries must be SEVERITY=cell")
+        mapping[WardlineSeverity[severity_raw.strip()]] = WardlineCellPolicy(
+            cell_raw.strip()
+        )
+    if not mapping:
+        raise ValueError("cell map must not be empty")
+    return mapping
+
+
 def _explanation_payload(explanation) -> dict[str, Any]:
     payload = explanation.to_payload()
     payload["available_moves"] = [
@@ -383,6 +461,25 @@ def _git(runtime: McpRuntime) -> GitSurface:
             os.environ.get("LEGIS_SOURCE_ROOT") or os.getcwd()
         )
     return runtime.git_surface
+
+
+def _engine(runtime: McpRuntime) -> EnforcementEngine:
+    if runtime.engine is None:
+        from legis.api.app import DEFAULT_GOVERNANCE_DB
+
+        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
+        runtime.engine = EnforcementEngine(store, SystemClock())
+    return runtime.engine
+
+
+def _checks(runtime: McpRuntime) -> CheckSurface:
+    if runtime.check_surface is None:
+        from legis.api.app import DEFAULT_CHECK_DB
+
+        runtime.check_surface = CheckSurface(
+            os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
+        )
+    return runtime.check_surface
 
 
 def _pulls(runtime: McpRuntime) -> PullSurface:
@@ -434,6 +531,46 @@ def _judged_result_payload(
     }
 
 
+def _existing_idempotent_record(runtime: McpRuntime, key: str) -> Any | None:
+    for rec in _verified_records(runtime):
+        if rec.payload.get("extensions", {}).get("mcp_idempotency_key") == key:
+            return rec
+    return None
+
+
+def _idempotent_override_response(payload: dict[str, Any], seq: int) -> dict[str, Any]:
+    ext = payload.get("extensions", {})
+    cell = ext.get("mcp_cell")
+    if cell == "chill":
+        return {
+            "outcome": "ACCEPTED_SELF",
+            "cell": "chill",
+            "seq": seq,
+            "note": "self-cleared; human reviews asynchronously",
+        }
+    if cell == "structured":
+        return {
+            "outcome": "ESCALATED_PENDING",
+            "cell": "structured",
+            "seq": seq,
+            "cleared": False,
+            "human_required": True,
+            "operator_instruction": f"Human sign-off required for seq {seq}.",
+            "poll_tool": "signoff_status_get",
+            "poll_handle": seq,
+        }
+    if cell in ("coached", "protected"):
+        verdict = ext.get("judge_verdict")
+        return _judged_result_payload(
+            cell=cell,
+            seq=seq,
+            accepted=verdict == Verdict.ACCEPTED.value,
+            judge_model=ext.get("judge_model"),
+            judge_rationale=ext.get("judge_rationale"),
+        )
+    raise InvalidArgumentError("idempotency key references an unsupported record")
+
+
 def _signoff_signed_record(
     runtime: McpRuntime, request_seq: int
 ) -> dict[str, Any] | None:
@@ -450,14 +587,12 @@ def _signoff_signed_record(
 
 
 def _verified_records(runtime: McpRuntime) -> list[Any]:
-    if runtime.protected_gate is not None and hasattr(
-        runtime.protected_gate, "verify_integrity"
-    ):
-        if not runtime.protected_gate.verify_integrity():
-            raise AuditIntegrityError(
-                "audit integrity failure: database hash chain verification failed"
-            )
-        return runtime.protected_gate.records()
+    if runtime.protected_gate is not None:
+        return service_verified_records(
+            runtime.protected_gate,
+            runtime.trail_verifier,
+            lambda: [],
+        )
     if runtime.signoff_gate is not None and runtime.engine is None:
         if (
             hasattr(runtime.signoff_gate, "verify_integrity")
@@ -466,7 +601,13 @@ def _verified_records(runtime: McpRuntime) -> list[Any]:
             raise AuditIntegrityError(
                 "audit integrity failure: database hash chain verification failed"
             )
-        return runtime.signoff_gate.records()
+        records = runtime.signoff_gate.records()
+        if runtime.trail_verifier is not None:
+            try:
+                runtime.trail_verifier.verify(records)
+            except TamperError as exc:
+                raise AuditIntegrityError(f"audit integrity failure: {exc}") from exc
+        return records
     if runtime.engine is None:
         return []
     return runtime.engine.records()
@@ -474,6 +615,7 @@ def _verified_records(runtime: McpRuntime) -> list[Any]:
 
 def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
+        _validate_argument_keys(name, args)
         if name == "policy_explain":
             explanation = explain_policy(
                 _registry(runtime),
@@ -489,11 +631,17 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             policy = _require(args, "policy")
             entity = _require(args, "entity")
             rationale = _require(args, "rationale")
+            idempotency_key = _optional_string(args, "idempotency_key")
+            simple_engine = (
+                _engine(runtime)
+                if _registry(runtime).cell_for(policy) in ("chill", "coached")
+                else runtime.engine
+            )
             explanation = explain_policy(
                 _registry(runtime),
                 policy=policy,
                 entity=entity,
-                engine=runtime.engine,
+                engine=simple_engine,
                 protected_gate=runtime.protected_gate,
                 signoff_gate=runtime.signoff_gate,
             )
@@ -501,16 +649,29 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 raise NotEnabledError(
                     f"cell {explanation.cell!r} is not enabled for override submission"
                 )
+            extra_extensions = (
+                {
+                    "mcp_idempotency_key": idempotency_key,
+                    "mcp_cell": explanation.cell,
+                }
+                if idempotency_key is not None
+                else {"mcp_cell": explanation.cell}
+            )
+            if idempotency_key is not None:
+                existing = _existing_idempotent_record(runtime, idempotency_key)
+                if existing is not None:
+                    return _tool_result(
+                        _idempotent_override_response(existing.payload, existing.seq)
+                    )
             if explanation.cell in ("chill", "coached"):
-                if runtime.engine is None:
-                    raise NotEnabledError(f"cell {explanation.cell!r} is not enabled")
                 override_result = submit_override(
-                    runtime.engine,
+                    _engine(runtime),
                     identity=runtime.identity,
                     policy=policy,
                     entity=entity,
                     rationale=rationale,
                     agent_id=runtime.agent_id,
+                    extra_extensions=extra_extensions,
                 )
                 if explanation.cell == "chill":
                     return _tool_result(
@@ -538,6 +699,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                     entity=entity,
                     rationale=rationale,
                     agent_id=runtime.agent_id,
+                    extra_extensions=extra_extensions,
                 )
                 return _tool_result(
                     {
@@ -577,6 +739,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                     file_fingerprint=_require(args, "file_fingerprint"),
                     ast_path=_require(args, "ast_path"),
                     source_root=runtime.source_root,
+                    extra_extensions=extra_extensions,
                 )
                 return _tool_result(
                     _judged_result_payload(
@@ -608,7 +771,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
         if name == "policy_evaluate":
             ev = evaluate_policy(
                 _grammar(runtime),
-                engine=runtime.engine,
+                engine=_engine(runtime),
                 policy=_require(args, "policy"),
                 target=_require_object(args, "target"),
             )
@@ -621,26 +784,48 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             )
 
         if name == "scan_route":
+            server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
+            server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
+            if server_cell and server_cell_by_severity:
+                return _tool_error(
+                    "INVALID_CELL_SPEC", "server Wardline routing is misconfigured"
+                )
             has_cell = "cell" in args
             has_map = "severity_map" in args
             has_fail_on = "fail_on" in args
-            if has_fail_on:
-                if not has_cell or has_map:
+            server_routing = server_cell is not None or server_cell_by_severity is not None
+            if server_routing and (has_cell or has_map or has_fail_on):
+                return _tool_error(
+                    "INVALID_CELL_SPEC", "Wardline routing is server-owned"
+                )
+            if not server_routing:
+                if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
                     return _tool_error(
                         "INVALID_CELL_SPEC",
-                        "fail_on routing requires cell and forbids severity_map",
+                        "Wardline routing is server-owned; configure "
+                        "LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
                     )
-            elif has_cell == has_map:
-                return _tool_error(
-                    "INVALID_CELL_SPEC",
-                    "provide exactly one of cell or severity_map",
-                )
+                if has_fail_on:
+                    if not has_cell or has_map:
+                        return _tool_error(
+                            "INVALID_CELL_SPEC",
+                            "fail_on routing requires cell and forbids severity_map",
+                        )
+                elif has_cell == has_map:
+                    return _tool_error(
+                        "INVALID_CELL_SPEC",
+                        "provide exactly one of cell or severity_map",
+                    )
             scan = _require_object(args, "scan")
             scan_policy: WardlineCellPolicy | None = None
             scan_cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
             scan_fail_on: WardlineSeverity | None = None
             try:
-                if has_cell:
+                if server_cell_by_severity is not None:
+                    scan_cell_map = _parse_wardline_cell_map(server_cell_by_severity)
+                elif server_cell is not None:
+                    scan_policy = WardlineCellPolicy(server_cell)
+                elif has_cell:
                     scan_policy = WardlineCellPolicy(_require(args, "cell"))
                     if has_fail_on:
                         scan_fail_on = WardlineSeverity[_require(args, "fail_on")]
@@ -656,11 +841,19 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 scan,
                 agent_id=runtime.agent_id,
                 identity=runtime.identity,
-                engine=runtime.engine,
+                engine=_engine(runtime),
                 signoff=runtime.signoff_gate,
                 policy=scan_policy,
                 cell_map=scan_cell_map,
                 fail_on=scan_fail_on,
+                artifact_key=(
+                    runtime.wardline_artifact_key
+                    or (
+                        os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
+                        if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
+                        else None
+                    )
+                ),
             )
             return _tool_result({"outcome": "ROUTED", "routed": routed})
 
@@ -692,7 +885,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             pull_payload = asdict(pull)
             pull_payload["state"] = pull.state.value
             pull_checks = (
-                runtime.check_surface.for_pr(number)
+                _checks(runtime).for_pr(number)
                 if runtime.check_surface is not None
                 else []
             )
@@ -700,15 +893,14 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
             return _tool_result(pull_payload)
 
         if name == "check_list":
-            if runtime.check_surface is None:
-                raise NotEnabledError("check surface is not enabled")
+            check_surface = _checks(runtime)
             target_type = _require(args, "target_type")
             target = _require(args, "target")
             if target_type == "commit":
-                checks = runtime.check_surface.for_commit(target)
+                checks = check_surface.for_commit(target)
                 response_target: str | int = target
             elif target_type == "branch":
-                checks = runtime.check_surface.for_branch(target)
+                checks = check_surface.for_branch(target)
                 response_target = target
             elif target_type == "pr":
                 try:
@@ -717,7 +909,7 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                     raise InvalidArgumentError(
                         "target_type 'pr' requires an integer target"
                     ) from exc
-                checks = runtime.check_surface.for_pr(pr_number)
+                checks = check_surface.for_pr(pr_number)
                 response_target = pr_number
             else:
                 raise InvalidArgumentError(
@@ -751,13 +943,46 @@ def handle_request(request: dict[str, Any], runtime: McpRuntime) -> dict[str, An
     request_id = request.get("id")
     method = request.get("method")
     if request_id is None:
+        if method == "notifications/initialized":
+            runtime.initialized = True
         return None
     result: dict[str, Any]
     if method == "initialize":
+        params = request.get("params", {})
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32602, "message": "initialize params must be an object"},
+            }
+        requested = params.get("protocolVersion")
+        if requested is not None and requested not in _SUPPORTED_PROTOCOL_VERSIONS:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"unsupported protocolVersion: {requested}",
+                    "data": {"supported": list(_SUPPORTED_PROTOCOL_VERSIONS)},
+                },
+            }
+        runtime.protocol_version = requested or _DEFAULT_PROTOCOL_VERSION
+        runtime.initialized = True
         result = {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": runtime.protocol_version,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "legis", "version": __version__},
+        }
+    elif not runtime.initialized:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32002,
+                "message": "MCP server is not initialized; call initialize first",
+            },
         }
     elif method == "tools/list":
         result = {"tools": tool_definitions()}

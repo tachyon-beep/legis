@@ -20,3 +20,4 @@ class PullRequest:
     head: str
     state: PullRequestState
     url: str | None = None
+    recorded_by: str | None = None

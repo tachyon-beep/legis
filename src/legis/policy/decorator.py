@@ -189,24 +189,103 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
     except (OSError, TypeError) as exc:
         return GateFinding(False, f"source code not available for test: {exc}")
 
+    import textwrap
+    src = textwrap.dedent(src.replace("\r\n", "\n"))
     import ast
     try:
         parsed_test = ast.parse(src)
     except Exception:
         parsed_test = None
 
+    boundary_names = {func.__name__, wrapped.__name__}
+
+    def _name_targets(target) -> set[str]:
+        import ast
+        if isinstance(target, ast.Name):
+            return {target.id}
+        if isinstance(target, (ast.Tuple, ast.List)):
+            names: set[str] = set()
+            for item in target.elts:
+                names.update(_name_targets(item))
+            return names
+        return set()
+
+    def _is_boundary_call(node) -> bool:
+        import ast
+        return isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Name) and node.func.id in boundary_names)
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in boundary_names
+            )
+        )
+
+    def _contains_boundary_call(node) -> bool:
+        import ast
+        return any(_is_boundary_call(child) for child in ast.walk(node))
+
+    def _contains_policy_reference(node) -> bool:
+        import ast
+        for child in ast.walk(node):
+            if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                if any(
+                    re.search(r"\b" + re.escape(p) + r"\b", child.value)
+                    for p in meta.suppresses
+                ):
+                    return True
+            elif isinstance(child, ast.Name) and child.id in meta.suppresses:
+                return True
+        return False
+
+    shadowed = False
+    call_result_names: set[str] = set()
     func_called = False
     if parsed_test is not None:
         for node in ast.walk(parsed_test):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in (func.__name__, wrapped.__name__):
-                    func_called = True
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in boundary_names:
+                    shadowed = True
                     break
-                elif isinstance(node.func, ast.Attribute) and node.func.attr in (func.__name__, wrapped.__name__):
-                    func_called = True
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+                        if arg.arg in boundary_names:
+                            shadowed = True
+                            break
+                    if node.args.vararg and node.args.vararg.arg in boundary_names:
+                        shadowed = True
+                    if node.args.kwarg and node.args.kwarg.arg in boundary_names:
+                        shadowed = True
+                    if shadowed:
+                        break
+            elif isinstance(node, ast.Assign):
+                targets = set().union(*(_name_targets(target) for target in node.targets))
+                if targets & boundary_names:
+                    shadowed = True
                     break
+                if _contains_boundary_call(node.value):
+                    call_result_names.update(targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets = _name_targets(node.target)
+                if targets & boundary_names:
+                    shadowed = True
+                    break
+                if node.value is not None and _contains_boundary_call(node.value):
+                    call_result_names.update(targets)
+            elif isinstance(node, ast.AugAssign):
+                if _name_targets(node.target) & boundary_names:
+                    shadowed = True
+                    break
+            elif isinstance(node, ast.For):
+                if _name_targets(node.target) & boundary_names:
+                    shadowed = True
+                    break
+            if _is_boundary_call(node):
+                func_called = True
     else:
         func_called = False
+
+    if shadowed:
+        return GateFinding(False, "test shadows the boundary function name")
 
     if not func_called:
         return GateFinding(False, "test does not appear to exercise the boundary")
@@ -214,17 +293,22 @@ def check_policy_boundary(func: Callable[..., Any], resolver) -> GateFinding:
     policy_referenced = False
     if parsed_test is not None:
         for node in ast.walk(parsed_test):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if any(re.search(r'\b' + re.escape(p) + r'\b', node.value) for p in meta.suppresses):
-                    policy_referenced = True
-                    break
-            elif isinstance(node, ast.Name) and node.id in meta.suppresses:
+            if not isinstance(node, ast.Assert):
+                continue
+            has_boundary_evidence = _contains_boundary_call(node) or any(
+                isinstance(child, ast.Name) and child.id in call_result_names
+                for child in ast.walk(node)
+            )
+            if has_boundary_evidence and _contains_policy_reference(node):
                 policy_referenced = True
                 break
     else:
         policy_referenced = any(p in src for p in meta.suppresses)
 
     if not policy_referenced:
-        return GateFinding(False, "test does not assert any suppressed policy")
+        return GateFinding(
+            False,
+            "test does not assert a suppressed policy against the boundary result",
+        )
 
     return GateFinding(True, f"ok (invariant: {meta.invariant})")

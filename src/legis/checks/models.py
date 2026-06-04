@@ -31,3 +31,4 @@ class CheckRun:
     policy_version: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    recorded_by: str | None = None

@@ -160,7 +160,11 @@ class AuditStore:
 
     def verify_integrity(self) -> bool:
         prev_hash = GENESIS
-        for rec in self.read_all():
+        try:
+            records = self.read_all()
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return False
+        for rec in records:
             if content_hash(rec.payload) != rec.content_hash:
                 return False
             if rec.prev_hash != prev_hash:
