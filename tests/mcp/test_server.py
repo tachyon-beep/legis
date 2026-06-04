@@ -1,21 +1,13 @@
 import io
 import json
-import hashlib
 
+from legis.checks.models import CheckOutcome, CheckRun
+from legis.checks.surface import CheckSurface
 from legis.cli import build_parser
 from legis.clock import FixedClock
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.protected import ProtectedGate, TrailVerifier
-from legis.enforcement.verdict import JudgeOpinion, Verdict
+from legis.policy.cells import PolicyCellRegistry, PolicyCellRule
 from legis.store.audit_store import AuditStore
-
-
-class ScriptedJudge:
-    def __init__(self, opinion):
-        self.opinion = opinion
-
-    def evaluate(self, record):
-        return self.opinion
 
 
 def _messages(*items):
@@ -31,38 +23,16 @@ def _run(messages, runtime):
     return [json.loads(line) for line in out.getvalue().splitlines()]
 
 
-def _runtime(tmp_path, *, agent_id="agent-launch"):
+def _runtime(tmp_path, *, agent_id="agent-launch", check_surface=None):
     from legis.mcp import McpRuntime
 
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     engine = EnforcementEngine(store, FixedClock("2026-06-02T12:00:00+00:00"))
-    return McpRuntime(agent_id=agent_id, engine=engine), store
-
-
-def _fingerprint(path):
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _protected_runtime(tmp_path, *, agent_id="agent-launch", source_root=None):
-    from legis.mcp import McpRuntime
-
-    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
-    clock = FixedClock("2026-06-02T12:00:00+00:00")
-    protected_gate = ProtectedGate(
-        store,
-        clock,
-        judge=ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
-        key=b"k",
-    )
-    return (
-        McpRuntime(
-            agent_id=agent_id,
-            protected_gate=protected_gate,
-            trail_verifier=TrailVerifier(b"k", frozenset({"no-eval"})),
-            source_root=source_root,
-        ),
-        store,
-    )
+    return McpRuntime(
+        agent_id=agent_id,
+        engine=engine,
+        check_surface=check_surface,
+    ), store
 
 
 def test_cli_has_mcp_subcommand_with_launch_bound_agent_id():
@@ -80,6 +50,7 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
         ),
         runtime,
     )
+
     assert responses[0]["result"]["serverInfo"]["name"] == "legis"
     tools = responses[1]["result"]["tools"]
     by_name = {tool["name"]: tool for tool in tools}
@@ -103,8 +74,14 @@ def test_initialize_and_tools_list_exposes_only_wp_m3_agent_tools(tmp_path):
     assert "records one new chill-cell override attempt" in submit_description
 
 
-def test_submit_override_tool_records_launch_agent_not_tool_arguments(tmp_path):
-    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
+def test_legis_explain_returns_service_explanation_payload(tmp_path):
+    runtime, _store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="chill",
+        rules=(PolicyCellRule(pattern="human.*", cell="structured"),),
+    )
+    runtime.signoff_gate = object()
+
     responses = _run(
         _messages(
             {
@@ -112,11 +89,46 @@ def test_submit_override_tool_records_launch_agent_not_tool_arguments(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "submit_override",
+                    "name": "legis_explain",
                     "arguments": {
-                        "policy": "no-eval",
+                        "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
-                        "rationale": "reviewed",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )
+
+    result = responses[0]["result"]
+    assert "isError" not in result
+    assert result["structuredContent"] == {
+        "cell": "structured",
+        "judge_inline": False,
+        "self_clearable": False,
+        "human_in_loop": True,
+        "enabled": True,
+        "available_moves": ["legis_submit_override", "legis_signoff_status"],
+        "required_inputs": [],
+    }
+
+
+def test_legis_submit_override_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
+    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
+    runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "legis_submit_override",
+                    "arguments": {
+                        "policy": "ordinary.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "generated file; lint is not applicable",
                         "agent_id": "spoofed-agent",
                     },
                 },
@@ -124,42 +136,25 @@ def test_submit_override_tool_records_launch_agent_not_tool_arguments(tmp_path):
         ),
         runtime,
     )
-    assert responses[0]["result"]["structuredContent"]["accepted"] is True
+
+    result = responses[0]["result"]
+    assert "isError" not in result
+    assert result["structuredContent"] == {
+        "outcome": "ACCEPTED_SELF",
+        "cell": "chill",
+        "seq": 1,
+        "note": "self-cleared; human reviews asynchronously",
+    }
     assert store.read_all()[0].payload["agent_id"] == "agent-launch"
 
 
-def test_disabled_protected_cell_maps_to_mcp_tool_error(tmp_path):
-    runtime, _store = _runtime(tmp_path)
-    responses = _run(
-        _messages(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "protected_override",
-                    "arguments": {
-                        "policy": "no-eval",
-                        "entity": "src/x.py:f",
-                        "rationale": "reviewed",
-                        "file_fingerprint": "sha256:abc",
-                        "ast_path": "Module/FunctionDef[f]",
-                    },
-                },
-            }
-        ),
-        runtime,
+def test_legis_submit_override_non_chill_cell_returns_cell_not_enabled_without_write(tmp_path):
+    runtime, store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="chill",
+        rules=(PolicyCellRule(pattern="human.*", cell="structured"),),
     )
-    result = responses[0]["result"]
-    assert result["isError"] is True
-    assert result["structuredContent"]["error_code"] == "NOT_ENABLED"
 
-
-def test_protected_tool_rejects_stale_source_fingerprint_before_signing(tmp_path):
-    source = tmp_path / "src" / "x.py"
-    source.parent.mkdir()
-    source.write_text("def f():\n    return 1\n")
-    runtime, store = _protected_runtime(tmp_path, source_root=tmp_path)
     responses = _run(
         _messages(
             {
@@ -167,13 +162,11 @@ def test_protected_tool_rejects_stale_source_fingerprint_before_signing(tmp_path
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "protected_override",
+                    "name": "legis_submit_override",
                     "arguments": {
-                        "policy": "no-eval",
+                        "policy": "human.release-signoff",
                         "entity": "src/x.py:f",
-                        "rationale": "reviewed",
-                        "file_fingerprint": "sha256:" + "0" * 64,
-                        "ast_path": "Module/FunctionDef[f]",
+                        "rationale": "needs release signoff",
                     },
                 },
             }
@@ -183,16 +176,26 @@ def test_protected_tool_rejects_stale_source_fingerprint_before_signing(tmp_path
 
     result = responses[0]["result"]
     assert result["isError"] is True
-    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
-    assert "fingerprint does not match current source" in result["structuredContent"]["message"]
+    assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+    assert "structured" in result["structuredContent"]["message"]
     assert store.read_all() == []
 
 
-def test_protected_tool_records_verified_source_binding(tmp_path):
-    source = tmp_path / "src" / "x.py"
-    source.parent.mkdir()
-    source.write_text("def f():\n    return 1\n")
-    runtime, store = _protected_runtime(tmp_path, source_root=tmp_path)
+def test_legis_checks_for_reads_recorded_checks_by_commit_and_pr(tmp_path):
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    checks.record(
+        CheckRun(
+            check_name="unit",
+            run_id="run-1",
+            commit_sha="abc123",
+            outcome=CheckOutcome.PASS,
+            branch="main",
+            pr=7,
+            ran_against="abc123",
+        )
+    )
+    runtime, _store = _runtime(tmp_path, check_surface=checks)
+
     responses = _run(
         _messages(
             {
@@ -200,28 +203,47 @@ def test_protected_tool_records_verified_source_binding(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "protected_override",
-                    "arguments": {
-                        "policy": "no-eval",
-                        "entity": "src/x.py:f",
-                        "rationale": "reviewed",
-                        "file_fingerprint": _fingerprint(source),
-                        "ast_path": "Module/FunctionDef[f]",
-                    },
+                    "name": "legis_checks_for",
+                    "arguments": {"target_type": "commit", "target": "abc123"},
                 },
-            }
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "legis_checks_for",
+                    "arguments": {"target_type": "pr", "target": "7"},
+                },
+            },
         ),
         runtime,
     )
 
-    result = responses[0]["result"]["structuredContent"]
-    assert result["accepted"] is True
-    assert store.read_all()[0].payload["extensions"]["source_binding"]["status"] == "verified"
+    for response in responses:
+        result = response["result"]
+        assert "isError" not in result
+        assert result["structuredContent"]["checks"] == [
+            {
+                "check_name": "unit",
+                "run_id": "run-1",
+                "commit_sha": "abc123",
+                "outcome": "pass",
+                "branch": "main",
+                "pr": 7,
+                "ran_against": "abc123",
+                "rule_set": None,
+                "policy_version": None,
+                "started_at": None,
+                "finished_at": None,
+            }
+        ]
 
 
-def test_wardline_tool_uses_server_owned_routing_and_launch_agent(tmp_path):
-    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
-    runtime.wardline_cell = "surface_only"
+def test_legis_checks_for_invalid_target_type_is_tool_error(tmp_path):
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    runtime, _store = _runtime(tmp_path, check_surface=checks)
+
     responses = _run(
         _messages(
             {
@@ -229,57 +251,48 @@ def test_wardline_tool_uses_server_owned_routing_and_launch_agent(tmp_path):
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "wardline_scan_results",
-                    "arguments": {
-                        "scan": {
-                            "findings": [
-                                {
-                                    "rule_id": "PY-WL-101",
-                                    "message": "m",
-                                    "severity": "INFO",
-                                    "kind": "defect",
-                                    "fingerprint": "fp1",
-                                    "qualname": "m.f",
-                                    "properties": {},
-                                    "suppressed": "active",
-                                }
-                            ]
-                        },
-                        "cell": "surface_override",
-                        "agent_id": "spoofed-agent",
-                    },
+                    "name": "legis_checks_for",
+                    "arguments": {"target_type": "tag", "target": "v1"},
                 },
             }
         ),
         runtime,
     )
-    result = responses[0]["result"]["structuredContent"]
-    assert result["routed"][0]["mode"] == "surface_only"
-    payload = store.read_all()[0].payload
-    assert payload["agent_id"] == "agent-launch"
-    assert payload["extensions"]["wardline"]["scan_digest"].startswith("sha256:")
 
-
-def test_wardline_tool_invalid_server_cell_maps_to_mcp_error(tmp_path):
-    runtime, _store = _runtime(tmp_path)
-    runtime.wardline_cell = "not-a-cell"
-    responses = _run(
-        _messages(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "wardline_scan_results",
-                    "arguments": {"scan": {"findings": []}},
-                },
-            }
-        ),
-        runtime,
-    )
     result = responses[0]["result"]
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert "target_type" in result["structuredContent"]["message"]
+
+
+def test_legacy_pre_spec_tool_names_are_not_callable(tmp_path):
+    runtime, store = _runtime(tmp_path)
+
+    for legacy_name in (
+        "submit_override",
+        "protected_override",
+        "signoff_request",
+        "policy_evaluate",
+        "wardline_scan_results",
+        "list_overrides",
+        "override_rate",
+    ):
+        responses = _run(
+            _messages(
+                {
+                    "jsonrpc": "2.0",
+                    "id": legacy_name,
+                    "method": "tools/call",
+                    "params": {"name": legacy_name, "arguments": {}},
+                }
+            ),
+            runtime,
+        )
+        result = responses[0]["result"]
+        assert result["isError"] is True
+        assert result["structuredContent"]["error_code"] == "UNKNOWN_TOOL"
+
+    assert store.read_all() == []
 
 
 def test_build_runtime_loads_policy_cells_from_configured_path(tmp_path, monkeypatch):
@@ -296,6 +309,7 @@ cell = "protected"
     )
     monkeypatch.setenv("LEGIS_POLICY_CELLS", str(cells))
     monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    monkeypatch.setenv("LEGIS_CHECK_DB", f"sqlite:///{tmp_path / 'checks.db'}")
 
     from legis.mcp import build_runtime
 
