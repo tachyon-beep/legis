@@ -119,6 +119,18 @@ def _verify_secret(
                 detail="Invalid or missing API secret token.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        # A single shared secret cannot intrinsically represent a writer/operator
+        # split, so single-secret mode declares its authority via
+        # LEGIS_API_SECRET_SCOPE (pipe-separated), defaulting to writer-only.
+        # Operator routes therefore fail closed unless a deployment explicitly
+        # grants the operator scope — mirroring the scoped-token model (Q-H1).
+        scope_raw = os.environ.get("LEGIS_API_SECRET_SCOPE", "writer")
+        secret_scopes = {scope.strip() for scope in scope_raw.split("|") if scope.strip()}
+        if required_scope not in secret_scopes:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The API secret is not authorized for {required_scope!r} operations.",
+            )
         return os.environ.get("LEGIS_API_ACTOR", default_actor)
     if _unsafe_dev_auth_enabled():
         return default_actor

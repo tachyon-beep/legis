@@ -199,3 +199,52 @@ def test_authenticated_operator_identity_does_not_require_body_operator_id(
     assert resp.status_code == 201
     trail = client.get("/overrides").json()
     assert trail[0]["agent_id"] == "op-a"
+
+
+def test_single_secret_defaults_to_writer_only_and_fails_closed_on_operator(monkeypatch, tmp_path):
+    # Q-H1: a single shared secret cannot represent a writer/operator split, so
+    # operator routes fail closed by default. The same secret still authorises
+    # writer routes.
+    monkeypatch.setenv("LEGIS_API_SECRET", "super-secret")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    monkeypatch.delenv("LEGIS_API_SECRET_SCOPE", raising=False)
+    client = TestClient(create_app())
+    auth = {"Authorization": "Bearer super-secret"}
+
+    # writer route: allowed
+    assert client.post(
+        "/overrides",
+        json={"policy": "no-eval", "entity": "src/x.py:f", "rationale": "x"},
+        headers=auth,
+    ).status_code == 201
+    # operator route: fail closed (403)
+    assert client.post(
+        "/protected/operator-override",
+        json={"policy": "no-eval", "entity": "service:override", "rationale": "x",
+              "file_fingerprint": "fp", "ast_path": "ap"},
+        headers=auth,
+    ).status_code == 403
+
+
+def test_single_secret_operator_scope_opt_in_grants_operator(monkeypatch, tmp_path):
+    # Q-H1: an explicit LEGIS_API_SECRET_SCOPE granting operator restores the
+    # single-operator deployment.
+    monkeypatch.setenv("LEGIS_API_SECRET", "super-secret")
+    monkeypatch.setenv("LEGIS_API_SECRET_SCOPE", "writer|operator")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    client = TestClient(create_app())
+    auth = {"Authorization": "Bearer super-secret"}
+
+    assert client.post(
+        "/overrides",
+        json={"policy": "no-eval", "entity": "src/x.py:f", "rationale": "x"},
+        headers=auth,
+    ).status_code == 201
+    assert client.post(
+        "/protected/operator-override",
+        json={"policy": "no-eval", "entity": "service:override", "rationale": "x",
+              "file_fingerprint": "fp", "ast_path": "ap"},
+        headers=auth,
+    ).status_code == 201

@@ -55,6 +55,10 @@ def test_api_overrides_protected_policies_403(tmp_path, monkeypatch, unsafe_dev_
 
 def test_api_admin_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_API_SECRET", "super-secret")
+    # Q-H1: single-secret mode is writer-only by default; an operator
+    # deployment must explicitly grant the operator scope. Granting it here
+    # exercises the authenticated-operator path.
+    monkeypatch.setenv("LEGIS_API_SECRET_SCOPE", "writer|operator")
     monkeypatch.setenv("LEGIS_HMAC_KEY", "secret-key")
     monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
     app = create_app()
