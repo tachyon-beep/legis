@@ -1,6 +1,6 @@
 """Filigree entity-association client — legis binds governance to issues.
 
-Same transport posture as ``identity/clarion_client.py``: stdlib ``urllib`` with
+Same transport posture as ``identity/loomweave_client.py``: stdlib ``urllib`` with
 an injectable ``fetch`` so tests run offline; no new dependency. legis binds the
 opaque SEI as ``entity_id`` (Filigree never parses it) and hands the entity's
 content hash for Filigree to store verbatim; drift comparison stays legis's job.

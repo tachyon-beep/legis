@@ -19,13 +19,13 @@ jobs:
         run: uv run pytest --cov=legis --cov-report=term-missing --cov-fail-under=70
       - name: Run SEI conformance oracle
         run: uv run pytest tests/conformance/test_sei_oracle.py
-      - name: Run live Clarion oracle
-        if: ${{ vars.CLARION_URL != '' }}
+      - name: Run live Loomweave oracle
+        if: ${{ vars.LOOMWEAVE_URL != '' }}
         env:
-          CLARION_URL: ${{ vars.CLARION_URL }}
-          CLARION_LIVE_ORACLE_LOCATOR: ${{ vars.CLARION_LIVE_ORACLE_LOCATOR }}
-          LEGIS_CLARION_HMAC_KEY: ${{ secrets.LEGIS_CLARION_HMAC_KEY }}
-        run: uv run pytest tests/conformance/test_live_clarion_oracle.py
+          LOOMWEAVE_URL: ${{ vars.LOOMWEAVE_URL }}
+          LOOMWEAVE_LIVE_ORACLE_LOCATOR: ${{ vars.LOOMWEAVE_LIVE_ORACLE_LOCATOR }}
+          LEGIS_LOOMWEAVE_HMAC_KEY: ${{ secrets.LEGIS_LOOMWEAVE_HMAC_KEY }}
+        run: uv run pytest tests/conformance/test_live_loomweave_oracle.py
       - name: Run type check
         run: uv run mypy src/legis
       - name: Run policy-boundary honesty gate

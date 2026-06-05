@@ -12,7 +12,7 @@ decisions. Interview transcript summarized in the Appendix.
 
 ## Purpose
 
-Loom is **agent-first**: the primary users of legis are autonomous AI coding agents, not humans.
+Weft is **agent-first**: the primary users of legis are autonomous AI coding agents, not humans.
 Today every agent↔legis interaction is a raw HTTP `POST`/`GET` against the FastAPI service, which
 forces the agent into *status-code archaeology* (a `409` means "judge BLOCKED" on `/overrides` but
 "sign-off not cleared" on `/bind-issue`; a `404` means both "no such PR" and "this cell isn't wired
@@ -236,5 +236,5 @@ Two agent instances were interviewed as the customer, two rounds each with cross
 > gate), the additive `/git/rename-feed` endpoint and `git_rename_feed_get` MCP
 > tool, and the `/filigree/issues/{id}/closure-gate` endpoint and
 > `filigree_closure_gate_get` MCP tool. Sibling-side consumption (Filigree
-> calling the closure gate; Clarion re-pointing to the rename feed) is tracked
+> calling the closure gate; Loomweave re-pointing to the rename feed) is tracked
 > as a follow-on spec.

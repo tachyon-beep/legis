@@ -3,7 +3,7 @@ from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 
 
-class FakeBatchClarion:
+class FakeBatchLoomweave:
     def __init__(self):
         self.calls = []
 
@@ -24,7 +24,7 @@ class FakeBatchClarion:
         return {
             "resolved": {
                 "python:function:m.f": {
-                    "sei": "clarion:eid:abc",
+                    "sei": "loomweave:eid:abc",
                     "current_locator": "python:function:m.f",
                     "content_hash": "hash-abc",
                     "alive": True,
@@ -57,7 +57,7 @@ def test_pre_sei_backfill_dry_run_uses_batch_and_does_not_append(tmp_path):
     store = _store(tmp_path)
     store.append(_legacy_payload("python:function:m.f"))
     store.append(_legacy_payload("python:function:gone"))
-    client = FakeBatchClarion()
+    client = FakeBatchLoomweave()
 
     report = run_pre_sei_backfill(
         store,
@@ -90,7 +90,7 @@ def test_pre_sei_backfill_execute_appends_resolved_and_honest_degrade_events(tmp
     store.append(
         {
             "policy": "already",
-            "entity_key": EntityKey.from_sei("clarion:eid:stable").to_dict(),
+            "entity_key": EntityKey.from_sei("loomweave:eid:stable").to_dict(),
             "identity_stable": True,
             "extensions": {},
         }
@@ -98,7 +98,7 @@ def test_pre_sei_backfill_execute_appends_resolved_and_honest_degrade_events(tmp
 
     report = run_pre_sei_backfill(
         store,
-        FakeBatchClarion(),
+        FakeBatchLoomweave(),
         FixedClock("2026-06-04T12:00:00+00:00"),
         dry_run=False,
         actor="operator-1",
@@ -114,13 +114,13 @@ def test_pre_sei_backfill_execute_appends_resolved_and_honest_degrade_events(tmp
     assert resolved["agent_id"] == "operator-1"
     assert resolved["recorded_at"] == "2026-06-04T12:00:00+00:00"
     assert resolved["entity_key"] == {
-        "value": "clarion:eid:abc",
+        "value": "loomweave:eid:abc",
         "identity_stable": True,
     }
     assert resolved["identity_stable"] is True
-    assert resolved["extensions"]["clarion"]["alive"] is True
-    assert resolved["extensions"]["clarion"]["content_hash"] == "hash-abc"
-    assert resolved["extensions"]["clarion"]["lineage_snapshot_status"] == "verified"
+    assert resolved["extensions"]["loomweave"]["alive"] is True
+    assert resolved["extensions"]["loomweave"]["content_hash"] == "hash-abc"
+    assert resolved["extensions"]["loomweave"]["lineage_snapshot_status"] == "verified"
     assert resolved["extensions"]["backfill"]["original_entity_key"] == {
         "value": "python:function:m.f",
         "identity_stable": False,
@@ -133,7 +133,7 @@ def test_pre_sei_backfill_execute_appends_resolved_and_honest_degrade_events(tmp
         "identity_stable": False,
     }
     assert unresolved["identity_stable"] is False
-    assert unresolved["extensions"]["clarion"] == {
+    assert unresolved["extensions"]["loomweave"] == {
         "alive": False,
         "identity_resolution_status": "not_alive",
         "lineage_snapshot_status": "not_applicable",
@@ -147,8 +147,8 @@ def test_pre_sei_backfill_rerun_skips_originals_already_backfilled(tmp_path):
     store.append(_legacy_payload("python:function:m.f"))
     clock = FixedClock("2026-06-04T12:00:00+00:00")
 
-    first = run_pre_sei_backfill(store, FakeBatchClarion(), clock, dry_run=False)
-    second_client = FakeBatchClarion()
+    first = run_pre_sei_backfill(store, FakeBatchLoomweave(), clock, dry_run=False)
+    second_client = FakeBatchLoomweave()
     second = run_pre_sei_backfill(store, second_client, clock, dry_run=False)
 
     assert first.appended == 1

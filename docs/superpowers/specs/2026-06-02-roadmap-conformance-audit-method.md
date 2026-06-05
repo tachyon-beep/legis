@@ -34,12 +34,12 @@ false findings. Tag before you grade:
 |---|---|---|
 | **CODE** | Legis capability built now: §1.1–1.4, the 2×2 cells, record formats, store, API | Source + passing test. This is the core. |
 | **GATED** | Cross-tool seam, §2.x / milestones 4–7, doc *itself* gates it on a sibling | Verify **legis's side of the seam** only. Separate "legis side built" from "sibling genuinely not ready." |
-| **PRINCIPLE** | §4 North Star, §5 throughline, Appendix A asks *to Clarion*, design ancestry | Not legis code. Do not grade "missing code." |
+| **PRINCIPLE** | §4 North Star, §5 throughline, Appendix A asks *to Loomweave*, design ancestry | Not legis code. Do not grade "missing code." |
 
-Memory note (`clarion-sei-integration-readiness`): Clarion shipped SEI 2026-06-02,
+Memory note (`loomweave-sei-integration-readiness`): Loomweave shipped SEI 2026-06-02,
 so milestone 4 (SEI-keyed attestations) should be **fully** done, not gated.
 Milestone 7's git-rename provider is legitimately "contract-locked, operative
-pending Clarion committed-range driving" — that is a correct not-yet, **not a gap**.
+pending Loomweave committed-range driving" — that is a correct not-yet, **not a gap**.
 
 ## Step 3 — Build the trace map
 

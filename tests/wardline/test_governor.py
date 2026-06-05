@@ -66,23 +66,23 @@ def test_suppressed_defect_without_proof_is_rejected():
         active_defects(scan)
 
 
-def test_surface_override_captures_clarion_lineage_alongside_wardline(tmp_path):
-    # A SEI-keyed wardline-routed override must carry the REQ-L-01 clarion
+def test_surface_override_captures_loomweave_lineage_alongside_wardline(tmp_path):
+    # A SEI-keyed wardline-routed override must carry the REQ-L-01 loomweave
     # lineage snapshot (alive/content_hash/lineage_snapshot) merged ALONGSIDE the
     # wardline ext — same as the same override taken via /overrides.
     eng = _engine(tmp_path)
-    clarion_ext = {"clarion": {"alive": True, "content_hash": "h",
+    loomweave_ext = {"loomweave": {"alive": True, "content_hash": "h",
                                "lineage_snapshot": {"length": 1, "hash": "z"}}}
     results = route_findings(
         active_defects(_scan()),
         policy=WardlineCellPolicy.SURFACE_OVERRIDE,
         agent_id="agent-1",
-        resolve=lambda q: (EntityKey.from_sei("clarion:eid:x"), clarion_ext),
+        resolve=lambda q: (EntityKey.from_sei("loomweave:eid:x"), loomweave_ext),
         engine=eng,
     )
     assert results[0]["mode"] == "surface_override"
     ext = eng.trail()[0]["extensions"]
-    assert ext["clarion"] == clarion_ext["clarion"]      # lineage snapshot captured
+    assert ext["loomweave"] == loomweave_ext["loomweave"]      # lineage snapshot captured
     assert ext["wardline"]["fingerprint"] == "fp1"       # wardline ext still present
 
 
@@ -127,20 +127,20 @@ def test_block_escalate_cell_opens_a_signoff_request(tmp_path):
     )
 
 
-def test_block_escalate_captures_clarion_and_wardline_metadata(tmp_path):
+def test_block_escalate_captures_loomweave_and_wardline_metadata(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
     gate = SignoffGate(store, FixedClock("2026-06-02T12:00:00+00:00"))
-    clarion_ext = {"clarion": {"alive": True, "content_hash": "h",
+    loomweave_ext = {"loomweave": {"alive": True, "content_hash": "h",
                                "lineage_snapshot": {"length": 1, "hash": "z"}}}
     results = route_findings(
         active_defects(_scan()),
         policy=WardlineCellPolicy.BLOCK_ESCALATE,
         agent_id="agent-1",
-        resolve=lambda q: (EntityKey.from_sei("clarion:eid:x"), clarion_ext),
+        resolve=lambda q: (EntityKey.from_sei("loomweave:eid:x"), loomweave_ext),
         signoff=gate,
     )
     record = store.read_all()[results[0]["seq"] - 1].payload
-    assert record["extensions"]["clarion"] == clarion_ext["clarion"]
+    assert record["extensions"]["loomweave"] == loomweave_ext["loomweave"]
     assert record["extensions"]["wardline"]["fingerprint"] == "fp1"
     assert record["extensions"]["wardline"]["severity"] == "ERROR"
 
@@ -248,8 +248,8 @@ def test_surface_only_record_is_orphan_detectable(tmp_path):
     eng = _engine(tmp_path)
     route_findings(
         active_defects(_scan()), policy=WardlineCellPolicy.SURFACE_ONLY, agent_id="a",
-        resolve=lambda q: (EntityKey.from_sei("clarion:eid:s"),
-                           {"clarion": {"alive": True, "content_hash": "h", "lineage_snapshot": None}}),
+        resolve=lambda q: (EntityKey.from_sei("loomweave:eid:s"),
+                           {"loomweave": {"alive": True, "content_hash": "h", "lineage_snapshot": None}}),
         engine=eng)
 
     class DeadClient:
@@ -259,7 +259,7 @@ def test_surface_only_record_is_orphan_detectable(tmp_path):
             return []
 
     gaps = find_orphan_gaps(eng.records(), DeadClient())
-    assert [g.sei for g in gaps] == ["clarion:eid:s"]  # surfaced record IS orphan-detectable
+    assert [g.sei for g in gaps] == ["loomweave:eid:s"]  # surfaced record IS orphan-detectable
 
 
 def test_pre_loop_guard_prevents_partial_application(tmp_path):

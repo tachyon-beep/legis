@@ -13,11 +13,11 @@ from typing import Any
 
 from legis.canonical import content_hash
 from legis.clock import Clock
-from legis.identity.clarion_client import ClarionIdentity
+from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditRecord, AuditStore
 
-SEI_PREFIX = "clarion:eid:"
+SEI_PREFIX = "loomweave:eid:"
 BACKFILL_EVENTS = {"SEI_BACKFILL", "SEI_BACKFILL_UNRESOLVED"}
 
 
@@ -43,7 +43,7 @@ class SeiBackfillReport:
 
 def run_pre_sei_backfill(
     store: AuditStore,
-    client: ClarionIdentity,
+    client: LoomweaveIdentity,
     clock: Clock,
     *,
     dry_run: bool = True,
@@ -118,7 +118,7 @@ def run_pre_sei_backfill(
                 appended += 1
         else:
             # Missing from every channel is treated as unresolved rather than
-            # silently skipped; Clarion's contract should include every input.
+            # silently skipped; Loomweave's contract should include every input.
             unresolved_count += 1
             if not dry_run:
                 store.append(
@@ -163,7 +163,7 @@ def _backfilled_original_sequences(records: list[AuditRecord]) -> set[int]:
 def _resolved_map(batch: dict[str, Any]) -> dict[str, dict[str, Any]]:
     raw = batch.get("resolved", {})
     if not isinstance(raw, dict):
-        raise SeiBackfillError("Clarion batch response field 'resolved' must be an object")
+        raise SeiBackfillError("Loomweave batch response field 'resolved' must be an object")
     result: dict[str, dict[str, Any]] = {}
     for locator, item in raw.items():
         if isinstance(locator, str) and isinstance(item, dict):
@@ -185,7 +185,7 @@ def _resolved_event(
     rec: AuditRecord,
     resolution: dict[str, Any],
     *,
-    client: ClarionIdentity,
+    client: LoomweaveIdentity,
     clock: Clock,
     actor: str,
 ) -> dict[str, Any]:
@@ -201,7 +201,7 @@ def _resolved_event(
         "agent_id": actor,
         "recorded_at": clock.now_iso(),
         "extensions": {
-            "clarion": {
+            "loomweave": {
                 "alive": True,
                 "content_hash": resolution.get("content_hash"),
                 "lineage_snapshot": lineage_snapshot,
@@ -235,7 +235,7 @@ def _unresolved_event(
         "agent_id": actor,
         "recorded_at": clock.now_iso(),
         "extensions": {
-            "clarion": {
+            "loomweave": {
                 "alive": False,
                 "identity_resolution_status": status,
                 "lineage_snapshot_status": "not_applicable",
@@ -250,7 +250,7 @@ def _unresolved_event(
 
 
 def _lineage_snapshot(
-    client: ClarionIdentity, sei: str
+    client: LoomweaveIdentity, sei: str
 ) -> tuple[dict[str, Any] | None, str]:
     try:
         lineage = client.lineage(sei)

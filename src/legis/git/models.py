@@ -32,8 +32,8 @@ class CommitInfo:
 class RenameEvidence:
     """Git-layer (path) rename evidence: what ``git -M`` detects.
 
-    Symbol-level identity resolution is Clarion's (it combines this signal with
-    body hashes, SEI spec §3); WP-6.3 re-exposes this surface to Clarion's
+    Symbol-level identity resolution is Loomweave's (it combines this signal with
+    body hashes, SEI spec §3); WP-6.3 re-exposes this surface to Loomweave's
     matcher. This does not claim symbol-level rename detection.
     """
 

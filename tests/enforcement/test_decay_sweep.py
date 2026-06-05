@@ -62,7 +62,7 @@ def test_decay_rejudge_preserves_source_and_identity_evidence(tmp_path):
                 "source_path": "src/x.py",
                 "current_fingerprint": "sha256:abc",
             },
-            "clarion": {
+            "loomweave": {
                 "alive": True,
                 "content_hash": "content-hash",
                 "lineage_snapshot": {"length": 1, "hash": "lineage-hash"},
@@ -81,6 +81,6 @@ def test_decay_rejudge_preserves_source_and_identity_evidence(tmp_path):
     assert ext["file_fingerprint"] == "sha256:abc"
     assert ext["ast_path"] == "Module/FunctionDef[f]"
     assert ext["source_binding"]["status"] == "verified"
-    assert ext["clarion"]["content_hash"] == "content-hash"
+    assert ext["loomweave"]["content_hash"] == "content-hash"
     assert "judge_rationale" not in ext
     assert "judge_metadata_signature" not in ext

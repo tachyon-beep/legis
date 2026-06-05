@@ -8,7 +8,7 @@
 
 Legis is design-ready but unimplemented. Before any feature work, the
 foundation sprint must fix the stack, the persistence model, and the API shape.
-The suite has split precedent: Clarion and Filigree are Rust; Wardline and the
+The suite has split precedent: Loomweave and Filigree are Rust; Wardline and the
 elspeth design-ancestor are Python.
 
 The decisive factors for legis specifically:
@@ -27,7 +27,7 @@ The decisive factors for legis specifically:
 ## Decision
 
 - **Language/runtime:** Python 3.12+, managed with `uv`, `src/` layout.
-- **HTTP read API:** FastAPI (consumer model mirroring Clarion's read API —
+- **HTTP read API:** FastAPI (consumer model mirroring Loomweave's read API —
   consumers are HTTP clients).
 - **Persistence:** SQLite via **SQLAlchemy Core** (not the ORM), matching
   elspeth's Landscape choice: an audit trail needs precise SQL control and a
@@ -58,7 +58,7 @@ protected cell's HMAC key — is deferred to Sprint 3 (WP-3.2) and is an explici
   AST for in-code policy; Wardline parity; SQLAlchemy Core gives the prod-DB
   path for free.
 - **Cost / rejected alternative (Rust + axum + rusqlite):** would match
-  Clarion/Filigree's runtime tier and HTTP patterns and give better
+  Loomweave/Filigree's runtime tier and HTTP patterns and give better
   git-operation performance, but forces a full re-implementation of elspeth's
   judge, decorator, and HMAC logic and a separate AST path for governed Python
   code. The judge-port leverage outweighed the operational-tier parity.

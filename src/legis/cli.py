@@ -7,7 +7,7 @@ import uvicorn
 
 from legis.clock import SystemClock
 from legis.governance.sei_backfill import run_pre_sei_backfill
-from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
+from legis.identity.loomweave_client import HttpLoomweaveIdentity, loomweave_hmac_key_from_env
 from legis.policy.boundary_scan import scan_policy_boundaries
 from legis.store.audit_store import AuditStore
 
@@ -49,8 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated protected policy list (falls back to LEGIS_PROTECTED_POLICIES env var)",
     )
     serve.add_argument(
-        "--clarion-url",
-        help="Clarion identity API URL (falls back to CLARION_API_URL env var)",
+        "--loomweave-url",
+        help="Loomweave identity API URL (falls back to LOOMWEAVE_API_URL env var)",
     )
     serve.add_argument(
         "--filigree-url",
@@ -81,8 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated protected policy list (falls back to LEGIS_PROTECTED_POLICIES env var)",
     )
     mcp.add_argument(
-        "--clarion-url",
-        help="Clarion identity API URL (falls back to CLARION_API_URL env var)",
+        "--loomweave-url",
+        help="Loomweave identity API URL (falls back to LOOMWEAVE_API_URL env var)",
     )
     _add_judge_flags(mcp)
 
@@ -106,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backfill = subparsers.add_parser(
         "sei-backfill",
-        help="Resolve legacy locator-keyed governance records through Clarion batch resolve",
+        help="Resolve legacy locator-keyed governance records through Loomweave batch resolve",
     )
     backfill.add_argument(
         "--db",
@@ -114,9 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Governance store URL (falls back to LEGIS_GOVERNANCE_DB env var)",
     )
     backfill.add_argument(
-        "--clarion-url",
+        "--loomweave-url",
         required=True,
-        help="Clarion identity API URL",
+        help="Loomweave identity API URL",
     )
     backfill.add_argument(
         "--execute",
@@ -238,8 +238,8 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
             os.environ["LEGIS_CHECK_DB"] = args.check_db
         if args.protected_policies:
             os.environ["LEGIS_PROTECTED_POLICIES"] = args.protected_policies
-        if args.clarion_url:
-            os.environ["CLARION_API_URL"] = args.clarion_url
+        if args.loomweave_url:
+            os.environ["LOOMWEAVE_API_URL"] = args.loomweave_url
         if args.filigree_url:
             os.environ["FILIGREE_API_URL"] = args.filigree_url
         if args.binding_db:
@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
     if args.command == "sei-backfill":
         report = run_pre_sei_backfill(
             AuditStore(args.db),
-            HttpClarionIdentity(args.clarion_url, hmac_key=clarion_hmac_key_from_env()),
+            HttpLoomweaveIdentity(args.loomweave_url, hmac_key=loomweave_hmac_key_from_env()),
             SystemClock(),
             dry_run=not args.execute,
             actor=args.actor,
@@ -269,8 +269,8 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
             os.environ["LEGIS_GOVERNANCE_DB"] = args.governance_db
         if args.protected_policies:
             os.environ["LEGIS_PROTECTED_POLICIES"] = args.protected_policies
-        if args.clarion_url:
-            os.environ["CLARION_API_URL"] = args.clarion_url
+        if args.loomweave_url:
+            os.environ["LOOMWEAVE_API_URL"] = args.loomweave_url
         if args.check_db:
             os.environ["LEGIS_CHECK_DB"] = args.check_db
         if args.policy_cells:

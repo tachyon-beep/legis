@@ -30,7 +30,7 @@ All subagents were instructed to operate with `enable_write_tools=false` and `en
 
 The highest risks are concentrated at trust boundaries where Legis records governance facts from request-body data supplied by the actor being governed. The main pattern is: caller-provided static-analysis payloads, caller-provided routing choices, caller-provided source bindings, and caller-provided identities become audit evidence without enough independent validation.
 
-The protected-cell cryptographic story also has material gaps. Some fields that readers will treat as audit evidence are not HMAC-bound, protected verification skips one malformed record class, and protected sign-off binding can use unsigned Clarion metadata.
+The protected-cell cryptographic story also has material gaps. Some fields that readers will treat as audit evidence are not HMAC-bound, protected verification skips one malformed record class, and protected sign-off binding can use unsigned Loomweave metadata.
 
 No source code was changed during this audit.
 
@@ -87,7 +87,7 @@ Locations:
 Evidence:
 
 - `ProtectedIn` accepts `file_fingerprint` and `ast_path` from the request body.
-- `ProtectedGate.submit()` builds the `OverrideRecord` sent to the judge without `file_fingerprint`, `ast_path`, or Clarion extension context.
+- `ProtectedGate.submit()` builds the `OverrideRecord` sent to the judge without `file_fingerprint`, `ast_path`, or Loomweave extension context.
 - `_record_signed()` later signs those fields into the stored payload.
 
 Impact:
@@ -97,14 +97,14 @@ The HMAC proves Legis wrote a record containing those source-binding fields, but
 Remediation:
 
 1. Stop treating `file_fingerprint` and `ast_path` as caller-authoritative fields.
-2. Compute them inside Legis or accept them only as part of a trusted Clarion/Wardline artifact whose digest is verified.
-3. Include source-binding context and Clarion lineage/content context in the `OverrideRecord` before `judge.evaluate()`.
+2. Compute them inside Legis or accept them only as part of a trusted Loomweave/Wardline artifact whose digest is verified.
+3. Include source-binding context and Loomweave lineage/content context in the `OverrideRecord` before `judge.evaluate()`.
 4. Sign exactly the judged record and reject any mismatch between judged fields and persisted fields.
 5. Add a typed `JudgedProtectedRecord` or equivalent value object so judge input and signed payload cannot drift.
 
 Acceptance tests:
 
-- A spy judge should receive the exact `file_fingerprint`, `ast_path`, and Clarion context later signed.
+- A spy judge should receive the exact `file_fingerprint`, `ast_path`, and Loomweave context later signed.
 - A request with a fingerprint not matching trusted current content should fail before HMAC signing.
 - Mutating source-binding fields between judge evaluation and persistence should be impossible by construction or detected by a unit test.
 
@@ -122,18 +122,18 @@ Locations:
 Evidence:
 
 - Protected override payloads store `agent_id` and `extensions.judge_rationale`, but `signing_fields()` does not sign either field.
-- Protected sign-off signatures omit `extensions.clarion`; later `/signoff/{seq}/bind-issue` reads `extensions.clarion.content_hash` from the stored sign-off request.
+- Protected sign-off signatures omit `extensions.loomweave`; later `/signoff/{seq}/bind-issue` reads `extensions.loomweave.content_hash` from the stored sign-off request.
 - `TrailVerifier.verify()` skips protected-policy records lacking `entity_key` before requiring a signature.
 - `LEGIS_PROTECTED_POLICIES` defaults to an empty set; `/protected/overrides` can write a signed record whose policy the verifier later skips because the policy is not configured as protected.
 
 Impact:
 
-An attacker with DB-file access can edit attribution, judge rationale, or sign-off Clarion content hash, recompute the unkeyed hash chain, and still pass HMAC verification for some cases. A malformed protected record missing `entity_key` can be skipped entirely. This undermines the protected cell's non-repudiation and tamper-evidence guarantees.
+An attacker with DB-file access can edit attribution, judge rationale, or sign-off Loomweave content hash, recompute the unkeyed hash chain, and still pass HMAC verification for some cases. A malformed protected record missing `entity_key` can be skipped entirely. This undermines the protected cell's non-repudiation and tamper-evidence guarantees.
 
 Remediation:
 
-1. Introduce `hmac-sha256:v2` signing fields for protected overrides that include `agent_id`, `judge_rationale`, source binding, Clarion content/lineage fields, policy, entity, verdict, model, rationale, and recorded timestamp.
-2. Introduce matching v2 signing fields for protected sign-offs, including Clarion content hash and lineage snapshot where present.
+1. Introduce `hmac-sha256:v2` signing fields for protected overrides that include `agent_id`, `judge_rationale`, source binding, Loomweave content/lineage fields, policy, entity, verdict, model, rationale, and recorded timestamp.
+2. Introduce matching v2 signing fields for protected sign-offs, including Loomweave content hash and lineage snapshot where present.
 3. For protected policies, missing required structural fields should raise `TamperError`; never `continue`.
 4. Reject `/protected/overrides` for policies outside the configured protected set, or sign and verify an explicit protected-tier marker independent of policy-name configuration.
 5. Before binding a sign-off to Filigree, verify the protected trail and verify the sign-off request payload whose content hash is being used.
@@ -143,7 +143,7 @@ Acceptance tests:
 
 - Tamper `agent_id` and `extensions.judge_rationale`, re-chain sqlite, and assert `TrailVerifier.verify()` plus `GET /overrides` fail closed.
 - Remove `entity_key` and signature from a protected record, re-chain, and assert verified reads return an integrity error.
-- Mutate a signed sign-off request's `extensions.clarion.content_hash`, re-chain, and assert binding fails without calling Filigree.
+- Mutate a signed sign-off request's `extensions.loomweave.content_hash`, re-chain, and assert binding fails without calling Filigree.
 - With HMAC enabled and an empty protected-policy set, protected writes should fail startup or fail the request; tampering a protected-endpoint record must still fail verified reads.
 
 ### High
@@ -187,7 +187,7 @@ Acceptance tests:
 - A token/claim for `op-a` with body `operator_id: op-b` records `op-a` or rejects with 403.
 - MCP or future adapter schemas must not expose `agent_id` or `operator_id` as ordinary tool arguments.
 
-#### H2. Clarion lineage failures silently degrade to clean-looking audit state
+#### H2. Loomweave lineage failures silently degrade to clean-looking audit state
 
 Locations:
 
@@ -206,7 +206,7 @@ Evidence:
 
 Impact:
 
-A Clarion outage, malformed response, or lineage failure can produce locator-keyed records or SEI-keyed records without snapshots. Later integrity checks can report no divergences even though lineage custody was unavailable.
+A Loomweave outage, malformed response, or lineage failure can produce locator-keyed records or SEI-keyed records without snapshots. Later integrity checks can report no divergences even though lineage custody was unavailable.
 
 Remediation:
 
@@ -218,10 +218,10 @@ Remediation:
 
 Acceptance tests:
 
-- A fake Clarion client resolving an alive SEI but raising on `lineage()` should cause protected writes to fail or record an explicit provenance gap.
+- A fake Loomweave client resolving an alive SEI but raising on `lineage()` should cause protected writes to fail or record an explicit provenance gap.
 - `/governance/lineage-integrity` should report an unavailable/unverified condition when lineage cannot be fetched, not `{"divergences": []}`.
 
-#### H3. Wardline block-escalate sign-offs drop Clarion and Wardline metadata
+#### H3. Wardline block-escalate sign-offs drop Loomweave and Wardline metadata
 
 Locations:
 
@@ -233,26 +233,26 @@ Locations:
 
 Evidence:
 
-- `route_findings()` resolves `clarion_ext` and builds `wardline_ext`.
+- `route_findings()` resolves `loomweave_ext` and builds `wardline_ext`.
 - `SURFACE_OVERRIDE` and `SURFACE_ONLY` merge and persist those extensions.
 - `BLOCK_ESCALATE` calls `signoff.request()` without extensions even though `SignoffGate.request()` accepts them.
 - The module docstring still says carrying Wardline tiers is deferred because `SignoffGate.request` has no extensions field, which is now stale.
 
 Impact:
 
-The highest-friction human sign-off path loses fingerprint, severity, trust tiers, Clarion content hash, and lineage snapshot. Later Filigree binding may fall back to an empty content hash, and lineage-integrity checks cannot inspect what was signed off.
+The highest-friction human sign-off path loses fingerprint, severity, trust tiers, Loomweave content hash, and lineage snapshot. Later Filigree binding may fall back to an empty content hash, and lineage-integrity checks cannot inspect what was signed off.
 
 Remediation:
 
-1. Pass `extensions={**clarion_ext, "wardline": wardline_ext}` into the `BLOCK_ESCALATE` branch.
+1. Pass `extensions={**loomweave_ext, "wardline": wardline_ext}` into the `BLOCK_ESCALATE` branch.
 2. Update the stale docstring.
 3. Require or explicitly record missing content hash when binding sign-offs to Filigree.
 4. Add regression coverage at both unit and API levels.
 
 Acceptance tests:
 
-- Route a critical finding through `block_escalate` with an SEI/Clarion resolver and assert the pending sign-off contains `extensions.clarion` and `extensions.wardline`.
-- Binding that sign-off should use the Clarion content hash from the signed record.
+- Route a critical finding through `block_escalate` with an SEI/Loomweave resolver and assert the pending sign-off contains `extensions.loomweave` and `extensions.wardline`.
+- Binding that sign-off should use the Loomweave content hash from the signed record.
 
 #### H4. `check-override-rate` can create an empty database and pass
 
@@ -397,13 +397,13 @@ Locations:
 - [src/legis/cli.py](/home/john/legis/src/legis/cli.py:66) lines 66-79
 - [src/legis/api/app.py](/home/john/legis/src/legis/api/app.py:157) lines 157-168
 - [src/legis/api/app.py](/home/john/legis/src/legis/api/app.py:177) lines 177-224
-- [src/legis/identity/clarion_client.py](/home/john/legis/src/legis/identity/clarion_client.py:40) lines 40-55
+- [src/legis/identity/loomweave_client.py](/home/john/legis/src/legis/identity/loomweave_client.py:40) lines 40-55
 - [src/legis/filigree/client.py](/home/john/legis/src/legis/filigree/client.py:31) lines 31-45
 
 Evidence:
 
 - CLI/env strings flow directly into SQLAlchemy URLs and urllib base URLs.
-- Clarion and Filigree clients only `rstrip("/")` the base URL.
+- Loomweave and Filigree clients only `rstrip("/")` the base URL.
 - `urlopen(...).read()` loads full response bodies.
 - `--hmac-key` accepts a raw signing secret on the command line and copies it to `LEGIS_HMAC_KEY`.
 
@@ -414,14 +414,14 @@ Misconfiguration or compromised launch environment can point Legis at unexpected
 Remediation:
 
 1. Validate URL scheme and host at startup; require HTTPS except explicit loopback/dev allowlist.
-2. Add auth headers or mTLS for Clarion/Filigree where deployments are not strictly loopback.
+2. Add auth headers or mTLS for Loomweave/Filigree where deployments are not strictly loopback.
 3. Add response byte caps and content-type checks before JSON parsing.
 4. Validate DB URLs and optionally confine state paths.
 5. Remove `--hmac-key`; replace with env-only, secret file with strict permissions, or secret manager/KMS integration.
 
 Acceptance tests:
 
-- `file://` Clarion/Filigree URLs should fail at client construction.
+- `file://` Loomweave/Filigree URLs should fail at client construction.
 - Non-allowlisted remote hosts should fail unless an explicit remote opt-in is set.
 - Oversized responses should raise controlled client errors.
 - Parser should reject `--hmac-key`; `--hmac-key-file` should reject group/world-readable files.
@@ -461,12 +461,12 @@ Acceptance tests:
 - Oversized Wardline scan input should return 413/422 without partial writes.
 - A deliberately slow git command in a controlled test double should time out with a structured error.
 
-#### M4. Clarion and Filigree JSON response shapes are not validated at the transport seam
+#### M4. Loomweave and Filigree JSON response shapes are not validated at the transport seam
 
 Locations:
 
-- [src/legis/identity/clarion_client.py](/home/john/legis/src/legis/identity/clarion_client.py:40) lines 40-49
-- [src/legis/identity/clarion_client.py](/home/john/legis/src/legis/identity/clarion_client.py:71) lines 71-74
+- [src/legis/identity/loomweave_client.py](/home/john/legis/src/legis/identity/loomweave_client.py:40) lines 40-49
+- [src/legis/identity/loomweave_client.py](/home/john/legis/src/legis/identity/loomweave_client.py:71) lines 71-74
 - [src/legis/identity/resolver.py](/home/john/legis/src/legis/identity/resolver.py:59) lines 59-72
 - [src/legis/filigree/client.py](/home/john/legis/src/legis/filigree/client.py:31) lines 31-40
 - [src/legis/filigree/client.py](/home/john/legis/src/legis/filigree/client.py:56) lines 56-59
@@ -485,7 +485,7 @@ Remediation:
 
 1. Validate decoded JSON type immediately in `_urllib_fetch()`.
 2. Add response-shape validators for capability, resolve, SEI resolve, lineage, attach, and associations.
-3. Convert malformed responses into `ClarionError` or `FiligreeError`.
+3. Convert malformed responses into `LoomweaveError` or `FiligreeError`.
 4. Decide which call sites should degrade and which should fail closed.
 
 Acceptance tests:
@@ -583,7 +583,7 @@ Remediation:
 
 1. Add CI jobs for `uv run pytest` and selected static checks.
 2. Use `monkeypatch` for environment changes.
-3. Clear or isolate all `LEGIS_*`, `CLARION_API_URL`, and `FILIGREE_API_URL` settings per test.
+3. Clear or isolate all `LEGIS_*`, `LOOMWEAVE_API_URL`, and `FILIGREE_API_URL` settings per test.
 4. Point default DBs to `tmp_path` in tests that create app state.
 5. Add pytest markers such as `unit`, `integration`, `api`, and `contract`.
 
@@ -597,9 +597,9 @@ Acceptance tests:
 ## Remediation Roadmap
 
 1. Secure the evidence boundary first: type and authenticate Wardline scan ingestion, remove caller-owned routing, and record artifact digests/provenance.
-2. Repair protected-cell HMAC semantics: v2 signing fields, no verifier skips for malformed protected records, sign-off Clarion metadata bound into signatures, and protected endpoint/config alignment.
+2. Repair protected-cell HMAC semantics: v2 signing fields, no verifier skips for malformed protected records, sign-off Loomweave metadata bound into signatures, and protected endpoint/config alignment.
 3. Move actor identity out of request bodies: authenticated agent/operator/CI scopes, adapter launch context for MCP, and default-deny mutating endpoints.
-4. Decide Clarion fail-closed policy: record explicit identity/lineage statuses, and make protected/complex writes fail or loudly mark provenance gaps when custody is unavailable.
+4. Decide Loomweave fail-closed policy: record explicit identity/lineage statuses, and make protected/complex writes fail or loudly mark provenance gaps when custody is unavailable.
 5. Extract shared services before MCP implementation: protected override, sign-off, binding, policy evaluation, Wardline routing, git/check reads, and structured errors.
 6. Add read-only store open modes and fix CI gate behavior for missing DB/schema.
 7. Harden integration and transport inputs: URL allowlists, response caps, DB path validation, git subprocess timeouts, and request size limits.
@@ -608,5 +608,5 @@ Acceptance tests:
 ## Residual Risks
 
 - This audit did not run tests or dynamic probes by request, so execution-time behavior was inferred from source.
-- Live Clarion and Filigree contract drift was not tested; current tests use fakes.
+- Live Loomweave and Filigree contract drift was not tested; current tests use fakes.
 - The absent scanner/rules and MCP server mean those specific implementations could not be audited; only the closest present code and design seams were reviewed.

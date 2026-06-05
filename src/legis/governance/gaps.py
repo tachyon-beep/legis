@@ -1,6 +1,6 @@
 """Lineage-spine consumers: orphan governance gaps + append-only custody.
 
-An attestation keyed on an SEI that Clarion now reports ``alive: false`` is a
+An attestation keyed on an SEI that Loomweave now reports ``alive: false`` is a
 *governance gap* (fail-closed: surfaced, never silently dropped — locked
 decision 4). REQ-L-01 Option 3 custody: legis stored a lineage snapshot at the
 decision; on re-read it verifies the snapshot is still a PREFIX of the current
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from legis.canonical import content_hash
-from legis.identity.clarion_client import ClarionIdentity
+from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.store.audit_store import AuditRecord
 
 
@@ -55,7 +55,7 @@ def _stable_seis(records: list[AuditRecord]) -> list[str]:
 
 
 def find_orphan_gaps(
-    records: list[AuditRecord], client: ClarionIdentity
+    records: list[AuditRecord], client: LoomweaveIdentity
 ) -> list[GovernanceGap]:
     gaps: list[GovernanceGap] = []
     for sei in _stable_seis(records):
@@ -66,7 +66,7 @@ def find_orphan_gaps(
 
 
 def find_lineage_integrity(
-    records: list[AuditRecord], client: ClarionIdentity
+    records: list[AuditRecord], client: LoomweaveIdentity
 ) -> LineageIntegrity:
     divergences: list[LineageDivergence] = []
     unavailable: dict[str, LineageUnavailable] = {}
@@ -76,14 +76,14 @@ def find_lineage_integrity(
         sei = ek.get("value")
         if not (ek.get("identity_stable") and sei):
             continue
-        clarion = (rec.payload.get("extensions", {}).get("clarion", {}) or {})
-        snap = clarion.get("lineage_snapshot")
+        loomweave = (rec.payload.get("extensions", {}).get("loomweave", {}) or {})
+        snap = loomweave.get("lineage_snapshot")
         if not snap:
             unavailable.setdefault(
                 sei,
                 LineageUnavailable(
                     sei=sei,
-                    reason=clarion.get("lineage_snapshot_status") or "missing_snapshot",
+                    reason=loomweave.get("lineage_snapshot_status") or "missing_snapshot",
                 ),
             )
             continue
@@ -110,6 +110,6 @@ def find_lineage_integrity(
 
 
 def find_lineage_divergence(
-    records: list[AuditRecord], client: ClarionIdentity
+    records: list[AuditRecord], client: LoomweaveIdentity
 ) -> list[LineageDivergence]:
     return find_lineage_integrity(records, client).divergences

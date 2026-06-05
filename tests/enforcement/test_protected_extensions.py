@@ -6,7 +6,7 @@ from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import AuditStore
 
 KEY = b"protected-key-1"
-CLARION = {"clarion": {"alive": True, "content_hash": "blake3h",
+LOOMWEAVE = {"loomweave": {"alive": True, "content_hash": "blake3h",
                        "lineage_snapshot": {"length": 1, "hash": "lh"}}}
 
 
@@ -26,23 +26,23 @@ def _gate(tmp_path):
     return g, store
 
 
-def test_submit_carries_clarion_block(tmp_path):
+def test_submit_carries_loomweave_block(tmp_path):
     g, store = _gate(tmp_path)
-    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
              rationale="r", agent_id="a", file_fingerprint="fp", ast_path="ap",
-             extensions=CLARION)
+             extensions=LOOMWEAVE)
     ext = store.read_all()[0].payload["extensions"]
-    assert ext["clarion"] == CLARION["clarion"]
+    assert ext["loomweave"] == LOOMWEAVE["loomweave"]
     # Fixed signed fields are untouched by the caller's extensions.
     assert ext["judge_verdict"] == "ACCEPTED"
     assert ext["file_fingerprint"] == "fp"
 
 
-def test_clarion_block_does_not_break_the_signature(tmp_path):
+def test_loomweave_block_does_not_break_the_signature(tmp_path):
     g, store = _gate(tmp_path)
-    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
              rationale="r", agent_id="a", file_fingerprint="fp", ast_path="ap",
-             extensions=CLARION)
+             extensions=LOOMWEAVE)
     payload = store.read_all()[0].payload
     sig = payload["extensions"]["judge_metadata_signature"]
     assert verify(signing_fields(payload), sig, KEY) is True
@@ -52,17 +52,17 @@ import pytest
 from legis.enforcement.protected import TamperError
 
 
-def test_mutating_clarion_block_invalidates_the_signature(tmp_path):
-    # Discriminating regression lock for WP-A1/L-05: the clarion block must be bound
+def test_mutating_loomweave_block_invalidates_the_signature(tmp_path):
+    # Discriminating regression lock for WP-A1/L-05: the loomweave block must be bound
     # to the signed field set. Mutating it after signing MUST break the signature.
     g, store = _gate(tmp_path)
-    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
              rationale="r", agent_id="a", file_fingerprint="fp", ast_path="ap",
-             extensions=CLARION)
+             extensions=LOOMWEAVE)
     record = store.read_all()[0]
     payload = record.payload
-    payload["extensions"]["clarion"]["content_hash"] = "TAMPERED"
-    payload["extensions"]["clarion"]["lineage_snapshot"] = {"length": 99, "hash": "x"}
+    payload["extensions"]["loomweave"]["content_hash"] = "TAMPERED"
+    payload["extensions"]["loomweave"]["lineage_snapshot"] = {"length": 99, "hash": "x"}
     sig = payload["extensions"]["judge_metadata_signature"]
     assert verify(signing_fields(payload), sig, KEY) is False
     # The protected-tier load-time verifier likewise rejects the mutated record.
@@ -71,19 +71,19 @@ def test_mutating_clarion_block_invalidates_the_signature(tmp_path):
 
 
 
-def test_operator_override_carries_clarion_block(tmp_path):
+def test_operator_override_carries_loomweave_block(tmp_path):
     g, store = _gate(tmp_path)
-    g.operator_override(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    g.operator_override(policy="no-eval", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
                         rationale="r", operator_id="op", file_fingerprint="fp", ast_path="ap",
-                        extensions=CLARION)
+                        extensions=LOOMWEAVE)
     ext = store.read_all()[0].payload["extensions"]
-    assert ext["clarion"] == CLARION["clarion"]
+    assert ext["loomweave"] == LOOMWEAVE["loomweave"]
     assert ext["judge_verdict"] == "OVERRIDDEN_BY_OPERATOR"
 
 
 def test_caller_extensions_cannot_override_fixed_fields(tmp_path):
     g, store = _gate(tmp_path)
-    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    g.submit(policy="no-eval", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
              rationale="r", agent_id="a", file_fingerprint="fp", ast_path="ap",
              extensions={"judge_verdict": "TAMPERED", "file_fingerprint": "evil"})
     ext = store.read_all()[0].payload["extensions"]

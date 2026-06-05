@@ -1,7 +1,10 @@
 [project]
 name = "legis"
 version = "1.0.0rc2"
-description = "Legis — the git/CI + governance layer of the Loom suite"
+description = "Legis — the git/CI + governance layer of the Weft suite"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "John Morrissey", email = "john@foundryside.dev" }
 ]
@@ -12,6 +15,20 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "sqlalchemy>=2.0",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/tachyon-beep/legis"
+Repository = "https://github.com/tachyon-beep/legis"
+Issues = "https://github.com/tachyon-beep/legis/issues"
 
 [project.scripts]
 legis = "legis.cli:main"

@@ -238,7 +238,7 @@ def test_identity_gaps_scan_the_protected_trail(tmp_path):
             return True
 
         def resolve_locator(self, locator):
-            return {"sei": "clarion:eid:abc123", "current_locator": locator,
+            return {"sei": "loomweave:eid:abc123", "current_locator": locator,
                     "content_hash": "h", "alive": True}
 
         def resolve_sei(self, sei):
@@ -254,10 +254,10 @@ def test_identity_gaps_scan_the_protected_trail(tmp_path):
     app = create_app(repo_path=tmp_path, protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
                      identity=IdentityResolver(OrphanClient()))
     c = TestClient(app)
-    # A protected override keyed on an SEI Clarion now reports dead.
+    # A protected override keyed on an SEI Loomweave now reports dead.
     assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     gaps = c.get("/governance/identity-gaps").json()
-    assert [g["sei"] for g in gaps] == ["clarion:eid:abc123"]
+    assert [g["sei"] for g in gaps] == ["loomweave:eid:abc123"]
 
 
 def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
@@ -271,7 +271,7 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
             return True
 
         def resolve_locator(self, locator):
-            return {"sei": "clarion:eid:abc123", "current_locator": locator,
+            return {"sei": "loomweave:eid:abc123", "current_locator": locator,
                     "content_hash": "h", "alive": True}
 
         def resolve_sei(self, sei):
@@ -294,7 +294,7 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
     c = TestClient(app)
     assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     body = c.get("/governance/lineage-integrity").json()
-    assert [d["sei"] for d in body["divergences"]] == ["clarion:eid:abc123"]
+    assert [d["sei"] for d in body["divergences"]] == ["loomweave:eid:abc123"]
     assert body["divergences"][0]["recorded_length"] == 2
     assert body["divergences"][0]["current_length"] == 1
 

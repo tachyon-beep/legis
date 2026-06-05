@@ -1,0 +1,75 @@
+name: publish
+
+# Publishes legis to PyPI when a GitHub Release is published.
+# Authentication is PyPI Trusted Publishing (OIDC) — no API token is stored.
+# One-time setup on PyPI: register this repo + the `publish.yml` workflow as a
+# trusted publisher for the `legis` project (use a "pending" publisher for the
+# very first upload, since the project does not exist on PyPI yet).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & verify distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Test gate (never publish a red build)
+        run: uv run pytest -q
+
+      - name: Verify release tag matches project version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          project_version="$(uv run python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          tag_version="${RELEASE_TAG#v}"
+          echo "project version: ${project_version}"
+          echo "release tag:     ${RELEASE_TAG} (normalized: ${tag_version})"
+          if [ "${project_version}" != "${tag_version}" ]; then
+            echo "::error::Release tag '${tag_version}' does not match pyproject version '${project_version}'. Bump the version or fix the tag."
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
+      - name: Upload distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/legis
+    permissions:
+      id-token: write   # required for Trusted Publishing (OIDC)
+    steps:
+      - name: Download distribution artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

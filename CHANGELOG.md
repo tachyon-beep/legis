@@ -21,7 +21,7 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
 - **Agent-programmable policy grammar** — `/policy/evaluate` returning
   CLEAR / VIOLATION / UNKNOWN, with honest `provenance_gap` events (no silent
   false-green); TOML-backed one-off exemptions.
-- **SEI-keyed attestations** — `identity/clarion_client.py` + resolver
+- **SEI-keyed attestations** — `identity/loomweave_client.py` + resolver
   (resolve-then-key, honest degrade, lineage snapshot); all governance write
   paths key on Stable Entity Identity when alive; `/governance/identity-gaps`
   and `/governance/lineage-integrity` read surfaces.
@@ -43,10 +43,10 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   landed; WP-M2..M6 (registry + `legis_explain`, the MCP stdio server, the
   write/governance tools, safety hardening, judge reason-classification) are not
   yet built.
-- The git-rename provider to Clarion is contract-locked but operatively gated on
-  Clarion driving a committed rev-range.
-- `HttpClarion` runs loopback-unauthenticated; sibling-gated work packages
-  (Filigree signature column, live-Clarion oracle + HMAC auth, operative
+- The git-rename provider to Loomweave is contract-locked but operatively gated on
+  Loomweave driving a committed rev-range.
+- `HttpLoomweave` runs loopback-unauthenticated; sibling-gated work packages
+  (Filigree signature column, live-Loomweave oracle + HMAC auth, operative
   git-rename feed) remain.
 
 [1.0.0rc1]: https://peps.python.org/pep-0440/

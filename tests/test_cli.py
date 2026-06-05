@@ -287,12 +287,12 @@ def test_main_mcp_sets_judge_env(monkeypatch):
 
 def test_sei_backfill_command_defaults_to_dry_run():
     args = build_parser().parse_args(
-        ["sei-backfill", "--db", "sqlite:///gov.db", "--clarion-url", "http://localhost"]
+        ["sei-backfill", "--db", "sqlite:///gov.db", "--loomweave-url", "http://localhost"]
     )
 
     assert args.command == "sei-backfill"
     assert args.db == "sqlite:///gov.db"
-    assert args.clarion_url == "http://localhost"
+    assert args.loomweave_url == "http://localhost"
     assert args.execute is False
     assert args.actor == "legis-sei-backfill"
 
@@ -332,9 +332,9 @@ def test_main_sei_backfill_dispatches_service(monkeypatch, capsys):
         return FakeReport()
 
     monkeypatch.setattr(cli_module, "AuditStore", FakeStore, raising=False)
-    monkeypatch.setattr(cli_module, "HttpClarionIdentity", FakeClient, raising=False)
+    monkeypatch.setattr(cli_module, "HttpLoomweaveIdentity", FakeClient, raising=False)
     monkeypatch.setattr(cli_module, "SystemClock", FakeClock, raising=False)
-    monkeypatch.setenv("LEGIS_CLARION_HMAC_KEY", "clarion-secret")
+    monkeypatch.setenv("LEGIS_LOOMWEAVE_HMAC_KEY", "loomweave-secret")
     monkeypatch.setattr(
         cli_module,
         "run_pre_sei_backfill",
@@ -347,7 +347,7 @@ def test_main_sei_backfill_dispatches_service(monkeypatch, capsys):
             "sei-backfill",
             "--db",
             "sqlite:///gov.db",
-            "--clarion-url",
+            "--loomweave-url",
             "http://localhost",
             "--execute",
             "--actor",
@@ -360,7 +360,7 @@ def test_main_sei_backfill_dispatches_service(monkeypatch, capsys):
         {
             "db": "sqlite:///gov.db",
             "url": "http://localhost",
-            "hmac_key": b"clarion-secret",
+            "hmac_key": b"loomweave-secret",
             "clock_type": "FakeClock",
             "dry_run": False,
             "actor": "operator-1",

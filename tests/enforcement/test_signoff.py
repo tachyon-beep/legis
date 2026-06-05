@@ -72,11 +72,11 @@ def test_protected_signoff_binds_the_original_request_payload(tmp_path):
     g, store = gate(tmp_path, signer=True, key=b"k")
     req = g.request(
         policy="prod-deploy",
-        entity_key=EntityKey.from_sei("clarion:eid:x"),
+        entity_key=EntityKey.from_sei("loomweave:eid:x"),
         rationale="ship",
         agent_id="agent-3",
         extensions={
-            "clarion": {
+            "loomweave": {
                 "alive": True,
                 "content_hash": "source-hash",
                 "lineage_snapshot": {"length": 1, "hash": "lineage-hash"},

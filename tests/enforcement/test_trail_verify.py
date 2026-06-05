@@ -149,7 +149,7 @@ def test_missing_entity_key_on_protected_policy_is_tampering(tmp_path):
         pass
 
 
-def test_protected_signoff_signature_covers_clarion_metadata(tmp_path):
+def test_protected_signoff_signature_covers_loomweave_metadata(tmp_path):
     from legis.enforcement.signoff import SignoffGate
 
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
@@ -161,19 +161,19 @@ def test_protected_signoff_signature_covers_clarion_metadata(tmp_path):
     )
     gate.request(
         policy="no-eval",
-        entity_key=EntityKey.from_sei("clarion:eid:x"),
+        entity_key=EntityKey.from_sei("loomweave:eid:x"),
         rationale="needs review",
         agent_id="agent-1",
-        extensions={"clarion": {"alive": True, "content_hash": "original", "lineage_snapshot": {"length": 1, "hash": "h"}}},
+        extensions={"loomweave": {"alive": True, "content_hash": "original", "lineage_snapshot": {"length": 1, "hash": "h"}}},
     )
     _edit_payload_and_rechain(
         tmp_path / "gov.db",
-        lambda p: p["extensions"]["clarion"].update({"content_hash": "forged"}),
+        lambda p: p["extensions"]["loomweave"].update({"content_hash": "forged"}),
     )
     assert store.verify_integrity() is True
     try:
         TrailVerifier(KEY, PROTECTED).verify(store.read_all())
-        raise AssertionError("expected TamperError on forged signoff clarion metadata")
+        raise AssertionError("expected TamperError on forged signoff loomweave metadata")
     except TamperError:
         pass
 

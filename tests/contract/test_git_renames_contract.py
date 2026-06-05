@@ -1,9 +1,9 @@
-"""Contract lock: /git/renames must match Clarion's LegisGitRenameSource parser.
+"""Contract lock: /git/renames must match Loomweave's LegisGitRenameSource parser.
 
-Clarion's `parse_legis_rename_json` (clarion-cli/src/sei_git.rs) reads a JSON
+Loomweave's `parse_legis_rename_json` (loomweave-cli/src/sei_git.rs) reads a JSON
 ARRAY and takes `old_path` and `new_path` (string, non-empty) from each item;
 all other fields are ignored. This test fabricates a rename in a real repo and
-asserts the endpoint emits exactly that shape. Mirrors Clarion's parser logic.
+asserts the endpoint emits exactly that shape. Mirrors Loomweave's parser logic.
 """
 import subprocess
 
@@ -17,7 +17,7 @@ def _git(repo, *args):
                    capture_output=True, text=True)
 
 
-def _parse_like_clarion(items):
+def _parse_like_loomweave(items):
     # Re-implements parse_legis_rename_json: array → (old,new) pairs, skip empties.
     out = []
     for it in items:
@@ -27,7 +27,7 @@ def _parse_like_clarion(items):
     return out
 
 
-def test_git_renames_endpoint_matches_clarion_parser(tmp_path):
+def test_git_renames_endpoint_matches_loomweave_parser(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -47,8 +47,8 @@ def test_git_renames_endpoint_matches_clarion_parser(tmp_path):
     resp = c.get("/git/renames", params={"rev_range": f"{base}..HEAD"})
     assert resp.status_code == 200
     items = resp.json()
-    assert isinstance(items, list)                       # Clarion requires an array
-    pairs = _parse_like_clarion(items)
+    assert isinstance(items, list)                       # Loomweave requires an array
+    pairs = _parse_like_loomweave(items)
     assert ("auth.py", "authn.py") in pairs              # the rename survives the contract
 
 
@@ -91,7 +91,7 @@ def test_git_renames_union_integration(tmp_path):
     c = TestClient(create_app(repo_path=str(repo)))
     resp = c.get("/git/renames", params={"rev_range": f"{base}..HEAD"})
     assert resp.status_code == 200
-    committed_renames = _parse_like_clarion(resp.json())
+    committed_renames = _parse_like_loomweave(resp.json())
 
     # Query local git for the uncommitted working-tree window
     git_diff_out = subprocess.run(
@@ -100,7 +100,7 @@ def test_git_renames_union_integration(tmp_path):
     ).stdout
     working_tree_renames = _parse_git_diff_lines(git_diff_out)
 
-    # Perform the union (exactly mimicking Clarion's gather_git_renames)
+    # Perform the union (exactly mimicking Loomweave's gather_git_renames)
     union_renames = []
     for rename in committed_renames + working_tree_renames:
         if rename not in union_renames:

@@ -44,7 +44,7 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     verdict cannot be transplanted to another entity.
     """
     ext = payload.get("extensions") or {}
-    clar = ext.get("clarion") or {}
+    clar = ext.get("loomweave") or {}
     snap = clar.get("lineage_snapshot") or {}
     fields = {
         "policy": payload.get("policy"),
@@ -58,9 +58,9 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "file_fingerprint": ext.get("file_fingerprint"),
         "ast_path": ext.get("ast_path"),
         "judge_rationale": ext.get("judge_rationale"),
-        "clarion_content_hash": clar.get("content_hash"),
-        "clarion_lineage_hash": snap.get("hash"),
-        "clarion_lineage_len": snap.get("length"),
+        "loomweave_content_hash": clar.get("content_hash"),
+        "loomweave_lineage_hash": snap.get("hash"),
+        "loomweave_lineage_len": snap.get("length"),
     }
     source_binding = ext.get("source_binding")
     if isinstance(source_binding, dict) and source_binding:

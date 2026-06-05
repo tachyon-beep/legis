@@ -1,6 +1,6 @@
 """FastAPI application factory.
 
-The read API mirrors Clarion's consumer model: consumers are HTTP clients.
+The read API mirrors Loomweave's consumer model: consumers are HTTP clients.
 Sprint 1 mounts the two operating-picture surfaces:
 
 * ``/git/*``    — the stateless git/change surface (WP-1.1)
@@ -267,7 +267,7 @@ def _binding_entity_from_backfill(
             continue
         if not entity_key.identity_stable:
             continue
-        content_hash = payload.get("extensions", {}).get("clarion", {}).get(
+        content_hash = payload.get("extensions", {}).get("loomweave", {}).get(
             "content_hash"
         ) or ""
         return entity_key, content_hash
@@ -294,12 +294,12 @@ def create_app(
 
     # Fallback configuration loaders from environment variables if not injected
     if identity is None:
-        clarion_url = os.environ.get("CLARION_API_URL")
-        if clarion_url:
-            from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
+        loomweave_url = os.environ.get("LOOMWEAVE_API_URL")
+        if loomweave_url:
+            from legis.identity.loomweave_client import HttpLoomweaveIdentity, loomweave_hmac_key_from_env
             from legis.identity.resolver import IdentityResolver
             identity = IdentityResolver(
-                HttpClarionIdentity(clarion_url, hmac_key=clarion_hmac_key_from_env())
+                HttpLoomweaveIdentity(loomweave_url, hmac_key=loomweave_hmac_key_from_env())
             )
 
     if filigree is None:
@@ -626,7 +626,7 @@ def create_app(
         # The SEI and content_hash come from the recorded request, never the
         # caller — binding only what was actually signed off.
         entity_key = EntityKey.from_dict(req["entity_key"])
-        content_hash = req.get("extensions", {}).get("clarion", {}).get(
+        content_hash = req.get("extensions", {}).get("loomweave", {}).get(
             "content_hash"
         ) or ""
         if not entity_key.identity_stable:
@@ -694,7 +694,7 @@ def create_app(
         }
 
     # --- SEI lineage-spine read surfaces (WP-5.2) ---
-    # Pull-only, on-demand: each held SEI is re-resolved against Clarion when the
+    # Pull-only, on-demand: each held SEI is re-resolved against Loomweave when the
     # surface is hit. Detection consumes verified_governance_records() — the
     # protected store (HMAC-verified, fail-closed) when a protected gate is wired,
     # the engine store otherwise — so PROTECTED attestations are orphan-detectable.
@@ -714,7 +714,7 @@ def create_app(
             return {
                 "status": "unavailable",
                 "divergences": [],
-                "unavailable": [{"reason": "clarion client not configured"}],
+                "unavailable": [{"reason": "loomweave client not configured"}],
             }
         integrity = find_lineage_integrity(verified_governance_records(), identity.client)
         return {

@@ -29,12 +29,12 @@ and (D) informational pre-lock asks to siblings.
 
 ## Section A — Legis-side, actionable now (TDD) — ✅ done 2026-06-05
 
-Both tasks harden the additive `/git/rename-feed` surface *before* Clarion re-points to it
+Both tasks harden the additive `/git/rename-feed` surface *before* Loomweave re-points to it
 (Section B, item B3). They are the two open review findings from
 `2026-06-05-legis-home-closeout.review.json` (M5, M6) that were accepted as follow-ups.
 
 > **✅ done 2026-06-05.** A1: `tests/contract/test_git_rename_feed_contract.py` pins the feed's
-> object shape + committed-entry field set + Clarion-parse re-point safety. A2: `build_rename_feed`
+> object shape + committed-entry field set + Loomweave-parse re-point safety. A2: `build_rename_feed`
 > now returns an additive `worktree_checked: bool` (= `include_worktree`) disambiguating
 > "checked-and-clean" from "not-checked"; `status` semantics unchanged so A1's lock and the
 > `/git/renames` byte-compatibility hold. Suite `483 passed, 2 skipped`; mypy clean;
@@ -43,9 +43,9 @@ Both tasks harden the additive `/git/rename-feed` surface *before* Clarion re-po
 ### Task A1: Contract-lock test for `/git/rename-feed` (review finding M6)
 
 **Why:** `/git/rename-feed` returns an **object** (`{status, base, head, committed[], working_tree[]}`)
-whereas the existing `/git/renames` returns an **array** — the shape Clarion's
+whereas the existing `/git/renames` returns an **array** — the shape Loomweave's
 `parse_legis_rename_json` currently expects. When the deferred re-point (B3) lands, a drifted
-shape would break Clarion silently. Pin it now.
+shape would break Loomweave silently. Pin it now.
 
 **Files:**
 - Created: `tests/contract/test_git_rename_feed_contract.py`
@@ -53,7 +53,7 @@ shape would break Clarion silently. Pin it now.
 - [x] **Step 1:** Contract-lock test asserts the required top-level keys (superset-tolerant so A2's
   additive field is allowed), `status` ∈ known set, echoed `base`/`head`, and that each `committed`
   entry carries *exactly* the `RenameEvidence` field set; a second test parses `committed[]` the way
-  Clarion's `parse_legis_rename_json` does and asserts the rename survives (re-point safety).
+  Loomweave's `parse_legis_rename_json` does and asserts the rename survives (re-point safety).
 - [x] **Step 2:** Green: `2 passed`.
 
 ### Task A2: Disambiguate "checked-and-clean" from "not-checked" in the rename feed (review finding M5)
@@ -87,12 +87,12 @@ sibling repo; do not "implement" in legis.
 | ID | Item | Legis-side state | Joint step (owner) | Operative exit |
 | --- | --- | --- | --- | --- |
 | **B1** ✅ | Filigree binding signature column (R-2.3-01c) | `attach` sends opaque HMAC `signature` + `signoff_seq` over `{issue_id, entity_id, content_hash, signoff_seq}` | **Filigree** adds opaque `signature`/`signoff_seq` to `entity_associations`, stores verbatim, returns on read | **DONE 2026-06-05** — Filigree landed v25 (`db_entity_associations.py`; NULL when no key; refreshed on re-attach). Field names + signed tuple match legis's attach payload exactly. No legis change needed. |
-| **B2** | Live-Clarion oracle + HMAC auth | Env-gated oracle test exists (skips without `CLARION_URL`); `X-Loom-Component` auth header wired + unit-tested vs. fake transport | **Ops/Clarion**: a running reference Clarion; provision `CLARION_URL` (+ `CLARION_LIVE_ORACLE_LOCATOR` for full round-trip) | Env-gated oracle runs green against live Clarion; SEI resolves to a live `clarion:eid:` |
-| **B3** ✅ | Operative git-rename feed | `/git/renames` (committed) + additive `/git/rename-feed` (committed + working-tree) both served; shape pinned by A1 | **Clarion** re-points to `/git/rename-feed`'s `.committed` leg; updates `contracts.md` disclosure | **Clarion landed 2026-06-05** (working tree, commit pending): `legis_rename_feed_url` + `parse_legis_rename_feed_json` read `.committed` (committed-only; guards untouched; legacy flat-array → empty, clean switch); contracts disclosure reworded; `cargo test`/`clippy`/`fmt` green. **legis-verified:** A1 contract-lock re-implements Clarion's parser against `.committed` and passes → committed↔parse byte-safe. **LIVE handshake proven 2026-06-05** — clarion 1.3.0 (built from the B3 source) analyzing a repo with a committed `auth.py→authn.py` rename `GET`s live legis `/git/rename-feed?base=<prior>&head=HEAD` (200) and **carries all 4 SEIs** across the rename (`minted=0 carried=4 orphaned=0`, vs `minted=4` on the first run). Optional working-tree enablement NOT taken — separate future commit. |
+| **B2** | Live-Loomweave oracle + HMAC auth | Env-gated oracle test exists (skips without `LOOMWEAVE_URL`); `X-Weft-Component` auth header wired + unit-tested vs. fake transport | **Ops/Loomweave**: a running reference Loomweave; provision `LOOMWEAVE_URL` (+ `LOOMWEAVE_LIVE_ORACLE_LOCATOR` for full round-trip) | Env-gated oracle runs green against live Loomweave; SEI resolves to a live `loomweave:eid:` |
+| **B3** ✅ | Operative git-rename feed | `/git/renames` (committed) + additive `/git/rename-feed` (committed + working-tree) both served; shape pinned by A1 | **Loomweave** re-points to `/git/rename-feed`'s `.committed` leg; updates `contracts.md` disclosure | **Loomweave landed 2026-06-05** (working tree, commit pending): `legis_rename_feed_url` + `parse_legis_rename_feed_json` read `.committed` (committed-only; guards untouched; legacy flat-array → empty, clean switch); contracts disclosure reworded; `cargo test`/`clippy`/`fmt` green. **legis-verified:** A1 contract-lock re-implements Loomweave's parser against `.committed` and passes → committed↔parse byte-safe. **LIVE handshake proven 2026-06-05** — loomweave 1.3.0 (built from the B3 source) analyzing a repo with a committed `auth.py→authn.py` rename `GET`s live legis `/git/rename-feed?base=<prior>&head=HEAD` (200) and **carries all 4 SEIs** across the rename (`minted=0 carried=4 orphaned=0`, vs `minted=4` on the first run). Optional working-tree enablement NOT taken — separate future commit. |
 | **B4a** | Wardline→legis **signed hop** (what legis needs) | legis verifies an optional signed scan body (`artifact_signature`, HMAC-SHA256 `hmac-sha256:v2:` over canonical-JSON of `scan` minus the sig) on `POST /wardline/scan-results`; unsigned retains documented trust-the-agent posture. **legis ingest relaxed 2026-06-05** (it had only ever been tested against one clean fixture): properties carried verbatim (tiers + diagnostics — no tier-conformance), `baselined`/`judged` accepted as non-active (no proof), agent-`waived`/`suppressed` still need proof read **top-level or in properties**; record field `tiers`→`properties` for honesty. | **Wardline** emits the 4 provenance fields + signs the scan; projection now **shrinks** to structural normalization only | **legis-verified cross-repo 2026-06-05** — Wardline posted a realistic 3-kind scan (defect+fact+metric) to real legis: non-defects skipped, defect gated, signature verified, `finding_count` honest at 3. Remaining: Wardline commit + legis deployment flip to require signing |
 | **B4b** | `@trust_boundary` decorator grammar (R-2.2-04) | **NOT a legis build.** legis only consumes the trust-tier vocab (`TRUST_TIERS`) as finding `properties`, already in sync | **Wardline** milestone, on Wardline's own schedule | Decoupled from B4a — **not** a precondition for the legis handshake. Constraint: keep the 8 tier names identical |
 | **B5** ✅ | Filigree closure-gate **consumption** | legis serves `GET /filigree/issues/{id}/closure-gate` → 200 `{allowed:true}` / 409 `{allowed:false}` / 404 disabled / 500 tamper; all four pinned by tests (`test_combinations_api.py:563-647`) | **Filigree** `close_issue` consults the gate before closing | **DONE 2026-06-05** — Filigree landed `governance.py` + `legis_client.py` (governed = issue has a non-null B1 signature; fail-closed on 404/500/unreachable; off when `LEGIS_URL` unset). Its documented "Wire contract consumed (Legis side)" matches legis's served contract exactly. No legis change needed. |
-| **B6** | Live cross-repo handshake tests | legis unit/contract tests green against fakes for every seam above | **Joint** (legis + Clarion + Filigree + Wardline): an integration harness exercising the real handshakes | A cross-repo CI/integration job exercises bind→close, resolve, rename-feed, and signed-scan end-to-end |
+| **B6** | Live cross-repo handshake tests | legis unit/contract tests green against fakes for every seam above | **Joint** (legis + Loomweave + Filigree + Wardline): an integration harness exercising the real handshakes | A cross-repo CI/integration job exercises bind→close, resolve, rename-feed, and signed-scan end-to-end |
 
 **Source:** B1–B4 = `not-yets-completion-design.md` §Track B; B5–B6 = `home-closeout-design.md`
 §Out of scope; B3/B2 also appear as Gated rows in `roadmap-conformance-findings.md`.
@@ -119,10 +119,10 @@ agent-customer need appears, and design then.
 
 ## Section D — Informational / pre-lock asks to siblings (not legis builds)
 
-- [ ] **D1 — Clarion lineage-custody option (pre-lock, roadmap A.4).** Legis accepts **Option 3**
+- [ ] **D1 — Loomweave lineage-custody option (pre-lock, roadmap A.4).** Legis accepts **Option 3**
   for v1 (store a lineage snapshot hash at each governance decision and detect divergence on
   re-read — already implemented as REQ-L-01 divergence detection). The ask is *explicitness*:
-  get Clarion to record which custody option it implements so legis's boundary code stays aligned.
+  get Loomweave to record which custody option it implements so legis's boundary code stays aligned.
 - [ ] **D2 — Lineage push/event surface (informational, roadmap A.5).** Legis is intentionally
   **pull-only** on `lineage(sei)` for v1 (a push/registry/event-bus is exactly the apparatus the
   SEI standard's minimal posture avoids). Flagged as a possible **SEI vN** consideration, *not* a
