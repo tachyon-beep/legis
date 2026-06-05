@@ -165,7 +165,15 @@ class AuditStore:
         except (json.JSONDecodeError, TypeError, ValueError):
             return False
         for rec in records:
-            if content_hash(rec.payload) != rec.content_hash:
+            # json.loads accepts Infinity/NaN, so a directly-tampered payload
+            # survives read_all's decode but makes canonical_json(allow_nan=
+            # False) raise out of content_hash. Treat that as tamper, not a
+            # crash (Q-M3 / audit M6).
+            try:
+                computed = content_hash(rec.payload)
+            except (ValueError, TypeError):
+                return False
+            if computed != rec.content_hash:
                 return False
             if rec.prev_hash != prev_hash:
                 return False

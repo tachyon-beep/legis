@@ -126,3 +126,24 @@ def test_audit_store_concurrent_writes(tmp_path):
     recs = s.read_all()
     assert len(recs) == 100
     assert s.verify_integrity() is True
+
+
+def test_verify_integrity_handles_non_finite_float_as_integrity_failure(tmp_path):
+    # json.loads accepts Infinity/NaN, so the payload survives read_all's
+    # decode guard, but content_hash -> canonical_json(allow_nan=False) raises
+    # ValueError. verify_integrity must report tamper as False, not crash
+    # (Q-M3 / audit M6).
+    s = make_store(tmp_path)
+    s.append({"k": "a"})
+    conn = raw_conn(tmp_path)
+    try:
+        conn.execute("DROP TRIGGER audit_log_no_update")
+        conn.execute(
+            "UPDATE audit_log SET payload = :p WHERE seq = 1",
+            {"p": '{"k": Infinity}'},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert s.verify_integrity() is False
