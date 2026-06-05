@@ -26,9 +26,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tachyon-beep/legis"
-Repository = "https://github.com/tachyon-beep/legis"
-Issues = "https://github.com/tachyon-beep/legis/issues"
+Homepage = "https://github.com/foundryside-dev/legis"
+Repository = "https://github.com/foundryside-dev/legis"
+Issues = "https://github.com/foundryside-dev/legis/issues"
 
 [project.scripts]
 legis = "legis.cli:main"
