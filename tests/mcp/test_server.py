@@ -350,6 +350,122 @@ def test_override_submit_idempotency_key_prevents_duplicate_records(tmp_path):
     assert store.read_all()[0].payload["extensions"]["mcp_idempotency_key"] == "retry-1"
 
 
+def test_override_submit_idempotency_key_is_scoped_to_exact_request(tmp_path):
+    runtime, store = _runtime(tmp_path, agent_id="agent-launch")
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="chill",
+        rules=(
+            PolicyCellRule("protected.policy", "protected"),
+            PolicyCellRule("release.signoff", "structured"),
+        ),
+    )
+    runtime.protected_gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        _ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@protected", "ok")),
+        b"secret",
+    )
+    runtime.signoff_gate = SignoffGate(
+        store, FixedClock("2026-06-02T12:00:00+00:00")
+    )
+
+    first = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "ordinary.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "generated file; lint is not applicable",
+                        "idempotency_key": "retry-1",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert first["outcome"] == "ACCEPTED_SELF"
+    recorded_ext = store.read_all()[0].payload["extensions"]
+    assert recorded_ext["mcp_idempotency_key"] == "retry-1"
+    assert "mcp_idempotency_request_hash" in recorded_ext
+
+    replay = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "ordinary.policy",
+                        "entity": "src/x.py:f",
+                        "rationale": "generated file; lint is not applicable",
+                        "idempotency_key": "retry-1",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert replay["seq"] == first["seq"]
+    assert len(store.read_all()) == 1
+
+    protected_reuse = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "protected.policy",
+                        "entity": "src/secret.py:danger",
+                        "rationale": "needs exception",
+                        "idempotency_key": "retry-1",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert protected_reuse["isError"] is True
+    assert protected_reuse["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert "different override request" in protected_reuse["structuredContent"]["message"]
+
+    structured_reuse = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "override_submit",
+                    "arguments": {
+                        "policy": "release.signoff",
+                        "entity": "svc/api",
+                        "rationale": "production deploy",
+                        "idempotency_key": "retry-1",
+                    },
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert structured_reuse["isError"] is True
+    assert structured_reuse["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert len(store.read_all()) == 1
+
+
 def test_tools_call_rejects_unexpected_arguments(tmp_path):
     runtime, store = _runtime(tmp_path, agent_id="agent-launch")
     runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
