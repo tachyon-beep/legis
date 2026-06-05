@@ -150,3 +150,101 @@ def test_main_mcp_sets_store_and_policy_cell_env(monkeypatch):
             "policy_cells": "policy/cells.toml",
         }
     ]
+
+
+def test_check_override_rate_fails_closed_for_protected_records_without_hmac_key(tmp_path, monkeypatch, capsys):
+    from legis.clock import FixedClock
+    from legis.enforcement.protected import ProtectedGate
+    from legis.enforcement.verdict import JudgeOpinion, Verdict
+    from legis.identity.entity_key import EntityKey
+    from legis.store.audit_store import AuditStore
+
+    class ScriptedJudge:
+        def evaluate(self, record):
+            return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
+
+    db = f"sqlite:///{tmp_path / 'gov.db'}"
+    gate = ProtectedGate(
+        AuditStore(db),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=ScriptedJudge(),
+        key=b"protected-key",
+    )
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="approved",
+        agent_id="agent-1",
+        file_fingerprint="sha256:abc",
+        ast_path="Module/Call[eval]",
+    )
+
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    monkeypatch.delenv("LEGIS_PROTECTED_POLICIES", raising=False)
+
+    rc = main(["check-override-rate", "--db", db])
+
+    assert rc == 1
+    assert "LEGIS_HMAC_KEY" in capsys.readouterr().err
+
+
+def test_check_override_rate_rejects_rechained_protected_tampering(tmp_path, monkeypatch, capsys):
+    import json
+    import sqlite3
+
+    from legis.canonical import canonical_json, content_hash
+    from legis.clock import FixedClock
+    from legis.enforcement.protected import ProtectedGate
+    from legis.enforcement.verdict import JudgeOpinion, Verdict
+    from legis.identity.entity_key import EntityKey
+    from legis.store.audit_store import GENESIS, AuditStore, _chain
+
+    class ScriptedJudge:
+        def evaluate(self, record):
+            return JudgeOpinion(Verdict.BLOCKED, "judge@1", "no")
+
+    db_path = tmp_path / "gov.db"
+    db = f"sqlite:///{db_path}"
+    gate = ProtectedGate(
+        AuditStore(db),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=ScriptedJudge(),
+        key=b"protected-key",
+    )
+    for i in range(25):
+        gate.operator_override(
+            policy="no-eval",
+            entity_key=EntityKey.from_locator(f"src/x{i}.py:f"),
+            rationale="security lead approved release exception",
+            operator_id="op-sec-lead",
+            file_fingerprint=f"sha256:{i}",
+            ast_path="Module/Call[eval]",
+        )
+
+    con = sqlite3.connect(db_path)
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_update")
+    con.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
+    rows = con.execute("SELECT seq, payload FROM audit_log ORDER BY seq ASC").fetchall()
+    for seq, payload in rows:
+        parsed = json.loads(payload)
+        parsed["extensions"]["judge_verdict"] = Verdict.ACCEPTED.value
+        con.execute("UPDATE audit_log SET payload=? WHERE seq=?", (canonical_json(parsed), seq))
+    previous = GENESIS
+    for seq, payload in con.execute("SELECT seq, payload FROM audit_log ORDER BY seq ASC").fetchall():
+        current_content_hash = content_hash(json.loads(payload))
+        current_chain_hash = _chain(previous, current_content_hash)
+        con.execute(
+            "UPDATE audit_log SET content_hash=?, prev_hash=?, chain_hash=? WHERE seq=?",
+            (current_content_hash, previous, current_chain_hash, seq),
+        )
+        previous = current_chain_hash
+    con.commit()
+    con.close()
+
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "protected-key")
+    monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "no-eval")
+
+    rc = main(["check-override-rate", "--db", db])
+
+    assert rc == 1
+    assert "verification failed" in capsys.readouterr().err
