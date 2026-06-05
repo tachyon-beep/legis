@@ -146,6 +146,10 @@ class SignoffGate:
         """The sign-off trail this gate writes to — for verified consumers."""
         return self._store.read_all()
 
+    def transaction(self):
+        """Group this gate's appends into one all-or-nothing transaction (Q-M5)."""
+        return self._store.transaction()
+
     def verify_integrity(self) -> bool:
         """Verify the underlying append-only hash chain before HMAC checks."""
         return self._store.verify_integrity()

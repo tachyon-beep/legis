@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
 
@@ -28,3 +29,7 @@ class AppendOnlyStore(Protocol):
     def read_by_seq(self, seq: int) -> AuditRecordLike | None: ...
 
     def verify_integrity(self) -> bool: ...
+
+    def transaction(self) -> AbstractContextManager[None]:
+        """Group appends into one all-or-nothing transaction."""
+        ...

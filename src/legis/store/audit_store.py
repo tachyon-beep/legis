@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +58,11 @@ class AuditStore:
         # NullPool: hold no connection between operations — an append-only
         # audit store wants no lingering locks and clean resource lifecycle.
         self._engine = create_engine(url, future=True, poolclass=NullPool)
+        # Ambient connection for an in-progress multi-append transaction. Stored
+        # thread-locally so a batch on one thread never leaks its open
+        # connection into another thread's append (Q-M5). When unset, append()
+        # opens its own per-call transaction as before.
+        self._txn = threading.local()
 
         from sqlalchemy import event
         @event.listens_for(self._engine, "connect")
@@ -103,29 +111,61 @@ class AuditStore:
                     )
                 )
 
-    def append(self, payload: dict[str, Any]) -> int:
-        c_hash = content_hash(payload)
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group appends into one all-or-nothing transaction (Q-M5).
+
+        Every ``append`` issued inside this context shares a single connection
+        and commits together on clean exit; any exception rolls back the whole
+        batch, so a mid-loop failure cannot leave earlier appends persisted.
+        Re-entrancy and cross-thread bleed are avoided by stashing the ambient
+        connection thread-locally; nested ``transaction()`` calls reuse the
+        outer one.
+        """
+        if getattr(self._txn, "conn", None) is not None:
+            # Already inside a batch on this thread — reuse it (nested no-op).
+            yield
+            return
         with self._engine.begin() as conn:
             if conn.dialect.name == "sqlite":
                 conn.execute(text("BEGIN IMMEDIATE"))
-            prev = conn.execute(
-                select(self._log.c.chain_hash)
-                .order_by(self._log.c.seq.desc())
-                .limit(1)
-            ).scalar()
-            prev_hash = prev if prev is not None else GENESIS
-            result = conn.execute(
-                insert(self._log).values(
-                    payload=canonical_json(payload),
-                    content_hash=c_hash,
-                    prev_hash=prev_hash,
-                    chain_hash=_chain(prev_hash, c_hash),
-                )
+            self._txn.conn = conn
+            try:
+                yield
+            finally:
+                self._txn.conn = None
+
+    def _insert(self, conn: Any, payload: dict[str, Any]) -> int:
+        c_hash = content_hash(payload)
+        prev = conn.execute(
+            select(self._log.c.chain_hash)
+            .order_by(self._log.c.seq.desc())
+            .limit(1)
+        ).scalar()
+        prev_hash = prev if prev is not None else GENESIS
+        result = conn.execute(
+            insert(self._log).values(
+                payload=canonical_json(payload),
+                content_hash=c_hash,
+                prev_hash=prev_hash,
+                chain_hash=_chain(prev_hash, c_hash),
             )
-            primary_key = result.inserted_primary_key
-            if primary_key is None:
-                raise RuntimeError("audit_log insert did not return a primary key")
-            return int(primary_key[0])
+        )
+        primary_key = result.inserted_primary_key
+        if primary_key is None:
+            raise RuntimeError("audit_log insert did not return a primary key")
+        return int(primary_key[0])
+
+    def append(self, payload: dict[str, Any]) -> int:
+        ambient = getattr(self._txn, "conn", None)
+        if ambient is not None:
+            # Inside a transaction(): read-your-writes on the shared connection
+            # keeps the hash chain valid mid-batch; the context owns commit.
+            return self._insert(ambient, payload)
+        with self._engine.begin() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.execute(text("BEGIN IMMEDIATE"))
+            return self._insert(conn, payload)
 
     def read_all(self) -> list[AuditRecord]:
         with self._engine.begin() as conn:
