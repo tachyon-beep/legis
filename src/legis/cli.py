@@ -169,8 +169,9 @@ def _apply_judge_env(args) -> None:
 
 def _check_override_rate(db_url: str) -> int:
     import os
-    from legis.enforcement.lifecycle import GateStatus, evaluate_override_rate
-    from legis.governance import params
+    from legis.enforcement.lifecycle import GateStatus
+    from legis.service.errors import AuditIntegrityError, ProtectedKeyRequiredError
+    from legis.service.governance import evaluate_override_rate_gate
     from legis.store.audit_store import AuditStore
 
     missing_db = _missing_sqlite_db(db_url)
@@ -197,48 +198,24 @@ def _check_override_rate(db_url: str) -> int:
         return 1
 
     records = store.read_all()
-
     protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
     protected_policies = frozenset(
         p.strip() for p in protected_policies_str.split(",") if p.strip()
     )
 
-    def _requires_protected_verification(payload: dict) -> bool:
-        ext = payload.get("extensions", {}) or {}
-        return (
-            payload.get("policy") in protected_policies
-            or ext.get("protected_cell") is True
-            or "judge_metadata_signature" in ext
-            or "signoff_signature" in ext
-            or "file_fingerprint" in ext
-            or "ast_path" in ext
+    # The detect -> require-key -> verify -> score decision lives in the service
+    # layer (Q-H2), so the cli, the api, and any future consumer all measure the
+    # gate the same way. The cli keeps only its I/O shell and exit-code mapping.
+    try:
+        res = evaluate_override_rate_gate(
+            records,
+            hmac_key=os.environ.get("LEGIS_HMAC_KEY"),
+            protected_policies=protected_policies,
         )
-
-    protected_records_present = any(
-        _requires_protected_verification(rec.payload) for rec in records
-    )
-    hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
-    if protected_records_present and not hmac_key_str:
-        print(
-            "Error: Protected audit records require LEGIS_HMAC_KEY for verification",
-            file=sys.stderr,
-        )
+    except (ProtectedKeyRequiredError, AuditIntegrityError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
-    if hmac_key_str:
-        from legis.enforcement.protected import TrailVerifier, TamperError
-        verifier = TrailVerifier(hmac_key_str.encode("utf-8"), protected_policies)
-        try:
-            verifier.verify(records)
-        except TamperError as exc:
-            print(f"Error: Protected audit trail verification failed: {exc}", file=sys.stderr)
-            return 1
 
-    res = evaluate_override_rate(
-        records,
-        threshold=params.OVERRIDE_RATE_THRESHOLD,
-        window=params.OVERRIDE_RATE_WINDOW,
-        min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
-    )
     print(f"override-rate gate: {res.status.value} "
           f"(rate={res.rate:.3f}, sample={res.sample_size})")
     return 1 if res.status is GateStatus.FAIL else 0

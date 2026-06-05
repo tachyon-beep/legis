@@ -26,10 +26,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from legis import __version__
+# Re-exported so existing `from legis.api.app import DEFAULT_*_DB` call sites
+# keep working, while the canonical definition lives in the transport-agnostic
+# config module instead of the HTTP layer (Q-H2).
+from legis.config import DEFAULT_CHECK_DB, DEFAULT_GOVERNANCE_DB
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.enforcement.engine import EnforcementEngine
-from legis.enforcement.protected import ProtectedGate, TamperError, TrailVerifier
+from legis.enforcement.protected import ProtectedGate, TrailVerifier
 from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
 from legis.git.rename_feed import build_rename_feed
@@ -43,7 +47,9 @@ from legis.identity.resolver import IdentityResolver
 from legis.service.errors import AuditIntegrityError, InvalidArgumentError, NotEnabledError
 from legis.service.governance import compute_override_rate as _compute_override_rate
 from legis.service.governance import evaluate_policy as _evaluate_policy
+from legis.service.governance import request_signoff as _request_signoff
 from legis.service.governance import resolve_for_record as _resolve_for_record
+from legis.service.governance import sign_off as _sign_off
 from legis.service.governance import submit_operator_override as _submit_operator_override
 from legis.service.governance import submit_override as _submit_override
 from legis.service.governance import submit_protected_override as _submit_protected_override
@@ -141,10 +147,6 @@ def verify_writer(credentials: HTTPAuthorizationCredentials | None = Security(se
 
 def verify_operator(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> str:
     return _verify_secret(credentials, "operator", "operator")
-
-
-DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
-DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
 
 
 class OverrideIn(BaseModel):
@@ -582,16 +584,17 @@ def create_app(
 
     @app.post("/signoff/request", status_code=202)
     def post_signoff_request(body: SignoffRequestIn, actor: str = Depends(verify_writer)) -> dict:
-        if signoff_gate is None:
-            raise HTTPException(status_code=404, detail="structured cell not enabled")
-        entity_key, ext = resolve_for_record(body.entity)
-        result = signoff_gate.request(
-            policy=body.policy,
-            entity_key=entity_key,
-            rationale=body.rationale,
-            agent_id=_recorded_actor(actor, body.agent_id),
-            extensions=ext,
-        )
+        try:
+            result = _request_signoff(
+                signoff_gate,
+                identity=identity,
+                policy=body.policy,
+                entity=body.entity,
+                rationale=body.rationale,
+                agent_id=_recorded_actor(actor, body.agent_id),
+            )
+        except NotEnabledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"seq": result.seq, "cleared": result.cleared}
 
     @app.post("/signoff/{request_seq}/bind-issue", status_code=201)
@@ -602,20 +605,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="filigree binding not enabled")
         if signoff_gate is None:
             raise HTTPException(status_code=404, detail="structured cell not enabled")
-        if not signoff_gate.verify_integrity():
-            raise HTTPException(
-                status_code=500,
-                detail="sign-off trail integrity failure: database hash chain verification failed",
-            )
-        records = signoff_gate.records()
-        if trail_verifier is not None:
-            try:
-                trail_verifier.verify(records)
-            except TamperError as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"sign-off trail integrity failure: {exc}",
-                ) from exc
+        # Fail-closed trail verification via the single service decision rather
+        # than an inline re-implementation (Q-H2): integrity + HMAC tamper check.
+        try:
+            records = _verified_records(signoff_gate, trail_verifier, signoff_gate.records)
+        except AuditIntegrityError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         req = signoff_gate.request_record(request_seq)
         if req is None:
             raise HTTPException(
@@ -675,13 +670,15 @@ def create_app(
 
     @app.post("/signoff/{request_seq}/sign")
     def post_signoff_sign(request_seq: int, body: SignoffSignIn, operator: str = Depends(verify_operator)) -> dict:
-        if signoff_gate is None:
-            raise HTTPException(status_code=404, detail="structured cell not enabled")
-        result = signoff_gate.sign_off(
-            request_seq=request_seq,
-            operator_id=_recorded_actor(operator, body.operator_id),
-            rationale=body.rationale,
-        )
+        try:
+            result = _sign_off(
+                signoff_gate,
+                request_seq=request_seq,
+                operator_id=_recorded_actor(operator, body.operator_id),
+                rationale=body.rationale,
+            )
+        except NotEnabledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"seq": result.seq, "cleared": result.cleared}
 
     @app.get("/governance/override-rate")

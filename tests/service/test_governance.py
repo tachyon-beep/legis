@@ -219,3 +219,55 @@ def test_submit_protected_override_rejects_unverified_source_binding_before_sign
         )
 
     assert store.read_all() == []
+
+
+# --- Q-H2: the override-rate gate decision lives in the service layer ---
+
+def _protected_gate_with_record(tmp_path, db_name="gov.db"):
+    from legis.clock import FixedClock
+
+    class _AcceptJudge:
+        def evaluate(self, record):
+            return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
+
+    db = f"sqlite:///{tmp_path / db_name}"
+    gate = ProtectedGate(AuditStore(db), FixedClock("2026-06-02T12:00:00+00:00"),
+                         judge=_AcceptJudge(), key=b"protected-key")
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="approved",
+        agent_id="agent-1",
+        file_fingerprint="sha256:abc",
+        ast_path="Module/Call[eval]",
+    )
+    return db
+
+
+def test_evaluate_override_rate_gate_fails_closed_without_key(tmp_path):
+    from legis.service.errors import ProtectedKeyRequiredError
+    from legis.service.governance import evaluate_override_rate_gate
+
+    db = _protected_gate_with_record(tmp_path)
+    records = AuditStore(db).read_all()
+    with pytest.raises(ProtectedKeyRequiredError):
+        evaluate_override_rate_gate(records, hmac_key=None, protected_policies=frozenset())
+
+
+def test_evaluate_override_rate_gate_scores_with_key(tmp_path):
+    from legis.service.governance import evaluate_override_rate_gate
+
+    db = _protected_gate_with_record(tmp_path)
+    records = AuditStore(db).read_all()
+    res = evaluate_override_rate_gate(
+        records, hmac_key="protected-key", protected_policies=frozenset({"no-eval"})
+    )
+    assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
+
+
+def test_sign_off_raises_not_enabled_when_gate_absent():
+    from legis.service.errors import NotEnabledError
+    from legis.service.governance import sign_off
+
+    with pytest.raises(NotEnabledError):
+        sign_off(None, request_seq=1, operator_id="op-1")

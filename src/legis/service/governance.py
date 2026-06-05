@@ -13,13 +13,22 @@ from typing import Any
 
 from legis.enforcement.engine import EnforcementEngine, EnforcementResult
 from legis.enforcement.lifecycle import evaluate_override_rate
-from legis.enforcement.protected import ProtectedGate, ProtectedResult, TamperError
+from legis.enforcement.protected import (
+    ProtectedGate,
+    ProtectedResult,
+    TamperError,
+    TrailVerifier,
+)
 from legis.enforcement.signoff import SignoffGate, SignoffResult
 from legis.governance import params
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyEvaluation, PolicyGrammar, PolicyResult
-from legis.service.errors import AuditIntegrityError, NotEnabledError
+from legis.service.errors import (
+    AuditIntegrityError,
+    NotEnabledError,
+    ProtectedKeyRequiredError,
+)
 from legis.service.source_binding import (
     require_verified_source_binding,
     verify_current_source_binding,
@@ -104,6 +113,49 @@ def compute_override_rate(records: list):
         window=params.OVERRIDE_RATE_WINDOW,
         min_sample=params.OVERRIDE_RATE_MIN_SAMPLE,
     )
+
+
+def _requires_protected_verification(payload: dict[str, Any], protected_policies) -> bool:
+    ext = payload.get("extensions", {}) or {}
+    return (
+        payload.get("policy") in protected_policies
+        or ext.get("protected_cell") is True
+        or "judge_metadata_signature" in ext
+        or "signoff_signature" in ext
+        or "file_fingerprint" in ext
+        or "ast_path" in ext
+    )
+
+
+def evaluate_override_rate_gate(
+    records: list,
+    *,
+    hmac_key: str | None,
+    protected_policies,
+):
+    """Content-driven override-rate gate: the single decision path for the cli.
+
+    Detect protected records, require an HMAC key for them (fail closed — a
+    protected trail cannot be scored unverified, 07cf54e), verify the protected
+    trail, then score the override rate. This is the canonical implementation;
+    the cli gate calls it rather than re-deriving the same decision (Q-H2).
+    """
+    protected_present = any(
+        _requires_protected_verification(rec.payload, protected_policies) for rec in records
+    )
+    if protected_present and not hmac_key:
+        raise ProtectedKeyRequiredError(
+            "Protected audit records require LEGIS_HMAC_KEY for verification"
+        )
+    if hmac_key:
+        verifier = TrailVerifier(hmac_key.encode("utf-8"), protected_policies)
+        try:
+            verifier.verify(records)
+        except TamperError as exc:
+            raise AuditIntegrityError(
+                f"Protected audit trail verification failed: {exc}"
+            ) from exc
+    return compute_override_rate(records)
 
 
 def submit_override(
@@ -224,6 +276,27 @@ def request_signoff(
         rationale=rationale,
         agent_id=agent_id,
         extensions={**ext, **(extra_extensions or {})},
+    )
+
+
+def sign_off(
+    signoff_gate: SignoffGate | None,
+    *,
+    request_seq: int,
+    operator_id: str,
+    rationale: str = "",
+) -> SignoffResult:
+    """Operator sign-off on a pending structured request.
+
+    The single service path for clearing a sign-off, so the HTTP route no longer
+    reaches past the service layer to the gate (Q-H2).
+    """
+    if signoff_gate is None:
+        raise NotEnabledError("structured cell not enabled")
+    return signoff_gate.sign_off(
+        request_seq=request_seq,
+        operator_id=operator_id,
+        rationale=rationale,
     )
 
 

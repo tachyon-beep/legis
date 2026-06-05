@@ -26,3 +26,12 @@ class NotFoundError(ServiceError):
 
 class InvalidArgumentError(ServiceError):
     """Caller input is structurally valid for the transport but invalid for Legis."""
+
+
+class ProtectedKeyRequiredError(ServiceError):
+    """A protected trail was read without the HMAC key needed to verify it.
+
+    Fail-closed: a trail carrying protected records cannot be scored without the
+    key that proves it untampered (Q-H2 / 07cf54e). The cli gate maps this to a
+    non-zero exit.
+    """

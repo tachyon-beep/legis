@@ -119,7 +119,7 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
-    from legis.api.app import DEFAULT_GOVERNANCE_DB
+    from legis.config import DEFAULT_GOVERNANCE_DB
 
     clock = SystemClock()
     engine = None
@@ -502,7 +502,7 @@ def _git(runtime: McpRuntime) -> GitSurface:
 
 def _engine(runtime: McpRuntime) -> EnforcementEngine:
     if runtime.engine is None:
-        from legis.api.app import DEFAULT_GOVERNANCE_DB
+        from legis.config import DEFAULT_GOVERNANCE_DB
 
         store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
         runtime.engine = EnforcementEngine(store, SystemClock())
@@ -511,7 +511,7 @@ def _engine(runtime: McpRuntime) -> EnforcementEngine:
 
 def _checks(runtime: McpRuntime) -> CheckSurface:
     if runtime.check_surface is None:
-        from legis.api.app import DEFAULT_CHECK_DB
+        from legis.config import DEFAULT_CHECK_DB
 
         runtime.check_surface = CheckSurface(
             os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
