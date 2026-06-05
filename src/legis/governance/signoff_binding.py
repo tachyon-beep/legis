@@ -7,6 +7,14 @@ status — lifecycle transitions remain Filigree's authority (locked decision 5)
 A locator-keyed sign-off is rejected: an unstable binding would orphan on rename,
 defeating the point.
 
+Binding availability is therefore coupled to identity stability (an SEI, which
+Loomweave produces). The contract for a degraded Loomweave is ADR-0003: the
+``bind-issue`` handler first tries to resolve a locator through a ``SEI_BACKFILL``
+event (recovery), and otherwise **fails closed** (HTTP 409) rather than recording
+a rename-fragile placeholder. The sign-off itself is always recorded; only the
+Filigree pointer waits for a stable identity. See
+``docs/design/adr/0003-filigree-binding-availability.md``.
+
 When a ``ledger`` is supplied, the order is validate → attach → record: after a
 successful attach, a tamper-bound ``BindingRecord`` is appended to the ledger and
 its sequence number is returned to the caller as ``binding_seq``. The Filigree row
