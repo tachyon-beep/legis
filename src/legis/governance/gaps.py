@@ -48,7 +48,9 @@ class LineageIntegrity:
 def _stable_seis(records: list[AuditRecord]) -> list[str]:
     seen: dict[str, None] = {}  # ordered, de-duplicated
     for rec in records:
-        ek = rec.payload.get("entity_key", {})
+        ek = rec.payload.get("entity_key")
+        if not isinstance(ek, dict):
+            continue
         if ek.get("identity_stable") and ek.get("value"):
             seen.setdefault(ek["value"], None)
     return list(seen)
@@ -72,7 +74,9 @@ def find_lineage_integrity(
     unavailable: dict[str, LineageUnavailable] = {}
     lineages: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
-        ek = rec.payload.get("entity_key", {})
+        ek = rec.payload.get("entity_key")
+        if not isinstance(ek, dict):
+            continue
         sei = ek.get("value")
         if not (ek.get("identity_stable") and sei):
             continue

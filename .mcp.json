@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "loomweave": {
+      "args": [
+        "serve"
+      ],
+      "command": "/home/john/.local/share/uv/tools/loomweave/bin/loomweave",
+      "env": {},
+      "type": "stdio"
+    },
+    "wardline": {
+      "args": [
+        "mcp",
+        "--root",
+        ".",
+        "--loomweave-url",
+        "http://127.0.0.1:9111",
+        "--filigree-url",
+        "http://127.0.0.1:8426/api/weft/scan-results"
+      ],
+      "command": "/home/john/.local/bin/wardline",
+      "type": "stdio"
+    },
+    "filigree": {
+      "type": "stdio",
+      "command": "/home/john/.local/bin/filigree-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

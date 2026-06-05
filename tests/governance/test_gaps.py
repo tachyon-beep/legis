@@ -93,3 +93,27 @@ def test_lineage_integrity_reports_missing_snapshot_as_unverified(tmp_path):
     assert integrity.unavailable == [
         LineageUnavailable(sei="loomweave:eid:s", reason="missing_snapshot")
     ]
+
+
+def test_explicit_null_entity_key_does_not_crash_stable_seis(tmp_path):
+    # A directly-written record with `entity_key: null` must not raise
+    # AttributeError out of the read path (Q-L1).
+    store = _store(
+        tmp_path,
+        {"policy": "p", "entity_key": None, "rationale": "r",
+         "agent_id": "a", "recorded_at": "t", "extensions": {}},
+        _rec("loomweave:eid:alive"),
+    )
+    gaps = find_orphan_gaps(store.read_all(), FakeClient({"loomweave:eid:alive": {"alive": True}}))
+    assert gaps == []  # null row ignored, alive row probed → no crash
+
+
+def test_explicit_null_entity_key_does_not_crash_lineage_integrity(tmp_path):
+    store = _store(
+        tmp_path,
+        {"policy": "p", "entity_key": None, "rationale": "r",
+         "agent_id": "a", "recorded_at": "t", "extensions": {}},
+    )
+    result = find_lineage_integrity(store.read_all(), FakeClient({}))
+    assert result.divergences == []
+    assert result.unavailable == []

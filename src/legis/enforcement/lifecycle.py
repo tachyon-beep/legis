@@ -8,6 +8,7 @@ suppression at all).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -16,6 +17,8 @@ from legis.enforcement.judge import Judge
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
+
+_log = logging.getLogger(__name__)
 
 _DECISION_EXTENSION_KEYS = frozenset(
     {
@@ -52,14 +55,20 @@ def decay_sweep(records, judge: Judge) -> list[DecayFlag]:
         if ext.get("judge_verdict") != Verdict.ACCEPTED.value:
             continue
         p = rec.payload
-        proposed = OverrideRecord(
-            policy=p["policy"],
-            entity_key=EntityKey.from_dict(p["entity_key"]),
-            rationale=p["rationale"],
-            agent_id=p["agent_id"],
-            recorded_at=p["recorded_at"],
-            extensions=_rejudge_extensions(ext),
-        )
+        try:
+            proposed = OverrideRecord(
+                policy=p["policy"],
+                entity_key=EntityKey.from_dict(p["entity_key"]),
+                rationale=p["rationale"],
+                agent_id=p["agent_id"],
+                recorded_at=p["recorded_at"],
+                extensions=_rejudge_extensions(ext),
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            # One malformed row must not abort the sweep over the whole trail
+            # (Q-L2). Surface it for observability; keep re-judging the rest.
+            _log.warning("decay_sweep: skipping malformed record seq=%s: %s", rec.seq, exc)
+            continue
         opinion = judge.evaluate(proposed)
         if opinion.verdict is not Verdict.ACCEPTED:
             flags.append(

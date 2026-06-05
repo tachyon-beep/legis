@@ -84,3 +84,17 @@ def test_decay_rejudge_preserves_source_and_identity_evidence(tmp_path):
     assert ext["loomweave"]["content_hash"] == "content-hash"
     assert "judge_rationale" not in ext
     assert "judge_metadata_signature" not in ext
+
+
+def test_decay_sweep_skips_malformed_row_and_continues(tmp_path):
+    # One ACCEPTED record with a null entity_key must not abort the whole
+    # sweep; later valid rows must still be re-judged (Q-L2).
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    store.append(_accepted("p", "e1", "still valid reason"))
+    store.append({"policy": "p", "entity_key": None, "rationale": "r",
+                  "agent_id": "a", "recorded_at": "t",
+                  "extensions": {"judge_verdict": "ACCEPTED", "judge_model": "judge@1"}})
+    store.append(_accepted("p", "e3", "stale reason no longer holds"))
+    flags = decay_sweep(store.read_all(), PolicyJudge())
+    # The malformed row is skipped; the trailing stale row is still flagged.
+    assert [f.entity for f in flags] == ["e3"]
