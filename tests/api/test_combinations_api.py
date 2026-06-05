@@ -431,17 +431,23 @@ def test_scan_results_rejects_suppressed_defect_without_proof(tmp_path):
     assert c.get("/overrides").json() == []
 
 
-def test_scan_results_rejects_invalid_trust_tier_without_writing(tmp_path):
+def test_scan_results_accepts_diagnostic_properties(tmp_path):
+    # Realistic Wardline findings carry diagnostics (sink, callee, markers) in
+    # properties alongside trust tiers. legis accepts them at the wire — it
+    # records properties verbatim and never constrains the values to the tier
+    # vocabulary (which would 422 every real scan).
     c = _client(tmp_path)
     scan = {"findings": [
         {"rule_id": "R-C", "message": "m", "severity": "CRITICAL", "kind": "defect",
          "fingerprint": "c", "qualname": "m.f",
-         "properties": {"actual_return": "ROOT"}, "suppressed": "active"}
+         "properties": {"sink": "os.system", "actual_return": "UNKNOWN_RAW"},
+         "suppressed": "active"}
     ]}
     resp = c.post("/wardline/scan-results",
-                  json={"cell": "surface_only", "agent_id": "a", "scan": scan})
-    assert resp.status_code == 422
-    assert c.get("/overrides").json() == []
+                  json={"cell": "surface_override", "agent_id": "a", "scan": scan})
+    assert resp.status_code == 200
+    assert resp.json()["routed"][0]["mode"] == "surface_override"
+    assert len(c.get("/overrides").json()) == 1     # accepted + written, not 422'd
 
 
 def test_scan_results_rejects_oversized_finding_batch_without_writing(tmp_path):

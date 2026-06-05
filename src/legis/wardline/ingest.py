@@ -139,7 +139,10 @@ class WardlineFinding:
         properties = d.get("properties", {})
         if not isinstance(properties, Mapping):
             raise WardlinePayloadError("finding properties must be an object")
-        _validate_trust_properties(properties)
+        # Properties are write-only evidence (carried verbatim into the record,
+        # never acted on) — they may hold trust tiers AND diagnostics (sink,
+        # callee, markers). legis does not constrain the values to the tier
+        # vocabulary; that would reject realistic scans for no governance gain.
         qualname = d.get("qualname")
         if qualname is not None and not isinstance(qualname, str):
             raise WardlinePayloadError("finding qualname must be a string or null")
@@ -161,25 +164,33 @@ class WardlineFinding:
         )
 
 
-def _validate_trust_properties(properties: Mapping[str, Any]) -> None:
-    for key, value in properties.items():
-        if key in SUPPRESSION_PROOF_KEYS:
-            if not isinstance(value, str) or not value.strip():
-                raise WardlinePayloadError(
-                    f"finding {key} must be a non-empty suppression proof string"
-                )
-            continue
-        if not isinstance(value, str) or value not in TRUST_TIERS:
-            raise WardlinePayloadError(
-                f"finding property {key} has invalid trust tier: {value!r}"
-            )
+# Suppression states. ``active`` defects are the gate population. Agent-initiated
+# suppressions (``waived`` / ``suppressed``) must carry proof — an agent must not
+# be able to silently dismiss a defect. Non-agent suppressions
+# (``baselined`` / ``judged``) are simply not active and carry no proof. Any
+# other state is malformed and rejected.
+AGENT_SUPPRESSED: frozenset[str] = frozenset({"waived", "suppressed"})
+NON_AGENT_SUPPRESSED: frozenset[str] = frozenset({"baselined", "judged"})
 
 
-def _has_suppression_proof(properties: Mapping[str, Any]) -> bool:
-    return any(
-        isinstance(properties.get(key), str) and bool(properties[key].strip())
-        for key in SUPPRESSION_PROOF_KEYS
-    )
+def _has_suppression_proof(finding: Mapping[str, Any]) -> bool:
+    """True if suppression proof is present — top-level OR inside ``properties``.
+
+    Wardline keeps ``suppression_reason`` at the finding's top level; other
+    producers may nest it in ``properties``. legis accepts proof in either
+    location (it carries the value as evidence; it does not interpret it).
+    """
+    nested = finding.get("properties", {})
+    if not isinstance(nested, Mapping):
+        nested = {}
+
+    def _present(source: Mapping[str, Any]) -> bool:
+        return any(
+            isinstance(source.get(key), str) and bool(source[key].strip())
+            for key in SUPPRESSION_PROOF_KEYS
+        )
+
+    return _present(finding) or _present(nested)
 
 
 def active_defects(scan: Mapping[str, Any]) -> list[WardlineFinding]:
@@ -201,11 +212,13 @@ def active_defects(scan: Mapping[str, Any]) -> list[WardlineFinding]:
         if f.suppressed == "active":
             out.append(f)
             continue
-        if f.suppressed in {"waived", "suppressed"}:
-            if not _has_suppression_proof(f.properties):
+        if f.suppressed in AGENT_SUPPRESSED:
+            if not _has_suppression_proof(raw):
                 raise WardlinePayloadError(
                     "suppressed defect must carry suppression proof"
                 )
+            continue
+        if f.suppressed in NON_AGENT_SUPPRESSED:
             continue
         raise WardlinePayloadError(
             f"unsupported suppression state for defect: {f.suppressed}"
