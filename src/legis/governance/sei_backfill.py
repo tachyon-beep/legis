@@ -8,6 +8,7 @@ record an honest unresolved locator key.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -15,7 +16,7 @@ from legis.canonical import content_hash
 from legis.clock import Clock
 from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
-from legis.store.audit_store import AuditRecord, AuditStore
+from legis.store.protocol import AppendOnlyStore, AuditRecordLike
 
 SEI_PREFIX = "loomweave:eid:"
 BACKFILL_EVENTS = {"SEI_BACKFILL", "SEI_BACKFILL_UNRESOLVED"}
@@ -42,7 +43,7 @@ class SeiBackfillReport:
 
 
 def run_pre_sei_backfill(
-    store: AuditStore,
+    store: AppendOnlyStore,
     client: LoomweaveIdentity,
     clock: Clock,
     *,
@@ -60,7 +61,7 @@ def run_pre_sei_backfill(
 
     records = store.read_all()
     backfilled = _backfilled_original_sequences(records)
-    eligible: list[AuditRecord] = []
+    eligible: list[AuditRecordLike] = []
     already_stable = 0
     already_backfilled = 0
 
@@ -149,7 +150,7 @@ def _entity_key(payload: dict[str, Any]) -> EntityKey | None:
     return EntityKey.from_dict(raw)
 
 
-def _backfilled_original_sequences(records: list[AuditRecord]) -> set[int]:
+def _backfilled_original_sequences(records: Sequence[AuditRecordLike]) -> set[int]:
     seqs: set[int] = set()
     for rec in records:
         if rec.payload.get("event") not in BACKFILL_EVENTS:
@@ -182,7 +183,7 @@ def _is_alive_resolution(item: dict[str, Any]) -> bool:
 
 
 def _resolved_event(
-    rec: AuditRecord,
+    rec: AuditRecordLike,
     resolution: dict[str, Any],
     *,
     client: LoomweaveIdentity,
@@ -218,7 +219,7 @@ def _resolved_event(
 
 
 def _unresolved_event(
-    rec: AuditRecord,
+    rec: AuditRecordLike,
     *,
     clock: Clock,
     actor: str,
