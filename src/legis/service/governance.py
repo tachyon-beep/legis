@@ -70,26 +70,29 @@ def resolve_for_record(
 
 
 def verified_records(
-    protected_gate,
+    trail_owner,
     trail_verifier,
     engine_records: Callable[[], list],
 ):
     """The verified governance trail.
 
-    The protected gate (when wired) owns the governance trail; otherwise the
-    simple-tier engine does (read lazily via ``engine_records`` so a protected
-    deployment never initialises the engine store). Never mix the two stores.
-    Verification is fail-closed and applies to EVERY consumer of the protected
+    ``trail_owner`` is whichever gate owns the trail being read: the protected
+    gate for the governance trail, or the sign-off gate for the sign-off trail
+    (the API ``bind-issue`` path passes the latter). When no owner is wired the
+    simple-tier engine owns it instead (read lazily via ``engine_records`` so a
+    protected deployment never initialises the engine store). Never mix the two
+    stores. Verification is fail-closed and applies to EVERY consumer of the
     trail, so a tampered record is an honest integrity error
     (``AuditIntegrityError``), never silently read or scored.
 
-    ``protected_gate`` and ``trail_verifier`` are intentionally left duck-typed
-    (a gate exposing ``records()`` and a verifier exposing ``verify()``) so the
-    service layer is not coupled to the enforcement concrete types.
+    ``trail_owner`` and ``trail_verifier`` are intentionally left duck-typed (an
+    owner exposing ``records()`` / ``verify_integrity()`` and a verifier
+    exposing ``verify()``) so the service layer is not coupled to the
+    enforcement concrete types.
     """
-    if protected_gate is not None:
-        records = protected_gate.records()
-        verify_integrity = getattr(protected_gate, "verify_integrity", None)
+    if trail_owner is not None:
+        records = trail_owner.records()
+        verify_integrity = getattr(trail_owner, "verify_integrity", None)
         if verify_integrity is not None and not verify_integrity():
             raise AuditIntegrityError("audit integrity failure: database hash chain verification failed")
         if trail_verifier is not None:

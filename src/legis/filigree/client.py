@@ -60,6 +60,12 @@ def sign_filigree_request(
     had. The attach ``signature`` is an app-level attestation about WHAT is
     bound; this proves WHO is calling. ``timestamp`` and ``nonce`` are injected
     (not generated here) so the signature is deterministically testable.
+
+    Canonicalization contract: the body hash is taken over ``_json_body_bytes``
+    (sorted keys, compact ``(",", ":")`` separators). The wire transport
+    (``_urllib_fetch``) sends those exact bytes, and a Filigree verifier MUST
+    canonicalize the received body identically before hashing — any spacing or
+    key-ordering drift on either side breaks every signature. See ADR-0003.
     """
     body_hash = hashlib.sha256(_json_body_bytes(body)).hexdigest()
     message = (
@@ -94,7 +100,13 @@ class FiligreeClient(Protocol):
 def _urllib_fetch(
     method: str, url: str, body: dict | None, headers: dict[str, str] | None = None
 ) -> dict:
-    data = json.dumps(body).encode("utf-8") if body is not None else None
+    # Send the SAME canonical bytes that sign_filigree_request hashes
+    # (_json_body_bytes: sorted keys, compact separators). The Weft signature
+    # commits to that body hash, so a verifier checking the hash against the
+    # actual request bytes only matches if the wire body is byte-identical to
+    # the signed body (Q-M4). Default json.dumps spacing/ordering would diverge
+    # and every signed POST would fail verification. Mirrors loomweave_client.
+    data = _json_body_bytes(body) if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
@@ -153,10 +165,16 @@ class HttpFiligreeClient:
         hmac_key: bytes | None = None,
     ) -> None:
         self._base = _validate_base_url(base_url)
-        # Absent key -> unsigned, backward compatible. An injected fetch (tests)
-        # is used verbatim; the real transport signs via _signing_fetch.
-        self._hmac_key = hmac_key if hmac_key is not None else filigree_hmac_key_from_env()
-        self._fetch = fetch or self._signing_fetch
+        # An injected fetch (tests) is used verbatim and never signs, so resolve
+        # the key only when the real signing transport is in play — otherwise an
+        # ambient LEGIS_*_HMAC_KEY would be read but never used. Absent key ->
+        # unsigned, backward compatible.
+        if fetch is not None:
+            self._hmac_key = hmac_key
+            self._fetch = fetch
+        else:
+            self._hmac_key = hmac_key if hmac_key is not None else filigree_hmac_key_from_env()
+            self._fetch = self._signing_fetch
 
     def _signing_fetch(self, method: str, url: str, body: dict | None) -> dict:
         headers: dict[str, str] = {}

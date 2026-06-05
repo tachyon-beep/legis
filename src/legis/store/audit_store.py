@@ -121,6 +121,14 @@ class AuditStore:
         Re-entrancy and cross-thread bleed are avoided by stashing the ambient
         connection thread-locally; nested ``transaction()`` calls reuse the
         outer one.
+
+        Appends only. ``read_all`` / ``read_by_seq`` / ``verify_integrity`` open
+        their own connection via ``self._engine.begin()`` — they will NOT see
+        this batch's uncommitted appends, and on SQLite a read connection can
+        hit ``SQLITE_BUSY`` against the held ``BEGIN IMMEDIATE`` write lock. Do
+        all reads before entering the context (as ``wardline.governor`` does: it
+        resolves every entity before opening the batch). Only ``append``'s own
+        chain-head read is safe here, because it runs on the ambient connection.
         """
         if getattr(self._txn, "conn", None) is not None:
             # Already inside a batch on this thread — reuse it (nested no-op).

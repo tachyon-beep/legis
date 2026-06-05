@@ -156,3 +156,60 @@ def test_real_transport_signs_when_key_present(monkeypatch):
     unsigned = HttpFiligreeClient("https://filigree.example")
     unsigned.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
     assert "X-Weft-Component" not in captured["headers"]
+
+
+def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
+    # Q-M4 regression: the bytes put on the wire MUST equal the bytes the
+    # X-Weft signature commits to. If _urllib_fetch re-serialised the body with
+    # default json.dumps (spaces / source key order), a Filigree verifier
+    # checking the body hash against the actual request bytes would reject every
+    # signed POST. Drive the real transport end to end and verify the captured
+    # request body verifies against the captured signature.
+    import hashlib
+    import hmac
+    import urllib.request
+
+    import legis.filigree.client as client_mod
+
+    captured = {}
+
+    class _FakeResp:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self, _n):
+            return b'{"ok": true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured["data"] = req.data
+        captured["headers"] = dict(req.header_items())
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    key = b"weft-key"
+    c = HttpFiligreeClient("https://filigree.example", hmac_key=key)
+    c.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
+
+    # The wire body is exactly the canonical signed bytes.
+    assert captured["data"] == client_mod._json_body_bytes(
+        {"entity_id": "loomweave:eid:abc", "content_hash": "h", "actor": "legis"}
+    )
+
+    # And that body verifies against the transmitted signature.
+    headers = {k.lower(): v for k, v in captured["headers"].items()}
+    component = headers["x-weft-component"]
+    assert component.startswith("filigree:")
+    signature = component.split(":", 1)[1]
+    body_hash = hashlib.sha256(captured["data"]).hexdigest()
+    message = (
+        f"POST\n/api/issue/ISSUE-1/entity-associations\n"
+        f"{body_hash}\n{headers['x-weft-timestamp']}\n{headers['x-weft-nonce']}"
+    ).encode("utf-8")
+    expected = hmac.new(key, message, hashlib.sha256).hexdigest()
+    assert signature == expected

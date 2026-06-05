@@ -70,6 +70,13 @@ def route_findings(
             names = ", ".join(sorted(sev.value for sev in missing))
             raise ValueError(f"unmapped severity in cell_map: {names}")
 
+    # NOTE: for a cell_map this is every cell the map *could* route to (all
+    # mapped severities), not the cells the present findings actually trigger.
+    # It is intentionally conservative: the cross-store guard below and the
+    # txn_owner selection both reason over the map's full reach, so a batch
+    # whose findings happen to land in one store can still be rejected if the
+    # map mixes stores. Acceptable today (callers pre-split cross-store batches);
+    # whoever narrows this must recompute it from the present findings instead.
     if cell_map is not None:
         cells_needed = set(cell_map.values())
     else:
