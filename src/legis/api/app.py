@@ -335,20 +335,25 @@ def create_app(
         gov_store = AuditStore(gov_db_url)
         clock = SystemClock()
 
+        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+        protected_policies = frozenset(
+            p.strip() for p in protected_policies_str.split(",") if p.strip()
+        )
+
         if trail_verifier is None:
             from legis.enforcement.protected import TrailVerifier
-            protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-            protected_policies = frozenset(
-                p.strip() for p in protected_policies_str.split(",") if p.strip()
-            )
             trail_verifier = TrailVerifier(hmac_key, protected_policies)
 
         if protected_gate is None:
             from legis.enforcement.judge_factory import build_judge_from_env
             from legis.enforcement.protected import ProtectedGate
 
+            # For protected policies the LLM judge is advisory only (Q-H3): no
+            # deterministic validator is wired by default, so a judge ACCEPTED is
+            # downgraded and the agent must obtain operator sign-off.
             protected_gate = ProtectedGate(
-                gov_store, clock, build_judge_from_env("API"), hmac_key
+                gov_store, clock, build_judge_from_env("API"), hmac_key,
+                protected_policies=protected_policies,
             )
 
         if signoff_gate is None:

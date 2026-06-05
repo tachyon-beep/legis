@@ -147,7 +147,13 @@ def build_runtime(agent_id: str) -> McpRuntime:
         )
         trail_verifier = TrailVerifier(key, protected_policies)
 
-        protected_gate = ProtectedGate(store, clock, build_judge_from_env("MCP"), key)
+        # Protected policies: the LLM judge is advisory only (Q-H3). With no
+        # deterministic validator wired, a judge ACCEPTED is downgraded and the
+        # agent must escalate to operator sign-off.
+        protected_gate = ProtectedGate(
+            store, clock, build_judge_from_env("MCP"), key,
+            protected_policies=protected_policies,
+        )
         signoff_gate = SignoffGate(store, clock, signer=True, key=key)
 
         from legis.governance.binding_ledger import BindingLedger
