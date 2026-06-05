@@ -127,19 +127,25 @@ def evaluate_test_evidence(
     if not func_called:
         return EvidenceResult(False, "not_exercised", "test does not appear to exercise the boundary")
 
-    # Policy co-occurrence (full walk, runtime semantics): boundary evidence and a
-    # policy reference must appear inside the same assert. Reaching here implies
-    # func_called is True, hence test_fn is not None.
+    # Policy co-occurrence (runtime semantics): a policy reference must co-occur
+    # with boundary evidence inside the same assert, AND the boundary result
+    # must be the assertion SUBJECT — it must appear in the assert's test
+    # condition, not merely in the assert message. Otherwise a test asserting
+    # something unrelated, with the boundary result and policy name dropped into
+    # the message string, would falsely satisfy the gate (Q-M8). The policy
+    # reference itself may still live in the message (the established honesty
+    # pattern names the policy there). Reaching here implies func_called is
+    # True, hence test_fn is not None.
     assert test_fn is not None
     policy_referenced = False
     for node in ast.walk(test_fn):
         if not isinstance(node, ast.Assert):
             continue
-        has_boundary_evidence = _contains_boundary_call(node, boundary_names) or any(
+        boundary_in_subject = _contains_boundary_call(node.test, boundary_names) or any(
             isinstance(child, ast.Name) and child.id in call_result_names
-            for child in ast.walk(node)
+            for child in ast.walk(node.test)
         )
-        if has_boundary_evidence and _contains_policy_reference(node, suppresses):
+        if boundary_in_subject and _contains_policy_reference(node, suppresses):
             policy_referenced = True
             break
 

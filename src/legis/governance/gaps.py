@@ -11,12 +11,13 @@ grows; only a broken prefix is.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from legis.canonical import content_hash
 from legis.identity.loomweave_client import LoomweaveIdentity
-from legis.store.audit_store import AuditRecord
+from legis.store.protocol import AuditRecordLike
 
 
 @dataclass(frozen=True)
@@ -45,17 +46,19 @@ class LineageIntegrity:
     unavailable: list[LineageUnavailable]
 
 
-def _stable_seis(records: list[AuditRecord]) -> list[str]:
+def _stable_seis(records: Sequence[AuditRecordLike]) -> list[str]:
     seen: dict[str, None] = {}  # ordered, de-duplicated
     for rec in records:
-        ek = rec.payload.get("entity_key", {})
+        ek = rec.payload.get("entity_key")
+        if not isinstance(ek, dict):
+            continue
         if ek.get("identity_stable") and ek.get("value"):
             seen.setdefault(ek["value"], None)
     return list(seen)
 
 
 def find_orphan_gaps(
-    records: list[AuditRecord], client: LoomweaveIdentity
+    records: Sequence[AuditRecordLike], client: LoomweaveIdentity
 ) -> list[GovernanceGap]:
     gaps: list[GovernanceGap] = []
     for sei in _stable_seis(records):
@@ -66,13 +69,15 @@ def find_orphan_gaps(
 
 
 def find_lineage_integrity(
-    records: list[AuditRecord], client: LoomweaveIdentity
+    records: Sequence[AuditRecordLike], client: LoomweaveIdentity
 ) -> LineageIntegrity:
     divergences: list[LineageDivergence] = []
     unavailable: dict[str, LineageUnavailable] = {}
     lineages: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
-        ek = rec.payload.get("entity_key", {})
+        ek = rec.payload.get("entity_key")
+        if not isinstance(ek, dict):
+            continue
         sei = ek.get("value")
         if not (ek.get("identity_stable") and sei):
             continue
@@ -110,6 +115,6 @@ def find_lineage_integrity(
 
 
 def find_lineage_divergence(
-    records: list[AuditRecord], client: LoomweaveIdentity
+    records: Sequence[AuditRecordLike], client: LoomweaveIdentity
 ) -> list[LineageDivergence]:
     return find_lineage_integrity(records, client).divergences

@@ -21,3 +21,7 @@ class PullRequest:
     state: PullRequestState
     url: str | None = None
     recorded_by: str | None = None
+    # Q-M4: recorded PR metadata is a writer-supplied claim, not forge-verified.
+    # "unauthenticated" so a consumer never treats writer-asserted PR state as
+    # authoritative (see CheckRun.provenance).
+    provenance: str = "unauthenticated"

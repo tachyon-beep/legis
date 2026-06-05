@@ -32,3 +32,9 @@ class CheckRun:
     started_at: str | None = None
     finished_at: str | None = None
     recorded_by: str | None = None
+    # Q-M2: a recorded check is a writer-supplied claim, not a forge-verified
+    # fact — no signature or forge provenance backs it. Default to
+    # "unauthenticated" so a consumer is never misled into treating a
+    # writer-asserted "pass" as authoritative. An authenticated path (a signed
+    # forge webhook) would set a stronger value; none exists today.
+    provenance: str = "unauthenticated"

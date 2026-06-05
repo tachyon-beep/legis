@@ -104,6 +104,10 @@ class EnforcementEngine:
         """The raw audit records (with seq/hashes) — for lifecycle gates."""
         return self._store.read_all()
 
+    def transaction(self):
+        """Group this engine's appends into one all-or-nothing transaction (Q-M5)."""
+        return self._store.transaction()
+
     def record_event(self, payload: dict) -> int:
         """Append a raw governance event (e.g. UNKNOWN_POLICY) to the trail.
 

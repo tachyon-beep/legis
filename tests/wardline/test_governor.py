@@ -277,3 +277,58 @@ def test_pre_loop_guard_prevents_partial_application(tmp_path):
                        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
                        engine=eng, signoff=None)
     assert eng.trail() == []  # nothing written
+
+
+def _multi_scan(*fingerprints):
+    return {"findings": [
+        {"rule_id": "PY-WL-101", "message": f"finding {fp}",
+         "severity": "ERROR", "kind": "defect", "fingerprint": fp,
+         "qualname": f"m.{fp}", "properties": {}, "suppressed": "active"}
+        for fp in fingerprints
+    ]}
+
+
+def test_same_cell_batch_is_atomic_finding_two_failure_rolls_back_finding_one(tmp_path):
+    # A mid-batch runtime failure must not leave earlier findings persisted —
+    # the whole same-cell batch is one transaction (Q-M5 / audit M3).
+    import pytest
+
+    class FailOnSecond(EnforcementEngine):
+        def __init__(self, store, clock):
+            super().__init__(store, clock)
+            self._calls = 0
+
+        def submit_override(self, **kwargs):
+            self._calls += 1
+            if self._calls == 2:
+                raise RuntimeError("simulated mid-batch failure")
+            return super().submit_override(**kwargs)
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
+    eng = FailOnSecond(store, FixedClock("2026-06-02T12:00:00+00:00"))
+
+    with pytest.raises(RuntimeError, match="simulated mid-batch failure"):
+        route_findings(
+            active_defects(_multi_scan("fp1", "fp2", "fp3")),
+            policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+            agent_id="agent-1",
+            resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+            engine=eng,
+        )
+
+    # Finding 1's append must have been rolled back: the trail is empty.
+    assert store.read_all() == []
+
+
+def test_same_cell_batch_commits_all_on_success(tmp_path):
+    store = AuditStore(f"sqlite:///{tmp_path / 'g.db'}")
+    eng = EnforcementEngine(store, FixedClock("2026-06-02T12:00:00+00:00"))
+    results = route_findings(
+        active_defects(_multi_scan("fp1", "fp2", "fp3")),
+        policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng,
+    )
+    assert [r["fingerprint"] for r in results] == ["fp1", "fp2", "fp3"]
+    assert len(store.read_all()) == 3

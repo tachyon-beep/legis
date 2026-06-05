@@ -27,6 +27,7 @@ on (resolved to an SEI via the same Sprint-5 resolver when available); its
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from enum import Enum
 from typing import Any, Mapping
 
@@ -69,6 +70,13 @@ def route_findings(
             names = ", ".join(sorted(sev.value for sev in missing))
             raise ValueError(f"unmapped severity in cell_map: {names}")
 
+    # NOTE: for a cell_map this is every cell the map *could* route to (all
+    # mapped severities), not the cells the present findings actually trigger.
+    # It is intentionally conservative: the cross-store guard below and the
+    # txn_owner selection both reason over the map's full reach, so a batch
+    # whose findings happen to land in one store can still be rejected if the
+    # map mixes stores. Acceptable today (callers pre-split cross-store batches);
+    # whoever narrows this must recompute it from the present findings instead.
     if cell_map is not None:
         cells_needed = set(cell_map.values())
     else:
@@ -94,10 +102,33 @@ def route_findings(
         assert policy is not None
         return policy
 
-    results: list[dict[str, Any]] = []
+    # Resolve every entity BEFORE opening the write transaction so identity
+    # lookups (potentially Loomweave network calls) never run while a SQLite
+    # write transaction is held open.
+    prepared: list[tuple[WardlineFinding, WardlineCellPolicy, EntityKey, dict[str, Any]]] = []
     for f in findings:
-        cell = cell_for(f)
         entity_key, loomweave_ext = resolve(f.qualname)
+        prepared.append((f, cell_for(f), entity_key, loomweave_ext))
+
+    # All findings in a valid batch route to a single store (cross-store mixing
+    # is rejected above), so wrap the appends in that one store's transaction:
+    # a mid-loop failure rolls back the whole batch instead of leaving earlier
+    # findings persisted (Q-M5 / audit M3).
+    txn_owner: EnforcementEngine | SignoffGate | None
+    if WardlineCellPolicy.BLOCK_ESCALATE in cells_needed:
+        txn_owner = signoff
+    else:
+        txn_owner = engine
+    batch_txn = txn_owner.transaction() if (prepared and txn_owner is not None) else nullcontext()
+
+    results: list[dict[str, Any]] = []
+
+    def _route_one(
+        f: WardlineFinding,
+        cell: WardlineCellPolicy,
+        entity_key: EntityKey,
+        loomweave_ext: dict[str, Any],
+    ) -> None:
         rationale = f"[wardline {f.rule_id}] {f.message}"
         wardline_ext = {
             "fingerprint": f.fingerprint,
@@ -139,4 +170,8 @@ def route_findings(
                             "seq": seq, "surfaced": True})
         else:
             raise NotImplementedError(f"unhandled WardlineCellPolicy: {cell!r}")
+
+    with batch_txn:
+        for f, cell, entity_key, loomweave_ext in prepared:
+            _route_one(f, cell, entity_key, loomweave_ext)
     return results

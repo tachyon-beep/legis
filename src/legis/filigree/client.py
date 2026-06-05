@@ -8,9 +8,13 @@ content hash for Filigree to store verbatim; drift comparison stays legis's job.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import ipaddress
 import os
+import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,6 +30,65 @@ class FiligreeError(RuntimeError):
 MAX_RESPONSE_BYTES = 1_000_000
 
 
+def _json_body_bytes(body: dict | None) -> bytes:
+    if body is None:
+        return b""
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _path_and_query(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    path_and_query = parsed.path or "/"
+    if parsed.query:
+        path_and_query = f"{path_and_query}?{parsed.query}"
+    return path_and_query
+
+
+def sign_filigree_request(
+    key: bytes,
+    method: str,
+    url: str,
+    body: dict | None,
+    *,
+    timestamp: int,
+    nonce: str,
+) -> dict[str, str]:
+    """Weft-component HMAC headers for a legis->Filigree request (Q-M4).
+
+    Mirrors ``identity.loomweave_client.sign_loomweave_request`` so the Filigree
+    channel has the same transport authentication the Loomweave channel already
+    had. The attach ``signature`` is an app-level attestation about WHAT is
+    bound; this proves WHO is calling. ``timestamp`` and ``nonce`` are injected
+    (not generated here) so the signature is deterministically testable.
+
+    Canonicalization contract: the body hash is taken over ``_json_body_bytes``
+    (sorted keys, compact ``(",", ":")`` separators). The wire transport
+    (``_urllib_fetch``) sends those exact bytes, and a Filigree verifier MUST
+    canonicalize the received body identically before hashing — any spacing or
+    key-ordering drift on either side breaks every signature. See ADR-0003.
+    """
+    body_hash = hashlib.sha256(_json_body_bytes(body)).hexdigest()
+    message = (
+        f"{method}\n{_path_and_query(url)}\n{body_hash}\n{timestamp}\n{nonce}"
+    ).encode("utf-8")
+    signature = hmac.new(key, message, hashlib.sha256).hexdigest()
+    return {
+        "X-Weft-Component": f"filigree:{signature}",
+        "X-Weft-Timestamp": str(timestamp),
+        "X-Weft-Nonce": nonce,
+    }
+
+
+def filigree_hmac_key_from_env() -> bytes | None:
+    """Resolve the Filigree HMAC key without making it mandatory.
+
+    Absent key -> unsigned (backward compatible with deployments that have not
+    provisioned the channel key yet), mirroring ``loomweave_hmac_key_from_env``.
+    """
+    value = os.environ.get("LEGIS_FILIGREE_HMAC_KEY") or os.environ.get("LEGIS_HMAC_KEY")
+    return value.encode("utf-8") if value else None
+
+
 @runtime_checkable
 class FiligreeClient(Protocol):
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
@@ -34,11 +97,21 @@ class FiligreeClient(Protocol):
     def associations_for_entity(self, entity_id: str) -> list[dict[str, Any]]: ...
 
 
-def _urllib_fetch(method: str, url: str, body: dict | None) -> dict:
-    data = json.dumps(body).encode("utf-8") if body is not None else None
+def _urllib_fetch(
+    method: str, url: str, body: dict | None, headers: dict[str, str] | None = None
+) -> dict:
+    # Send the SAME canonical bytes that sign_filigree_request hashes
+    # (_json_body_bytes: sorted keys, compact separators). The Weft signature
+    # commits to that body hash, so a verifier checking the hash against the
+    # actual request bytes only matches if the wire body is byte-identical to
+    # the signed body (Q-M4). Default json.dumps spacing/ordering would diverge
+    # and every signed POST would fail verification. Mirrors loomweave_client.
+    data = _json_body_bytes(body) if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     try:
         with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310 (trusted Filigree URL)
             decoded = _decode_json_response(resp, f"{method} {url}")
@@ -84,9 +157,37 @@ def _validate_base_url(base_url: str) -> str:
 
 
 class HttpFiligreeClient:
-    def __init__(self, base_url: str, *, fetch: Fetch | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        fetch: Fetch | None = None,
+        hmac_key: bytes | None = None,
+    ) -> None:
         self._base = _validate_base_url(base_url)
-        self._fetch = fetch or _urllib_fetch
+        # An injected fetch (tests) is used verbatim and never signs, so resolve
+        # the key only when the real signing transport is in play — otherwise an
+        # ambient LEGIS_*_HMAC_KEY would be read but never used. Absent key ->
+        # unsigned, backward compatible.
+        if fetch is not None:
+            self._hmac_key = hmac_key
+            self._fetch = fetch
+        else:
+            self._hmac_key = hmac_key if hmac_key is not None else filigree_hmac_key_from_env()
+            self._fetch = self._signing_fetch
+
+    def _signing_fetch(self, method: str, url: str, body: dict | None) -> dict:
+        headers: dict[str, str] = {}
+        if self._hmac_key is not None:
+            headers = sign_filigree_request(
+                self._hmac_key,
+                method,
+                url,
+                body,
+                timestamp=int(time.time()),
+                nonce=secrets.token_hex(16),
+            )
+        return _urllib_fetch(method, url, body, headers)
 
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
                *, actor: str, signoff_seq: int | None = None,

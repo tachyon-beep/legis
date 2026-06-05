@@ -80,7 +80,25 @@ def verify_current_source_binding(
 
 
 def require_verified_source_binding(entity: str, source_binding: dict[str, Any]) -> None:
-    """Fail closed when a source-shaped protected entity was not verified."""
+    """Fail closed when a *source-path* protected entity was not verified.
+
+    Q-M1 contract: ``protected`` (HMAC-signed) does NOT mean ``source
+    verified``. A Python source-PATH locator (``src/x.py:f``) is fail-closed —
+    a missing file, an unconfigured root, or a stale fingerprint is rejected
+    (a mismatched fingerprint is rejected by ``verify_current_source_binding``
+    before this is even reached). A non-path entity (a ``python:function:...``
+    qualname, an opaque SEI, a ``service:`` target) has no local bytes to bind
+    against, so it records an HONEST ``unverified`` binding rather than being
+    rejected — the qualname/SEI protected tier is a first-class feature.
+
+    Crucially this is not a write-side downgrade hole: dropping the ``.py`` to
+    skip this check yields a DIFFERENT ``entity_key`` and the
+    ``source_binding_status`` is folded into the signed HMAC fields
+    (``binding_signing_fields``), so a consumer can always tell a verified
+    record from an unverified one. The standing requirement is read-side:
+    consumers MUST read the signed ``source_binding_status`` and never treat
+    "protected" as "source verified".
+    """
     if _source_path_from_entity(entity) is None:
         return
     if source_binding.get("status") == "verified":

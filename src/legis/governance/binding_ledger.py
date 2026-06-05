@@ -18,7 +18,7 @@ from typing import Any
 from legis.clock import Clock
 from legis.enforcement.signing import sign, verify
 from legis.identity.entity_key import EntityKey
-from legis.store.audit_store import AuditStore
+from legis.store.protocol import AppendOnlyStore
 
 BINDING_KIND = "issue_binding"
 
@@ -38,7 +38,7 @@ def binding_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class BindingLedger:
-    def __init__(self, store: AuditStore, clock: Clock, key: bytes) -> None:
+    def __init__(self, store: AppendOnlyStore, clock: Clock, key: bytes) -> None:
         self._store = store
         self._clock = clock
         self._key = key

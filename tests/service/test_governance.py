@@ -219,3 +219,113 @@ def test_submit_protected_override_rejects_unverified_source_binding_before_sign
         )
 
     assert store.read_all() == []
+
+
+# --- Q-H2: the override-rate gate decision lives in the service layer ---
+
+def _protected_gate_with_record(tmp_path, db_name="gov.db"):
+    from legis.clock import FixedClock
+
+    class _AcceptJudge:
+        def evaluate(self, record):
+            return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
+
+    db = f"sqlite:///{tmp_path / db_name}"
+    gate = ProtectedGate(AuditStore(db), FixedClock("2026-06-02T12:00:00+00:00"),
+                         judge=_AcceptJudge(), key=b"protected-key")
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="approved",
+        agent_id="agent-1",
+        file_fingerprint="sha256:abc",
+        ast_path="Module/Call[eval]",
+    )
+    return db
+
+
+def test_evaluate_override_rate_gate_fails_closed_without_key(tmp_path):
+    from legis.service.errors import ProtectedKeyRequiredError
+    from legis.service.governance import evaluate_override_rate_gate
+
+    db = _protected_gate_with_record(tmp_path)
+    records = AuditStore(db).read_all()
+    with pytest.raises(ProtectedKeyRequiredError):
+        evaluate_override_rate_gate(records, hmac_key=None, protected_policies=frozenset())
+
+
+def test_evaluate_override_rate_gate_scores_with_key(tmp_path):
+    from legis.service.governance import evaluate_override_rate_gate
+
+    db = _protected_gate_with_record(tmp_path)
+    records = AuditStore(db).read_all()
+    res = evaluate_override_rate_gate(
+        records, hmac_key="protected-key", protected_policies=frozenset({"no-eval"})
+    )
+    assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
+
+
+def test_sign_off_raises_not_enabled_when_gate_absent():
+    from legis.service.errors import NotEnabledError
+    from legis.service.governance import sign_off
+
+    with pytest.raises(NotEnabledError):
+        sign_off(None, request_seq=1, operator_id="op-1")
+
+
+# --- Q-M1: protected != source verified; the honesty property is the signed status ---
+
+def test_genuine_non_source_entity_records_honest_unverified_binding(tmp_path):
+    # A non-path protected entity (here a service target) has no local bytes to
+    # verify, so it records an HONEST `unverified` source binding rather than
+    # being rejected — the qualname/SEI/service protected tier is a first-class
+    # feature. "protected" != "source verified".
+    store = AuditStore(f"sqlite:///{tmp_path}/protected.db")
+    gate = ProtectedGate(store, SystemClock(), judge=_AcceptingJudge(), key=b"k")
+    result = submit_protected_override(
+        gate,
+        identity=None,
+        policy="no-eval",
+        entity="service:thing",
+        rationale="x",
+        agent_id="agent-1",
+        file_fingerprint="sha256:whatever",
+        ast_path="ap",
+        source_root=tmp_path,
+    )
+    assert result.seq == 1
+    assert store.read_all()[0].payload["extensions"]["source_binding"]["status"] == "unverified"
+
+
+def test_source_binding_status_is_bound_into_the_signature(tmp_path):
+    # The anti-conflation guarantee (Q-M1): source_binding_status is folded into
+    # the SIGNED HMAC fields, so a consumer can always distinguish a verified
+    # protected record from an unverified one, and the status cannot be flipped
+    # after the fact without breaking the signature.
+    from legis.enforcement.protected import signing_fields
+    from legis.enforcement.signing import verify
+
+    key = b"protected-key"
+    store = AuditStore(f"sqlite:///{tmp_path}/protected.db")
+    gate = ProtectedGate(store, SystemClock(), judge=_AcceptingJudge(), key=key)
+    result = submit_protected_override(
+        gate,
+        identity=None,
+        policy="no-eval",
+        entity="service:thing",
+        rationale="x",
+        agent_id="agent-1",
+        file_fingerprint="sha256:whatever",
+        ast_path="ap",
+        source_root=tmp_path,
+    )
+
+    payload = store.read_all()[0].payload
+    fields = signing_fields(payload)
+    assert fields["source_binding_status"] == "unverified"
+    assert verify(fields, result.signature, key) is True
+
+    # Flipping the recorded status to "verified" must break verification.
+    payload["extensions"]["source_binding"]["status"] = "verified"
+    tampered = signing_fields(payload)
+    assert verify(tampered, result.signature, key) is False

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from legis import __version__
 from legis.api.app import create_app
 
 
@@ -10,4 +11,5 @@ def test_health_returns_ok():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "legis"
-    assert body["version"] == "1.0.0rc2"
+    # Bound to the package version so it tracks bumps instead of drifting.
+    assert body["version"] == __version__

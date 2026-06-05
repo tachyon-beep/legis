@@ -10,6 +10,7 @@ transplanted onto a different entity.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -162,14 +163,37 @@ class TrailVerifier:
                     )
 
 
+# A deterministic, non-LLM check that an ACCEPTED override on a protected policy
+# is actually justified. Returns True to confirm the model's ACCEPTED, False to
+# veto it. Receives the proposed record (its rationale is data, never executed).
+ProtectedValidator = Callable[[OverrideRecord], bool]
+
+
 class ProtectedGate:
     def __init__(
-        self, store: AppendOnlyStore, clock: Clock, judge: Judge, key: bytes
+        self,
+        store: AppendOnlyStore,
+        clock: Clock,
+        judge: Judge,
+        key: bytes,
+        *,
+        protected_policies: frozenset[str] = frozenset(),
+        validator: ProtectedValidator | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._judge = judge
         self._key = key
+        # For these policies the LLM judge is ADVISORY ONLY (Q-H3): a model
+        # ACCEPTED does not clear the gate on the model's word. A prompt-injected
+        # rationale that fools the judge into ACCEPTED would otherwise be
+        # HMAC-signed as authoritative evidence. ACCEPTED stands only if a
+        # non-LLM deterministic validator confirms it; otherwise it is downgraded
+        # to BLOCKED and the agent must obtain operator sign-off
+        # (operator_override). Empty set / no validator preserves prior behaviour
+        # for non-protected policies.
+        self._protected_policies = protected_policies
+        self._validator = validator
 
     def _record_signed(
         self,
@@ -240,17 +264,29 @@ class ProtectedGate:
             extensions=proposed_ext,
         )
         opinion = self._judge.evaluate(proposed)
+        verdict = opinion.verdict
+        record_ext = dict(extensions or {})
+        if (
+            verdict is Verdict.ACCEPTED
+            and policy in self._protected_policies
+            and (self._validator is None or not self._validator(proposed))
+        ):
+            # Model is advisory on a protected policy: its ACCEPTED is recorded
+            # for audit but does NOT clear the gate (Q-H3). Downgrade the signed
+            # verdict to BLOCKED; the agent must escalate to operator sign-off.
+            record_ext["judge_advisory_verdict"] = Verdict.ACCEPTED.value
+            verdict = Verdict.BLOCKED
         return self._record_signed(
             policy=policy,
             entity_key=entity_key,
             rationale=rationale,
             actor_id=agent_id,
-            verdict=opinion.verdict,
+            verdict=verdict,
             model=opinion.model,
             judge_rationale=opinion.rationale,
             file_fingerprint=file_fingerprint,
             ast_path=ast_path,
-            extensions=extensions,
+            extensions=record_ext,
         )
 
     def operator_override(

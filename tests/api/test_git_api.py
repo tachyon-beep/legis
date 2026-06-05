@@ -137,6 +137,21 @@ def test_git_pulls_record_server_owned_writer_provenance(tmp_path, monkeypatch):
     assert c.get("/git/pulls/7").json()["recorded_by"] == "forge-sync"
 
 
+def test_git_pulls_recorded_pr_is_labeled_unauthenticated_provenance(tmp_path):
+    # Q-M4: recorded PR metadata is a writer-supplied claim, not forge-verified.
+    # It carries provenance: unauthenticated, server-controlled (a writer cannot
+    # forge the label by supplying it in the body).
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    c = TestClient(create_app(pull_surface=pulls))
+    post = c.post("/git/pulls", json={
+        "number": 7, "title": "t", "base": "main", "head": "f", "state": "open",
+        "provenance": "authenticated",
+    })
+    assert post.status_code == 201
+    assert post.json()["provenance"] == "unauthenticated"
+    assert c.get("/git/pulls/7").json()["provenance"] == "unauthenticated"
+
+
 def test_git_pulls_unknown_pr_is_404(tmp_path):
     c = TestClient(create_app(pull_surface=PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")))
     assert c.get("/git/pulls/999").status_code == 404

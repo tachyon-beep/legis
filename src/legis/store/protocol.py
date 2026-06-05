@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
 
@@ -28,3 +29,14 @@ class AppendOnlyStore(Protocol):
     def read_by_seq(self, seq: int) -> AuditRecordLike | None: ...
 
     def verify_integrity(self) -> bool: ...
+
+    def transaction(self) -> AbstractContextManager[None]:
+        """Group appends into one all-or-nothing transaction.
+
+        Appends only. A read issued inside this context (``read_all``,
+        ``read_by_seq``, ``verify_integrity``) is NOT guaranteed to observe
+        uncommitted appends from the same batch — it sees a pre-batch snapshot
+        — and on a single-connection backend (SQLite) may contend with the
+        held write transaction. Resolve all reads before opening the batch.
+        """
+        ...

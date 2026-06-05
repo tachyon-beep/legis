@@ -30,6 +30,7 @@ from legis.governance.binding_ledger import BindingError
 from legis.policy.cells import (
     PolicyCellRegistry,
     default_policy_cells,
+    fail_closed_policy_cells,
     load_policy_cells,
 )
 from legis.policy.grammar import PolicyGrammar, default_grammar
@@ -108,11 +109,17 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
     if default_path.exists():
         return load_policy_cells(default_path)
 
-    return default_policy_cells()
+    # No configuration found. Fail closed — an unmatched policy escalates to a
+    # human operator (structured) — unless a deployment explicitly opts into the
+    # chill dev posture. Otherwise an incomplete deployment would silently
+    # downgrade governance to self-clear (Q-M7 / audit H6).
+    if os.environ.get("LEGIS_DEV_DEFAULT_CELLS") == "1":
+        return default_policy_cells()
+    return fail_closed_policy_cells()
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
-    from legis.api.app import DEFAULT_GOVERNANCE_DB
+    from legis.config import DEFAULT_GOVERNANCE_DB
 
     clock = SystemClock()
     engine = None
@@ -140,7 +147,13 @@ def build_runtime(agent_id: str) -> McpRuntime:
         )
         trail_verifier = TrailVerifier(key, protected_policies)
 
-        protected_gate = ProtectedGate(store, clock, build_judge_from_env("MCP"), key)
+        # Protected policies: the LLM judge is advisory only (Q-H3). With no
+        # deterministic validator wired, a judge ACCEPTED is downgraded and the
+        # agent must escalate to operator sign-off.
+        protected_gate = ProtectedGate(
+            store, clock, build_judge_from_env("MCP"), key,
+            protected_policies=protected_policies,
+        )
         signoff_gate = SignoffGate(store, clock, signer=True, key=key)
 
         from legis.governance.binding_ledger import BindingLedger
@@ -450,7 +463,9 @@ def _check_to_dict(run: CheckRun) -> dict[str, Any]:
 
 
 def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
-    return runtime.cell_registry or default_policy_cells()
+    # Defensive fallback if a runtime was built without a registry: fail closed
+    # rather than self-clear (Q-M7 / audit H6).
+    return runtime.cell_registry or fail_closed_policy_cells()
 
 
 def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
@@ -493,7 +508,7 @@ def _git(runtime: McpRuntime) -> GitSurface:
 
 def _engine(runtime: McpRuntime) -> EnforcementEngine:
     if runtime.engine is None:
-        from legis.api.app import DEFAULT_GOVERNANCE_DB
+        from legis.config import DEFAULT_GOVERNANCE_DB
 
         store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
         runtime.engine = EnforcementEngine(store, SystemClock())
@@ -502,7 +517,7 @@ def _engine(runtime: McpRuntime) -> EnforcementEngine:
 
 def _checks(runtime: McpRuntime) -> CheckSurface:
     if runtime.check_surface is None:
-        from legis.api.app import DEFAULT_CHECK_DB
+        from legis.config import DEFAULT_CHECK_DB
 
         runtime.check_surface = CheckSurface(
             os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
