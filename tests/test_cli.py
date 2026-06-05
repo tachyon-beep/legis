@@ -89,7 +89,11 @@ def test_check_override_rate_exits_0_when_clean(tmp_path, capsys):
     assert "PASS" in capsys.readouterr().out
 
 
-def test_governance_gate_missing_sqlite_db_is_pass_with_notice_without_creating_it(tmp_path, capsys):
+def test_governance_gate_missing_sqlite_db_is_pass_with_notice_without_creating_it(tmp_path, capsys, monkeypatch):
+    # Exercises the dev/non-CI path; isolate from an ambient CI=true (e.g. GitHub
+    # Actions), where a missing governance DB fails closed (rc=1) instead.
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("LEGIS_ALLOW_MISSING_GOVERNANCE_DB", raising=False)
     db_path = tmp_path / "missing.db"
     rc = main(["governance-gate", "--db", f"sqlite:///{db_path}"])
     assert rc == 0

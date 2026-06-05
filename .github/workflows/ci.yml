@@ -41,4 +41,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Enforce override-rate gate
+        # No governance DB is tracked in the repo yet, so a missing DB here is
+        # expected → PASS_WITH_NOTICE rather than the CI fail-closed default.
+        # Remove this once a real governance DB is wired into CI.
+        env:
+          LEGIS_ALLOW_MISSING_GOVERNANCE_DB: "1"
         run: uv run legis governance-gate --db sqlite:///legis-governance.db
