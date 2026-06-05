@@ -198,13 +198,34 @@ def _check_override_rate(db_url: str) -> int:
 
     records = store.read_all()
 
+    protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
+    protected_policies = frozenset(
+        p.strip() for p in protected_policies_str.split(",") if p.strip()
+    )
+
+    def _requires_protected_verification(payload: dict) -> bool:
+        ext = payload.get("extensions", {}) or {}
+        return (
+            payload.get("policy") in protected_policies
+            or ext.get("protected_cell") is True
+            or "judge_metadata_signature" in ext
+            or "signoff_signature" in ext
+            or "file_fingerprint" in ext
+            or "ast_path" in ext
+        )
+
+    protected_records_present = any(
+        _requires_protected_verification(rec.payload) for rec in records
+    )
     hmac_key_str = os.environ.get("LEGIS_HMAC_KEY")
+    if protected_records_present and not hmac_key_str:
+        print(
+            "Error: Protected audit records require LEGIS_HMAC_KEY for verification",
+            file=sys.stderr,
+        )
+        return 1
     if hmac_key_str:
         from legis.enforcement.protected import TrailVerifier, TamperError
-        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-        protected_policies = frozenset(
-            p.strip() for p in protected_policies_str.split(",") if p.strip()
-        )
         verifier = TrailVerifier(hmac_key_str.encode("utf-8"), protected_policies)
         try:
             verifier.verify(records)
