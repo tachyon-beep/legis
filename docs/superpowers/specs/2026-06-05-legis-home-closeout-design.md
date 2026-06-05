@@ -6,32 +6,32 @@
 
 ## Goal
 
-Bring Legis home — it is the only piece of the Legis/Clarion/Filigree governance
+Bring Legis home — it is the only piece of the Legis/Loomweave/Filigree governance
 ecosystem still lagging. Close the three remaining **legis-side** deliverables so
 the cross-repo governance handshakes become real rather than latent:
 
 1. A policy-boundary CI gate that is **not trickable** — the static scanner must
    apply the *same* evidence rules as the runtime gate.
-2. The Clarion-ready git **rename feed** endpoint (committed + optional
+2. The Loomweave-ready git **rename feed** endpoint (committed + optional
    working-tree renames).
 3. The Filigree **closure-gate** endpoint that reports whether Legis holds
    verified binding evidence for closing an issue.
 
-Filigree's *consumption* of the closure gate (and any Clarion re-pointing) is
+Filigree's *consumption* of the closure gate (and any Loomweave re-pointing) is
 explicitly a **follow-on spec**, not this one.
 
 ## Context discovered during brainstorming
 
 - **The rename half is already partially wired.** Legis already serves
   `GET /git/renames` (`src/legis/api/app.py:407`, MCP `src/legis/mcp.py:864`).
-  Clarion already has a complete consumer — `LegisGitRenameSource` in
-  `clarion/crates/clarion-cli/src/sei_git.rs` reads
+  Loomweave already has a complete consumer — `LegisGitRenameSource` in
+  `loomweave/crates/loomweave-cli/src/sei_git.rs` reads
   `GET /git/renames?rev_range=<base>..HEAD` with a `/health` probe, timeout, and
-  graceful degradation. Clarion consumes **committed** renames only and documents
+  graceful degradation. Loomweave consumes **committed** renames only and documents
   that working-tree renames "never reach legis."
 - **Decision:** build the richer `/git/rename-feed` (working-tree support) anyway
   as future-proofing, but keep it **additive** — `/git/renames` stays untouched so
-  Clarion keeps working unchanged. Re-pointing Clarion is out of scope.
+  Loomweave keeps working unchanged. Re-pointing Loomweave is out of scope.
 - **The closure-gate half is genuinely missing on both sides.** Filigree
   (`src/filigree/`, Python) has `close_issue` (`db_issues.py:1117`) and
   `api_close_issue` (`dashboard_routes/issues.py:506`) but **no reference to Legis
@@ -78,7 +78,7 @@ both call, so they agree by construction and cannot drift again.
 - **CI:** a step in `.github/workflows/ci.yml` after mypy:
   `uv run legis policy-boundary-check --root src --repo-root .`.
 
-### Workstream 2 — Git rename feed (Clarion-ready, additive)
+### Workstream 2 — Git rename feed (Loomweave-ready, additive)
 
 - **`src/legis/git/surface.py`:** add `GitSurface.working_tree_renames(base)`
   returning `list[RenameEvidence]` for `git diff -M --name-status <base>` rename
@@ -159,5 +159,5 @@ both new endpoints; MCP tool-exposure and call tests for both new tools.
 ## Out of scope (follow-on specs)
 
 - Filigree's `close_issue` / `api_close_issue` actually calling the closure gate.
-- Clarion re-pointing from `/git/renames` to `/git/rename-feed`.
+- Loomweave re-pointing from `/git/renames` to `/git/rename-feed`.
 - Live cross-repo handshake integration tests.

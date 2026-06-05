@@ -1,12 +1,12 @@
-"""Contract lock: GET /git/rename-feed object shape (the deferred Clarion re-point target).
+"""Contract lock: GET /git/rename-feed object shape (the deferred Loomweave re-point target).
 
-Unlike ``/git/renames`` (a flat ARRAY consumed today by Clarion's
+Unlike ``/git/renames`` (a flat ARRAY consumed today by Loomweave's
 ``parse_legis_rename_json``), ``/git/rename-feed`` returns an OBJECT
-``{status, base, head, committed[], working_tree[]}``. When Clarion re-points
+``{status, base, head, committed[], working_tree[]}``. When Loomweave re-points
 from ``/git/renames`` to this feed's ``.committed`` leg (ledger item B3), it must
 find each committed entry carrying the same ``old_path`` / ``new_path`` fields its
 parser reads. This test pins the response shape so a drift breaks here, in legis,
-rather than silently at Clarion after the re-point lands.
+rather than silently at Loomweave after the re-point lands.
 
 Mirrors the discipline of ``test_git_renames_contract.py``.
 """
@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from legis.api.app import create_app
 
 # The exact field set every ``committed`` / ``working_tree`` entry must carry —
-# asdict(RenameEvidence). Clarion parses old_path/new_path; the rest are the
+# asdict(RenameEvidence). Loomweave parses old_path/new_path; the rest are the
 # superset legis promises and must not silently drop.
 RENAME_ENTRY_FIELDS = {
     "commit_sha",
@@ -28,7 +28,7 @@ RENAME_ENTRY_FIELDS = {
     "new_blob",
 }
 
-# Core top-level keys Clarion's re-point depends on. A superset is allowed
+# Core top-level keys Loomweave's re-point depends on. A superset is allowed
 # (legis may add additive fields like worktree_checked); these must be present.
 REQUIRED_TOP_LEVEL_KEYS = {"status", "base", "head", "committed", "working_tree"}
 
@@ -40,7 +40,7 @@ def _git(repo, *args):
                    capture_output=True, text=True)
 
 
-def _parse_like_clarion(items):
+def _parse_like_loomweave(items):
     out = []
     for it in items:
         old, new = it.get("old_path"), it.get("new_path")
@@ -85,19 +85,19 @@ def test_rename_feed_shape_is_contract_locked(tmp_path):
     assert isinstance(body["working_tree"], list)
 
     # Every committed entry carries exactly the RenameEvidence field set — the
-    # superset legis promises Clarion. A dropped/renamed field breaks here.
+    # superset legis promises Loomweave. A dropped/renamed field breaks here.
     for entry in body["committed"]:
         assert set(entry) == RENAME_ENTRY_FIELDS
 
 
-def test_rename_feed_committed_leg_matches_clarion_parser(tmp_path):
+def test_rename_feed_committed_leg_matches_loomweave_parser(tmp_path):
     repo, base = _repo_with_committed_rename(tmp_path)
 
     c = TestClient(create_app(repo_path=str(repo)))
     resp = c.get("/git/rename-feed", params={"base": base, "head": "HEAD"})
     assert resp.status_code == 200
 
-    # The re-point safety property: parsing committed[] the way Clarion parses
+    # The re-point safety property: parsing committed[] the way Loomweave parses
     # /git/renames must surface the same rename.
-    pairs = _parse_like_clarion(resp.json()["committed"])
+    pairs = _parse_like_loomweave(resp.json()["committed"])
     assert ("auth.py", "authn.py") in pairs

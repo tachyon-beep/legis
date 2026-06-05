@@ -1,4 +1,4 @@
-"""Structured git rename evidence for Clarion's identity matcher (additive).
+"""Structured git rename evidence for Loomweave's identity matcher (additive).
 
 This is a superset of ``GET /git/renames``: it bundles the base/head context and
 optionally surfaces uncommitted working-tree renames. The existing committed-only
@@ -11,7 +11,7 @@ unchecked working tree both yield no renames, ``status`` alone cannot tell them
 apart. The separate ``worktree_checked`` flag reflects *what was checked*: it
 echoes whether the working tree was inspected at all (``include_worktree``), so a
 consumer can distinguish "checked and clean" from "not checked" without inferring
-it from the request. (Clarion, the committed-only consumer, ignores both
+it from the request. (Loomweave, the committed-only consumer, ignores both
 ``working_tree`` and ``worktree_checked``.)
 """
 

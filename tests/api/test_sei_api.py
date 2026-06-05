@@ -36,7 +36,7 @@ class FakeClient:
 
 class BrokenLineageClient(FakeClient):
     def lineage(self, sei):
-        raise RuntimeError("clarion down")
+        raise RuntimeError("loomweave down")
 
 
 class ScriptedJudge:
@@ -47,7 +47,7 @@ class ScriptedJudge:
         return self.opinion
 
 
-ALIVE = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+ALIVE = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
          "content_hash": "h", "alive": True}
 
 
@@ -75,7 +75,7 @@ def test_override_keys_record_on_sei_when_alive(tmp_path):
         "rationale": "reviewed", "agent_id": "agent-1"})
     assert resp.status_code == 201
     trail = c.get("/overrides").json()
-    assert trail[0]["entity_key"] == {"value": "clarion:eid:abc123", "identity_stable": True}
+    assert trail[0]["entity_key"] == {"value": "loomweave:eid:abc123", "identity_stable": True}
     assert trail[0]["identity_stable"] is True
 
 
@@ -102,7 +102,7 @@ def test_protected_override_keys_on_sei_and_signature_still_verifies(tmp_path):
     assert resp.status_code == 201
     read = c.get("/overrides")
     assert read.status_code == 200
-    assert read.json()[0]["entity_key"] == {"value": "clarion:eid:abc123", "identity_stable": True}
+    assert read.json()[0]["entity_key"] == {"value": "loomweave:eid:abc123", "identity_stable": True}
 
 
 def test_signoff_request_keys_on_sei_when_alive(tmp_path):
@@ -113,25 +113,25 @@ def test_signoff_request_keys_on_sei_when_alive(tmp_path):
         "rationale": "needs human", "agent_id": "agent-1"})
     assert resp.status_code == 202
     trail = c.get("/overrides").json()
-    assert trail[0]["entity_key"] == {"value": "clarion:eid:abc123", "identity_stable": True}
+    assert trail[0]["entity_key"] == {"value": "loomweave:eid:abc123", "identity_stable": True}
 
 
-def test_record_carries_clarion_two_axis_and_lineage_snapshot(tmp_path):
+def test_record_carries_loomweave_two_axis_and_lineage_snapshot(tmp_path):
     from legis.canonical import content_hash
-    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+    alive = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
              "content_hash": "blake3hash", "alive": True}
     lineage = [{"event": "born"}, {"event": "locator_changed"}]
     c = _app(tmp_path, FakeClient(alive, lineage=lineage))
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
                                "rationale": "reviewed", "agent_id": "agent-1"})
-    clarion = c.get("/overrides").json()[0]["extensions"]["clarion"]
-    assert clarion["alive"] is True
-    assert clarion["content_hash"] == "blake3hash"
-    assert clarion["lineage_snapshot"] == {"length": 2, "hash": content_hash(lineage)}
+    loomweave = c.get("/overrides").json()[0]["extensions"]["loomweave"]
+    assert loomweave["alive"] is True
+    assert loomweave["content_hash"] == "blake3hash"
+    assert loomweave["lineage_snapshot"] == {"length": 2, "hash": content_hash(lineage)}
 
 
 def test_identity_gaps_endpoint_surfaces_orphans(tmp_path):
-    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+    alive = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
              "content_hash": "h", "alive": True}
 
     class OrphanClient(FakeClient):
@@ -142,12 +142,12 @@ def test_identity_gaps_endpoint_surfaces_orphans(tmp_path):
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
                                "rationale": "reviewed", "agent_id": "agent-1"})
     gaps = c.get("/governance/identity-gaps").json()
-    assert gaps == [{"sei": "clarion:eid:abc123", "reason": "orphaned",
+    assert gaps == [{"sei": "loomweave:eid:abc123", "reason": "orphaned",
                      "lineage": [{"event": "orphaned"}]}]
 
 
 def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
-    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+    alive = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
              "content_hash": "h", "alive": True}
     c = _app(tmp_path, FakeClient(alive, lineage=[{"event": "born"}]))
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
@@ -161,7 +161,7 @@ def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
 
 
 def test_lineage_integrity_endpoint_reports_unavailable_not_clean(tmp_path):
-    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+    alive = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
              "content_hash": "h", "alive": True}
     c = _app(tmp_path, BrokenLineageClient(alive, lineage=[{"event": "born"}]))
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
@@ -170,11 +170,11 @@ def test_lineage_integrity_endpoint_reports_unavailable_not_clean(tmp_path):
     assert body["status"] == "unverified"
     assert body["divergences"] == []
     assert body["unavailable"] == [
-        {"sei": "clarion:eid:abc123", "reason": "unavailable"}
+        {"sei": "loomweave:eid:abc123", "reason": "unavailable"}
     ]
 
 
-def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):
+def test_protected_and_signoff_paths_carry_loomweave_block(tmp_path):
     from legis.clock import FixedClock
     from legis.enforcement.protected import ProtectedGate, TrailVerifier
     from legis.enforcement.signoff import SignoffGate
@@ -185,7 +185,7 @@ def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):
         def evaluate(self, record):
             return JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")
 
-    alive = {"sei": "clarion:eid:abc123", "current_locator": "python:function:m.f",
+    alive = {"sei": "loomweave:eid:abc123", "current_locator": "python:function:m.f",
              "content_hash": "blake3hash", "alive": True}
     key = b"k"
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
@@ -204,8 +204,8 @@ def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):
         "agent_id": "agent-1", "file_fingerprint": "fp", "ast_path": "ap"})
     assert pr.status_code == 201
     protected_rec = c.get("/overrides").json()[0]
-    assert protected_rec["entity_key"]["value"] == "clarion:eid:abc123"
-    assert protected_rec["extensions"]["clarion"]["content_hash"] == "blake3hash"
+    assert protected_rec["entity_key"]["value"] == "loomweave:eid:abc123"
+    assert protected_rec["extensions"]["loomweave"]["content_hash"] == "blake3hash"
     # The signed identity binding survived the added extension.
     assert protected_rec["extensions"]["judge_metadata_signature"].startswith("hmac-sha256:")
 
@@ -217,4 +217,4 @@ def test_protected_and_signoff_paths_carry_clarion_block(tmp_path):
         "agent_id": "agent-1"})
     assert sr.status_code == 202
     signoff_rec = c.get("/overrides").json()[1]
-    assert signoff_rec["extensions"]["clarion"]["content_hash"] == "blake3hash"
+    assert signoff_rec["extensions"]["loomweave"]["content_hash"] == "blake3hash"

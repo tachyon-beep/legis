@@ -1,23 +1,23 @@
 # Legis
 
-Legis is the fourth Loom product: the git/CI and governance side of the suite's common operating picture.
+Legis is the fourth Weft product: the git/CI and governance side of the suite's common operating picture.
 
-> The authoritative Loom federation roster and axiom live in the hub at `~/loom/doctrine.md`. This README does not independently restate the roster; Legis's "fourth Loom product" framing is its own self-description, consistent with the hub's ruling (Legis is a realized member). See `~/loom/members/legis.md` for Legis's thin briefing.
+> The authoritative Weft federation roster and axiom live in the hub at `~/weft/doctrine.md`. This README does not independently restate the roster; Legis's "fourth Weft product" framing is its own self-description, consistent with the hub's ruling (Legis is a realized member). See `~/weft/members/legis.md` for Legis's thin briefing.
 
 ## Status
 
-Legis is at **`1.0.0rc1`** — the first release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Clarion is contract-locked, operative pending Clarion's committed-range driving. The transport-agnostic service layer (WP-M1) underpinning the forthcoming agent-facing MCP surface has landed. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
+Legis is at **`1.0.0rc1`** — the first release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) underpinning the forthcoming agent-facing MCP surface has landed. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
 
-## The Loom suite
+## The Weft suite
 
-> Federation roster and axiom are authoritative in the hub at `~/loom/doctrine.md`. The framing below describes the substrate from Legis's vantage point and is not the canonical roster — consult the hub for that.
+> Federation roster and axiom are authoritative in the hub at `~/weft/doctrine.md`. The framing below describes the substrate from Legis's vantage point and is not the canonical roster — consult the hub for that.
 
-Loom is a suite of four tools that share a single substrate: a codebase modelled as **entities**, each carrying typed facts from different tools, all keyed on one durable identity, all freshness-honest, all consumable in one call.
+Weft is a suite of four tools that share a single substrate: a codebase modelled as **entities**, each carrying typed facts from different tools, all keyed on one durable identity, all freshness-honest, all consumable in one call.
 
 ```
                 ┌──────────────── the entity (one durable identity: SEI) ───────────────┐
  Wardline ──taint facts──►                                                               │
- Clarion  ──structure/linkages/lineage──►   [ Clarion: identity authority + fact store ] │
+ Loomweave  ──structure/linkages/lineage──►   [ Loomweave: identity authority + fact store ] │
  Legis    ──governance attestations──►                                                   │
  Filigree ──issue associations──►                                                        │
                 └─────────────────────────────────────────────────────────────────────┘
@@ -43,24 +43,24 @@ Consequences:
 
 ### The combination matrix
 
-Loom's value is the *matrix* of its tools' combinations, not their sum. Each pair is an opt-in layer that lights up a capability neither tool has alone:
+Weft's value is the *matrix* of its tools' combinations, not their sum. Each pair is an opt-in layer that lights up a capability neither tool has alone:
 
 | Combination | Capability | Status |
 |---|---|---|
-| **Wardline + Clarion** | Structure + trust posture in one view (the dossier) | **Live** |
+| **Wardline + Loomweave** | Structure + trust posture in one view (the dossier) | **Live** |
 | **Wardline + Filigree** | Findings become tracked work | **Live** |
-| **Clarion + Filigree** | Issues bound to live code, surviving refactors | **Partial** — orphans on rename (SEI gap) |
+| **Loomweave + Filigree** | Issues bound to live code, surviving refactors | **Partial** — orphans on rename (SEI gap) |
 | **Wardline + Legis** | Agent-defined policy enforced at the CI/git boundary | **Live** — findings route through legis enforcement into the configured 2×2 cell (Sprint 6 WP-6.1) |
-| **Clarion + Legis** | Governance attestations keyed to stable code identity | **Live** (SEI-keyed attestations, Sprint 5); git-rename provider **contract-locked**, operative pending Clarion committed-range driving (WP-6.3) |
+| **Loomweave + Legis** | Governance attestations keyed to stable code identity | **Live** (SEI-keyed attestations, Sprint 5); git-rename provider **contract-locked**, operative pending Loomweave committed-range driving (WP-6.3) |
 | **Filigree + Legis** | Governed issue lifecycle — sign-offs, RTM, verification states | **Live** — governed SEI-keyed sign-off binding; Filigree retains lifecycle authority (Sprint 6 WP-6.2) |
 
-Higher-order: **all four** closes the loop — the agent understands the code (Clarion) and its trust posture (Wardline), Legis governs what it may do and records overrides, and every decision and unit of work is tracked against stable identity (Filigree + Clarion).
+Higher-order: **all four** closes the loop — the agent understands the code (Loomweave) and its trust posture (Wardline), Legis governs what it may do and records overrides, and every decision and unit of work is tracked against stable identity (Filigree + Loomweave).
 
 SEI is the connective tissue of the whole matrix: one non-conformant binding orphans every combination it participates in.
 
 ## What Legis is
 
-Legis is the planned Loom authority for:
+Legis is the planned Weft authority for:
 
 - project change provenance,
 - branch / commit / pull request context,
@@ -109,15 +109,15 @@ Legis is not:
 
 - a federation registry,
 - a hidden suite runtime,
-- a replacement for Clarion's code identity authority,
+- a replacement for Loomweave's code identity authority,
 - a replacement for Filigree's workflow authority, or
 - a replacement for Wardline's policy analysis authority.
 
-## How Legis fits into Loom
+## How Legis fits into Weft
 
-### Clarion
+### Loomweave
 
-Clarion remains the sole authority for code identity and structure, including SEI. Legis is an SEI *consumer* (governance attestations key on SEI; SEI lineage is Legis's audit spine). Legis is also a *potential provider*: once Legis ships a git interface, it may supply the git-rename and history signals the SEI re-binding matcher consumes — but that does not move identity authority out of Clarion.
+Loomweave remains the sole authority for code identity and structure, including SEI. Legis is an SEI *consumer* (governance attestations key on SEI; SEI lineage is Legis's audit spine). Legis is also a *potential provider*: once Legis ships a git interface, it may supply the git-rename and history signals the SEI re-binding matcher consumes — but that does not move identity authority out of Loomweave.
 
 ### Filigree
 
@@ -131,18 +131,18 @@ The division of responsibility is explicit: **Wardline analyses trust; Legis gov
 
 When Legis ships, the Wardline + Legis combination unlocks:
 - agent-defined policy, enforced at the git/CI boundary with graded modes;
-- trust-vocabulary convergence — one `@trust_boundary` grammar across the suite, delivering elspeth's custody and fabrication-test guarantees in Loom's own terms, not a second naming scheme bolted on beside the first; and
+- trust-vocabulary convergence — one `@trust_boundary` grammar across the suite, delivering elspeth's custody and fabrication-test guarantees in Weft's own terms, not a second naming scheme bolted on beside the first; and
 - the full chill → coached → protected progression across the 2×2, with Wardline's findings as the input and Legis's enforcement layer as the output.
 
 ## Stable Entity Identity
 
 Legis is an SEI **consumer**, not an authority.
 
-- Clarion mints, persists, re-binds, and resolves SEI.
+- Loomweave mints, persists, re-binds, and resolves SEI.
 - Legis treats SEI as opaque: never derived, parsed, or reinterpreted.
 - Governance attestations key on **SEI** when the subject is a code entity, so attestations survive rename/move.
-- SEI lineage (the append-only event log Clarion maintains) is Legis's ready-made, tamper-evidence-able audit trail.
-- If Clarion does not advertise the `sei` capability, Legis degrades honestly rather than guessing.
+- SEI lineage (the append-only event log Loomweave maintains) is Legis's ready-made, tamper-evidence-able audit trail.
+- If Loomweave does not advertise the `sei` capability, Legis degrades honestly rather than guessing.
 
 See `docs/federation/sei-conformance.md` for Legis's specific conformance obligations.
 
@@ -160,11 +160,11 @@ Legis is complete when:
 - [ ] Wardline + Legis: Wardline's `--fail-on` / exit codes governed by Legis's policy layer; trust-vocabulary converged to one grammar across the suite
 - [ ] Legis governs trust while Wardline analyses it — one judge, not two
 - [ ] Filigree + Legis: verification sign-offs and governed issue lifecycle work end-to-end
-- [ ] Git-rename / history signal available for Clarion's SEI matcher (if/when the git interface ships)
+- [ ] Git-rename / history signal available for Loomweave's SEI matcher (if/when the git interface ships)
 
 ## Repository layout
 
-- `docs/federation/` — Loom-facing contracts and participation notes
+- `docs/federation/` — Weft-facing contracts and participation notes
 - `docs/design/` — product intent and design notes
 - `docs/superpowers/specs/` — approved design specs
 - `docs/superpowers/plans/` — implementation plans
@@ -173,7 +173,7 @@ Legis is complete when:
 
 **Design and federation:**
 - `docs/design/legis-charter.md` — authority boundary, operating modes, near-term scope
-- `docs/federation/README.md` — Loom participation overview
+- `docs/federation/README.md` — Weft participation overview
 - `docs/federation/sei-conformance.md` — Legis-specific SEI posture and obligations
 
 **Planning:**
@@ -183,11 +183,11 @@ Legis is complete when:
 - `docs/superpowers/plans/2026-06-01-legis-implementation-sprints.md` — sprint / work-package breakdown of the roadmap
 
 **Suite-wide context (lives in wardline/docs/superpowers/specs/):**
-- `2026-06-01-loom-goal-state-case-study.md` — Loom goal state, operating model, combination matrix
-- `2026-06-01-loom-stable-entity-identity-conformance.md` — SEI standard (Legis is a named consumer in §5)
+- `2026-06-01-weft-goal-state-case-study.md` — Weft goal state, operating model, combination matrix
+- `2026-06-01-weft-stable-entity-identity-conformance.md` — SEI standard (Legis is a named consumer in §5)
 - `2026-06-01-wardline-roadmap-to-first-class.md` — Wardline's staged path to first-class; Milestone 5 (governance & trust-vocabulary convergence) is gated on Legis existing
 
 **Design ancestor:**
-- `/home/john/elspeth` — elspeth's CI judge (`elspeth-lints justify / reaudit / check-judge-coverage / check-override-rate`) is the working "thick version" of Legis's protected cell. The judge gate, `@trust_boundary` decorator, HMAC-signed audit trail, decay sweep, and override-rate gate are all elspeth concepts that Legis inherits as suite-level mechanisms. Elspeth is a standalone project, not a Loom federation member — Legis borrows its *effects* and re-expresses them in Loom's vocabulary.
+- `/home/john/elspeth` — elspeth's CI judge (`elspeth-lints justify / reaudit / check-judge-coverage / check-override-rate`) is the working "thick version" of Legis's protected cell. The judge gate, `@trust_boundary` decorator, HMAC-signed audit trail, decay sweep, and override-rate gate are all elspeth concepts that Legis inherits as suite-level mechanisms. Elspeth is a standalone project, not a Weft federation member — Legis borrows its *effects* and re-expresses them in Weft's vocabulary.
 
 This repo stays explicit, narrow, and honest about what exists today.

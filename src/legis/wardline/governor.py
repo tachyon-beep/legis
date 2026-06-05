@@ -16,11 +16,11 @@ on (resolved to an SEI via the same Sprint-5 resolver when available); its
   diagnostics, never re-derived or constrained), and ``severity`` in the
   record's ``extensions``.
 * **block+escalate** opens a sign-off request carrying ``rule_id`` (policy),
-  the resolved entity, the seeded rationale, and the same Clarion/Wardline
+  the resolved entity, the seeded rationale, and the same Loomweave/Wardline
   evidence extensions the surface paths preserve.
 * **surface+only** records a non-gating ``wardline_surfaced`` governance event
   via ``EnforcementEngine.record_event``; no judge, no sign-off gate. Carries
-  ``entity_key`` + ``clarion`` and ``wardline`` extensions so it is
+  ``entity_key`` + ``loomweave`` and ``wardline`` extensions so it is
   orphan-detectable consistently with a ``surface_override`` record.
 """
 
@@ -97,7 +97,7 @@ def route_findings(
     results: list[dict[str, Any]] = []
     for f in findings:
         cell = cell_for(f)
-        entity_key, clarion_ext = resolve(f.qualname)
+        entity_key, loomweave_ext = resolve(f.qualname)
         rationale = f"[wardline {f.rule_id}] {f.message}"
         wardline_ext = {
             "fingerprint": f.fingerprint,
@@ -108,7 +108,7 @@ def route_findings(
         if cell is WardlineCellPolicy.BLOCK_ESCALATE:
             if signoff is None:
                 raise ValueError("block_escalate cell requires a signoff gate")
-            ext = {**clarion_ext, "wardline": wardline_ext}
+            ext = {**loomweave_ext, "wardline": wardline_ext}
             signoff_result = signoff.request(policy=f.rule_id, entity_key=entity_key,
                                              rationale=rationale, agent_id=agent_id,
                                              extensions=ext)
@@ -117,10 +117,10 @@ def route_findings(
         elif cell is WardlineCellPolicy.SURFACE_OVERRIDE:
             if engine is None:
                 raise ValueError("surface_override cell requires an engine")
-            # Merge the clarion lineage ext (REQ-L-01) alongside the wardline ext
+            # Merge the loomweave lineage ext (REQ-L-01) alongside the wardline ext
             # so a wardline-routed override carries the same lineage snapshot a
             # /overrides override would.
-            ext = {**clarion_ext, "wardline": wardline_ext}
+            ext = {**loomweave_ext, "wardline": wardline_ext}
             override_result = engine.submit_override(policy=f.rule_id, entity_key=entity_key,
                                                      rationale=rationale, agent_id=agent_id,
                                                      extensions=ext)
@@ -130,7 +130,7 @@ def route_findings(
             # recorded, non-gating
             if engine is None:
                 raise ValueError("surface_only cell requires an engine")
-            ext = {**clarion_ext, "wardline": wardline_ext}
+            ext = {**loomweave_ext, "wardline": wardline_ext}
             seq = engine.record_event({"kind": "wardline_surfaced", "policy": f.rule_id,
                                        "entity_key": entity_key.to_dict(),
                                        "rationale": rationale, "agent_id": agent_id,

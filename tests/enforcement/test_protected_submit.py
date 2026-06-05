@@ -86,22 +86,22 @@ def test_key_is_never_written_to_the_payload(tmp_path):
     assert "protected-key-1" not in raw
 
 
-def test_judge_receives_source_and_clarion_context_that_will_be_signed(tmp_path):
+def test_judge_receives_source_and_loomweave_context_that_will_be_signed(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     judge = CapturingJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"))
     g = ProtectedGate(store, FixedClock("2026-06-02T12:00:00+00:00"), judge=judge, key=KEY)
 
     g.submit(
         policy="no-eval",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         rationale="r",
         agent_id="a",
         file_fingerprint="fp",
         ast_path="ap",
-        extensions={"clarion": {"alive": True, "content_hash": "h", "lineage_snapshot": {"length": 1, "hash": "lh"}}},
+        extensions={"loomweave": {"alive": True, "content_hash": "h", "lineage_snapshot": {"length": 1, "hash": "lh"}}},
     )
 
     assert judge.seen is not None
     assert judge.seen.extensions["file_fingerprint"] == "fp"
     assert judge.seen.extensions["ast_path"] == "ap"
-    assert judge.seen.extensions["clarion"]["content_hash"] == "h"
+    assert judge.seen.extensions["loomweave"]["content_hash"] == "h"

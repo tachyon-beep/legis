@@ -28,7 +28,7 @@ class SignoffResult:
 
 def signoff_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
     ext = payload.get("extensions") or {}
-    clar = ext.get("clarion") or {}
+    clar = ext.get("loomweave") or {}
     snap = clar.get("lineage_snapshot") or {}
     return {
         "policy": payload.get("policy"),
@@ -39,9 +39,9 @@ def signoff_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "signoff_state": ext.get("signoff_state"),
         "request_seq": ext.get("request_seq"),
         "request_payload_hash": ext.get("request_payload_hash"),
-        "clarion_content_hash": clar.get("content_hash"),
-        "clarion_lineage_hash": snap.get("hash"),
-        "clarion_lineage_len": snap.get("length"),
+        "loomweave_content_hash": clar.get("content_hash"),
+        "loomweave_lineage_hash": snap.get("hash"),
+        "loomweave_lineage_len": snap.get("length"),
     }
 
 

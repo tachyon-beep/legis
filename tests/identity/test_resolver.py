@@ -12,7 +12,7 @@ class FakeClient:
 
     def capability(self):
         if self._boom:
-            raise RuntimeError("clarion down")
+            raise RuntimeError("loomweave down")
         return self._capable
 
     def resolve_locator(self, locator):
@@ -27,16 +27,16 @@ class FakeClient:
         return self._lineage
 
 
-ALIVE = {"sei": "clarion:eid:deadbeef", "current_locator": "python:function:m.f",
+ALIVE = {"sei": "loomweave:eid:deadbeef", "current_locator": "python:function:m.f",
          "content_hash": "blake3hash", "alive": True}
 
 
 def test_alive_sei_is_keyed_opaquely_with_two_axes():
     r = IdentityResolver(FakeClient(resolve=ALIVE, lineage=[{"event": "born"}]))
     res = r.resolve("python:function:m.f")
-    assert res.entity_key.value == "clarion:eid:deadbeef"      # the SEI, verbatim
+    assert res.entity_key.value == "loomweave:eid:deadbeef"      # the SEI, verbatim
     assert res.entity_key.identity_stable is True
-    assert res.entity_key.value.startswith("clarion:eid:")     # opaque, not parsed
+    assert res.entity_key.value.startswith("loomweave:eid:")     # opaque, not parsed
     assert res.entity_key.value != "python:function:m.f"       # not the locator
     assert res.alive is True                                    # identity axis
     assert res.content_hash == "blake3hash"                     # content axis
@@ -80,7 +80,7 @@ def test_transient_capability_error_is_retried():
         def capability(self):
             self.calls += 1
             if self.calls == 1:
-                raise RuntimeError("clarion temporarily down")
+                raise RuntimeError("loomweave temporarily down")
             return True
 
     client = FlakyCapabilityClient()
@@ -89,7 +89,7 @@ def test_transient_capability_error_is_retried():
 
     res = r.resolve("python:function:m.f")
 
-    assert res.entity_key.value == "clarion:eid:deadbeef"
+    assert res.entity_key.value == "loomweave:eid:deadbeef"
     assert client.calls == 2
 
 
@@ -103,7 +103,7 @@ def test_alive_response_missing_sei_degrades_instead_of_raw_key_error():
 def test_alive_sei_with_lineage_failure_records_unavailable_status():
     r = IdentityResolver(FakeClient(resolve=ALIVE, lineage_boom=True))
     res = r.resolve("python:function:m.f")
-    assert res.entity_key.value == "clarion:eid:deadbeef"
+    assert res.entity_key.value == "loomweave:eid:deadbeef"
     assert res.alive is True
     assert res.lineage_snapshot is None
     assert res.identity_resolution_status == "resolved"

@@ -24,7 +24,7 @@ No tests, formatters, or mutating commands were run. Local coordinator inspectio
 
 The highest-risk theme is adapter drift: HTTP and MCP expose overlapping governance capabilities, but MCP omits several server-side constraints present in HTTP/CLI. In particular, MCP can route Wardline scan results using caller-selected cells, skip Wardline artifact HMAC verification, and read protected governance trails without the HMAC verification that HTTP/CLI perform.
 
-The second major theme is evidence loss or weak binding in governance records. Decay re-judging drops the original source/Clarion context, signed sign-off approvals do not bind the full request evidence, protected source binding can remain `unverified` while still producing a signed protected record, and the CI governance gate can pass with no governance trail artifact at all.
+The second major theme is evidence loss or weak binding in governance records. Decay re-judging drops the original source/Loomweave context, signed sign-off approvals do not bind the full request evidence, protected source binding can remain `unverified` while still producing a signed protected record, and the CI governance gate can pass with no governance trail artifact at all.
 
 ## Critical Findings
 
@@ -115,7 +115,7 @@ Remediation:
 
 Add `wardline_artifact_key` to `McpRuntime`, populated from `LEGIS_WARDLINE_ARTIFACT_KEY`, and pass it to `route_wardline_scan()`. Map `WardlinePayloadError` to an explicit tool error. Add MCP tests for unsigned rejection and signed acceptance with verified provenance.
 
-### H2. Decay re-judging drops source and Clarion context
+### H2. Decay re-judging drops source and Loomweave context
 
 Locations:
 
@@ -125,7 +125,7 @@ Locations:
 
 Evidence:
 
-`decay_sweep()` reconstructs an `OverrideRecord` with only policy, entity, rationale, agent, and time. It omits original extensions such as `file_fingerprint`, `ast_path`, `source_binding`, Clarion content hash, and lineage snapshot.
+`decay_sweep()` reconstructs an `OverrideRecord` with only policy, entity, rationale, agent, and time. It omits original extensions such as `file_fingerprint`, `ast_path`, `source_binding`, Loomweave content hash, and lineage snapshot.
 
 Impact:
 
@@ -133,7 +133,7 @@ Renewal decisions can be made on less evidence than the original protected decis
 
 Remediation:
 
-Preserve a sanitized copy of original evidence extensions for decay re-judging. Exclude prior verdict and signature fields, but include source binding, file fingerprint, AST path, Wardline provenance, Clarion content hash, and lineage snapshot. Add a regression with a judge that asserts those fields are present during decay.
+Preserve a sanitized copy of original evidence extensions for decay re-judging. Exclude prior verdict and signature fields, but include source binding, file fingerprint, AST path, Wardline provenance, Loomweave content hash, and lineage snapshot. Add a regression with a judge that asserts those fields are present during decay.
 
 ### H3. LLM judge verdict is prompt-injectable through untrusted rationale
 
@@ -164,7 +164,7 @@ Locations:
 
 Evidence:
 
-Pending sign-off requests can carry Clarion/Wardline extensions. The later `SIGNED_OFF` record includes only `signoff_state` and `request_seq`, yet `signoff_signing_fields()` is designed to include Clarion evidence when present.
+Pending sign-off requests can carry Loomweave/Wardline extensions. The later `SIGNED_OFF` record includes only `signoff_state` and `request_seq`, yet `signoff_signing_fields()` is designed to include Loomweave evidence when present.
 
 Impact:
 
@@ -312,7 +312,7 @@ Identity degradation can create locator-keyed records. Filigree binding rejects 
 
 Impact:
 
-A temporary Clarion outage can permanently block a later issue binding, even after backfill, unless bind-time lookup accounts for backfill records.
+A temporary Loomweave outage can permanently block a later issue binding, even after backfill, unless bind-time lookup accounts for backfill records.
 
 Remediation:
 
@@ -499,25 +499,25 @@ Remediation:
 
 Introduce a versioned canonicalizer based on RFC 8785 or a documented strict subset. Reject non-standard JSON values with `allow_nan=False`. Keep compatibility verification for existing signatures.
 
-### M14. Critical-path coverage and live Clarion conformance are not enforced in default CI
+### M14. Critical-path coverage and live Loomweave conformance are not enforced in default CI
 
 Locations:
 
 - [pyproject.toml](/home/john/legis/pyproject.toml:19) lines 19-23
 - [.github/workflows/ci.yml](/home/john/legis/.github/workflows/ci.yml:18) lines 18-21
-- [tests/conformance/test_live_clarion_oracle.py](/home/john/legis/tests/conformance/test_live_clarion_oracle.py:16) line 16
+- [tests/conformance/test_live_loomweave_oracle.py](/home/john/legis/tests/conformance/test_live_loomweave_oracle.py:16) line 16
 
 Evidence:
 
-CI runs pytest and mypy, but there is no coverage dependency, branch coverage threshold, or required live Clarion job. The live Clarion oracle is opt-in.
+CI runs pytest and mypy, but there is no coverage dependency, branch coverage threshold, or required live Loomweave job. The live Loomweave oracle is opt-in.
 
 Impact:
 
-Security/governance behavior can regress without a measurable coverage signal, and Clarion endpoint/header drift can pass default CI.
+Security/governance behavior can regress without a measurable coverage signal, and Loomweave endpoint/header drift can pass default CI.
 
 Remediation:
 
-Add coverage tooling with branch thresholds for `api`, `mcp`, `service`, `enforcement`, `governance`, and `wardline`. Add a scheduled or pre-release live Clarion job with `CLARION_URL`, locator fixture, and HMAC credentials.
+Add coverage tooling with branch thresholds for `api`, `mcp`, `service`, `enforcement`, `governance`, and `wardline`. Add a scheduled or pre-release live Loomweave job with `LOOMWEAVE_URL`, locator fixture, and HMAC credentials.
 
 ## Low Findings
 
@@ -638,7 +638,7 @@ Closest shipped components are:
 - MCP host/agent to stdio JSON-RPC: identity is launch-bound, but MCP skips several HTTP/CLI enforcement checks.
 - Wardline scan payloads to governance: HTTP can enforce signed artifacts; MCP currently cannot.
 - LLM judge to enforcement: model output is parsed as gate authority when a judge is wired.
-- Clarion to identity resolver: HTTPS is required except loopback or explicit insecure override; HMAC headers are used when key material exists.
+- Loomweave to identity resolver: HTTPS is required except loopback or explicit insecure override; HMAC headers are used when key material exists.
 - Filigree binding: binding tuples can be HMAC-signed, but local ledger and remote attach are not transactional.
 - SQLite governance store: hash-chain plus HMAC for protected records, but MCP and binding ledger do not consistently apply all verification layers.
 
@@ -647,13 +647,13 @@ Closest shipped components are:
 1. Fail closed in CI when the governance DB is missing, or explicitly provision the trail artifact before `governance-gate`.
 2. Make MCP use the same Wardline routing ownership and artifact HMAC verification as HTTP.
 3. Add protected-trail HMAC verification to MCP reads and regression-test rechained tampering.
-4. Bind sign-off approval signatures to the original request evidence and fix decay re-judging to preserve source/Clarion context.
+4. Bind sign-off approval signatures to the original request evidence and fix decay re-judging to preserve source/Loomweave context.
 5. Require explicit API token scopes and fail closed for unknown production policies.
 6. Decide whether protected source-code policies require `source_binding.status == "verified"` and enforce that decision server-side.
 7. Harden binding ledger integrity, audit-store malformed JSON handling, and `EntityKey.from_dict()` validation.
 8. Add idempotency and stricter argument validation for side-effecting MCP tools.
 9. Replace global unsafe test fixtures with explicit fixtures and add route-introspection auth tests.
-10. Add coverage thresholds and a scheduled/pre-release live Clarion conformance job.
+10. Add coverage thresholds and a scheduled/pre-release live Loomweave conformance job.
 
 ## Verification Limits
 

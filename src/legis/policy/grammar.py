@@ -6,7 +6,7 @@ types are registered: builtins as defaults, agents adding their own with zero
 human config. Soundness is inherited, not waived — anything the engine cannot
 prove (an unregistered policy, a boundary that returns UNKNOWN, or one that
 raises / returns garbage) yields UNKNOWN with a provenance gap, never a
-false-green. Same seam shape as Wardline's ``TaintSourceProvider`` and Clarion's
+false-green. Same seam shape as Wardline's ``TaintSourceProvider`` and Loomweave's
 ``Transport``.
 """
 

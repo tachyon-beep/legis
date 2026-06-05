@@ -45,7 +45,7 @@ def test_api_overrides_protected_policies_403(tmp_path, monkeypatch, unsafe_dev_
     client = TestClient(app)
     res = client.post("/overrides", json={
         "policy": "protected-policy",
-        "entity": "clarion:eid:abc",
+        "entity": "loomweave:eid:abc",
         "rationale": "bypass",
         "agent_id": "agent-1"
     })
@@ -63,7 +63,7 @@ def test_api_admin_auth(tmp_path, monkeypatch):
     # 1. operator override unauthenticated
     res = client.post("/protected/operator-override", json={
         "policy": "no-eval",
-        "entity": "clarion:eid:abc",
+        "entity": "loomweave:eid:abc",
         "rationale": "override",
         "operator_id": "op-1",
         "file_fingerprint": "fp",
@@ -74,7 +74,7 @@ def test_api_admin_auth(tmp_path, monkeypatch):
     # operator override authenticated
     res = client.post("/protected/operator-override", json={
         "policy": "no-eval",
-        "entity": "clarion:eid:abc",
+        "entity": "loomweave:eid:abc",
         "rationale": "override",
         "operator_id": "op-1",
         "file_fingerprint": "fp",

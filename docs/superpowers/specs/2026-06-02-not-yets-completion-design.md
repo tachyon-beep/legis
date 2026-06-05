@@ -35,8 +35,8 @@ speculative features. YAGNI applies per-WP.
 2. **Degrade honestly.** Any new resolution/verification path that cannot establish a fact records
    the honest negative (`identity_stable=False`, `alive=False`, divergence flagged) — never guesses.
 3. **No new runtime dependency.** New client seams use stdlib `urllib` with an injectable `fetch`,
-   mirroring `identity/clarion_client.py` and `filigree/client.py`.
-4. **Filigree owns issue lifecycle; Clarion owns identity.** legis supplies signal and attestations;
+   mirroring `identity/loomweave_client.py` and `filigree/client.py`.
+4. **Filigree owns issue lifecycle; Loomweave owns identity.** legis supplies signal and attestations;
    it never mutates a sibling's authoritative state.
 5. **Tests are evidence.** Every WP exit criterion is proven by a passing test that exercises the
    asserted behaviour (not the happy path only); adversarial/forged-input tests where integrity is claimed.
@@ -49,18 +49,18 @@ Each WP lists: the gap/limitation it closes, its category, dependencies, and an 
 
 ### Track 1 — Protected-tier identity integrity (Sprint 5 follow-through)
 
-Today only the simple-tier `/overrides` record carries the `clarion` two-axis + lineage-snapshot
+Today only the simple-tier `/overrides` record carries the `loomweave` two-axis + lineage-snapshot
 block, and gap/integrity detection scans only the simple-tier engine trail. Protected and sign-off
 records key on the SEI but are not yet orphan-detectable.
 
-**WP-A1 — Carry the `clarion` block onto protected & sign-off records — ✅ done 2026-06-02**
+**WP-A1 — Carry the `loomweave` block onto protected & sign-off records — ✅ done 2026-06-02**
 - Closes: Sprint 5 Known Limitation ("extension carried on the simple-tier `/overrides` record only").
 - Category: A.
 - Dependencies: none.
 - Exit: a protected override and a sign-off request, when keyed on an alive SEI, persist
-  `extensions["clarion"] = {alive, content_hash, lineage_snapshot}` identical in shape to the
+  `extensions["loomweave"] = {alive, content_hash, lineage_snapshot}` identical in shape to the
   simple-tier record; a test reads each back and asserts the block. For protected (signed) records,
-  the spec must decide and document whether the `clarion` block is inside `signing_fields` — default
+  the spec must decide and document whether the `loomweave` block is inside `signing_fields` — default
   recommendation: identity binding (`entity_key`) stays signed (already true); the two-axis/snapshot
   metadata rides as unsigned extension unless the per-WP plan justifies signing it.
 
@@ -70,7 +70,7 @@ records key on the SEI but are not yet orphan-detectable.
 - Dependencies: **A1** (needs the metadata A1 adds on protected records).
 - Exit: `find_orphan_gaps` / `find_lineage_divergence` consume a unified record set
   (`verified_governance_records()` or equivalent spanning simple + protected trails); a test seeds a
-  protected attestation on an SEI that Clarion reports `alive:false` and asserts the orphan gap
+  protected attestation on an SEI that Loomweave reports `alive:false` and asserts the orphan gap
   surfaces. Protected-trail reads remain HMAC-verified at load (no weakening of the existing guard).
 
 ### Track 2 — Sign-off binding hardening (Sprint 6 §2.3)
@@ -163,7 +163,7 @@ carried but never read. The YAML one-off-exemption companion does not exist.
     plan defines where it comes from — explicit, not invented.) PR context is delivered via the
     injectable `PullRequestSource` seam; forge fetch is the deployment's responsibility.
   - Rename evidence captures pre/post content (or blob refs); test asserts both states on a
-    fabricated rename. This must not break the `/git/renames` Clarion contract (A9 is additive).
+    fabricated rename. This must not break the `/git/renames` Loomweave contract (A9 is additive).
     Rename pre/post state is represented as git blob SHAs (`old_blob`/`new_blob`, additive).
 
 **WP-A10 — `rule_set` / `policy_version` round-trip tests — ✅ done 2026-06-02**
@@ -185,7 +185,7 @@ carried but never read. The YAML one-off-exemption companion does not exist.
 
 **WP-A12 — Batch-resolve consumption + pre-SEI locator backfill**
 - Closes: Sprint 5 Known Limitation ("batch resolve not consumed; bulk backfill deferred").
-- Category: A (legis consumes Clarion's existing `resolve:batch`; no sibling change).
+- Category: A (legis consumes Loomweave's existing `resolve:batch`; no sibling change).
 - Dependencies: none.
 - Exit: a migration path re-keys pre-SEI locator-keyed records via `POST /api/v1/identity/resolve:batch`,
   resolving alive locators to SEIs and leaving dead ones honestly `identity_stable=False`; a test runs
@@ -202,28 +202,28 @@ the sibling must take. Each is "ready, inert until the sibling acts" — a corre
 - legis half: send the HMAC computed in A3 as an opaque `signature` on attach.
 - Joint step: Filigree adds an opaque `signature` column (or properties field) to `entity_associations`,
   stores it verbatim, returns it on read. Filigree's table is currently fixed
-  `(issue_id, clarion_entity_id, content_hash_at_attach, attached_at, attached_by)` with no such field —
+  `(issue_id, loomweave_entity_id, content_hash_at_attach, attached_at, attached_by)` with no such field —
   confirmed in `filigree/src/filigree/db_entity_associations.py`.
 - Exit (legis side): legis's `attach` carries `signature`; a test asserts it is sent; offline against a
   fake that echoes it, legis verifies the round-trip. Operative completion gated on the Filigree change.
 
-**WP-B2 — Live-Clarion oracle integration + Clarion HMAC auth header**
-- Closes: Sprint 5 Known Limitations (oracle runs against a fake, not live Clarion; `HttpClarionIdentity`
+**WP-B2 — Live-Loomweave oracle integration + Loomweave HMAC auth header**
+- Closes: Sprint 5 Known Limitations (oracle runs against a fake, not live Loomweave; `HttpLoomweaveIdentity`
   auth out of scope).
 - Category: B. Dependencies: none on legis side.
-- legis half: an environment-gated integration test target that points the real `HttpClarionIdentity`
-  at a live reference Clarion; provision the `X-Loom-Component` HMAC header (decided alongside the
+- legis half: an environment-gated integration test target that points the real `HttpLoomweaveIdentity`
+  at a live reference Loomweave; provision the `X-Weft-Component` HMAC header (decided alongside the
   WP-3.2 HMAC-key provisioning).
-- Exit (legis side): the env-gated test exists and is skipped without a `CLARION_URL`; the auth header
-  is wired and unit-tested against a fake. Operative completion gated on a running reference Clarion.
+- Exit (legis side): the env-gated test exists and is skipped without a `LOOMWEAVE_URL`; the auth header
+  is wired and unit-tested against a fake. Operative completion gated on a running reference Loomweave.
 
 **WP-B3 — Operative git-rename feed (WP-6.3 enablement)**
-- Closes: Sprint 6 WP-6.3 Known Limitation (inert until Clarion drives a committed rev-range).
+- Closes: Sprint 6 WP-6.3 Known Limitation (inert until Loomweave drives a committed rev-range).
 - Category: B. Dependencies: none on legis side (provider half is contract-locked).
-- Joint step (one of): Clarion tracks a prior-run commit and drives `<base>..HEAD`; **or** legis adds a
-  working-tree rename window AND Clarion relaxes its `!base.is_empty()` selector guard.
+- Joint step (one of): Loomweave tracks a prior-run commit and drives `<base>..HEAD`; **or** legis adds a
+  working-tree rename window AND Loomweave relaxes its `!base.is_empty()` selector guard.
 - Exit (legis side): if the working-tree-window option is chosen, legis implements it behind the existing
-  endpoint with a test; the disclosure in `clarion/docs/federation/contracts.md` is updated. Operative
+  endpoint with a test; the disclosure in `loomweave/docs/federation/contracts.md` is updated. Operative
   completion gated on the joint decision.
 
 **WP-B4 — Wardline→legis hop signature + `@trust_boundary` grammar convergence**
@@ -273,9 +273,9 @@ gated not-yet; Track C is a single doc-edit plan.
 
 ## Risks & non-goals
 
-- **Non-goal:** redefining any sibling's authoritative state (Filigree issue lifecycle, Clarion identity
+- **Non-goal:** redefining any sibling's authoritative state (Filigree issue lifecycle, Loomweave identity
   minting). All sibling-touching WPs stay on legis's side of the seam.
-- **Risk — A1 signing decision:** carrying the `clarion` block into a *signed* protected payload changes
+- **Risk — A1 signing decision:** carrying the `loomweave` block into a *signed* protected payload changes
   the signed field-set; the A1 plan must decide signed-vs-unsigned explicitly and prove the existing
   signature still verifies. Default: unsigned extension, signed identity binding unchanged.
 - **Risk — A9 PR metadata source:** PR title/base/head/state may have no purely-local git source; the A9
@@ -291,5 +291,5 @@ gated not-yet; Track C is a single doc-edit plan.
 > gate), the additive `/git/rename-feed` endpoint and `git_rename_feed_get` MCP
 > tool, and the `/filigree/issues/{id}/closure-gate` endpoint and
 > `filigree_closure_gate_get` MCP tool. Sibling-side consumption (Filigree
-> calling the closure gate; Clarion re-pointing to the rename feed) is tracked
+> calling the closure gate; Loomweave re-pointing to the rename feed) is tracked
 > as a follow-on spec.

@@ -1,6 +1,6 @@
 """Resolve a locator to an SEI-keyed (or honestly-degraded) EntityKey.
 
-This is the WP-5.1 swap point: governance records key on SEI when Clarion proves
+This is the WP-5.1 swap point: governance records key on SEI when Loomweave proves
 a stable, alive identity, and on the locator (``identity_stable=False``) in every
 other case — capability absent, no client, locator not alive, or transport error.
 The resolver never parses an SEI and never guesses. It also captures the REQ-L-01
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from legis.canonical import content_hash
-from legis.identity.clarion_client import ClarionIdentity
+from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
 
 
@@ -28,12 +28,12 @@ class IdentityResolution:
 
 
 class IdentityResolver:
-    def __init__(self, client: ClarionIdentity | None) -> None:
+    def __init__(self, client: LoomweaveIdentity | None) -> None:
         self._client = client
         self._capable: bool | None = None  # probe once per instance
 
     @property
-    def client(self) -> ClarionIdentity | None:
+    def client(self) -> LoomweaveIdentity | None:
         """The underlying read client (None when legis runs standalone)."""
         return self._client
 

@@ -1,12 +1,12 @@
 # Stable Entity Identity (SEI) Conformance Notes
 
-> The authoritative SEI standard lives in the Loom hub at `~/loom/sei-standard.md` (promoted there from the Wardline specs tree, 2026-06-05). All "SEI spec §N" references below are to that document. This file is Legis's own **consumer-side** conformance notes — its obligations, REQ-L-01/02, and resolutions — not a restatement of the standard.
+> The authoritative SEI standard lives in the Weft hub at `~/weft/sei-standard.md` (promoted there from the Wardline specs tree, 2026-06-05). All "SEI spec §N" references below are to that document. This file is Legis's own **consumer-side** conformance notes — its obligations, REQ-L-01/02, and resolutions — not a restatement of the standard.
 
 Legis is a **consumer** of Stable Entity Identity (SEI), not the authority.
 
 ## Core posture
 
-- Clarion mints, persists, re-binds, and resolves SEI.
+- Loomweave mints, persists, re-binds, and resolves SEI.
 - Legis treats SEI as opaque.
 - Legis must never derive, parse, or reinterpret SEI structure.
 
@@ -33,9 +33,9 @@ These are legis's formal §5 obligations — confirmed, not aspirational.
   inspects its internal structure.
 - **Lineage as audit spine.** `lineage(sei)` (born / locator_changed / moved /
   orphaned / superseded) maps directly to legis governance lifecycle states.
-  Clarion's append-only lineage log is the authoritative source for identity
+  Loomweave's append-only lineage log is the authoritative source for identity
   history that legis surfaces to human reviewers.
-- **Honest degrade.** When Clarion does not advertise the `sei` capability,
+- **Honest degrade.** When Loomweave does not advertise the `sei` capability,
   every verdict row receives an explicit `identity_stable: false` flag. Legis
   does not silently fall back to locators as stable keys.
 - **Governance gap on orphan.** When `resolve_sei(sei)` returns `alive: false`,
@@ -46,16 +46,16 @@ These are legis's formal §5 obligations — confirmed, not aspirational.
 - **Two-axis status.** Legis preserves the identity axis (SEI alive / orphaned)
   and content axis (content_hash fresh / stale) as distinct, never collapsed.
 
-## Planned provider contribution to Clarion
+## Planned provider contribution to Loomweave
 
 SEI spec §6 names a seam: "if/when `legis` ships a git interface, that signal
 can move behind it with no change to the SEI model." Legis **claims this seam**:
 once the git interface is built, legis will supply the git-rename and history
 events the §3 matcher consumes. This does not move identity authority out of
-Clarion.
+Loomweave.
 
 The provider interface design should be shaped with legis as the planned first
-implementer, so the seam does not calcify as Clarion-internal before legis ships.
+implementer, so the seam does not calcify as Loomweave-internal before legis ships.
 This is a sequencing request, not a wire-contract change.
 
 ## Pre-lock requirements (SEI spec §0.5 intake)
@@ -65,10 +65,10 @@ locks. See also `docs/superpowers/specs/2026-06-01-legis-roadmap-to-first-class.
 Appendix A for the full context.
 
 **REQ-L-01 — Lineage tamper-evidence approach (lock-blocking).**
-SEI §2.2 describes Clarion's lineage as tamper-evidence-**able** but does not
+SEI §2.2 describes Loomweave's lineage as tamper-evidence-**able** but does not
 specify *how*. Legis's protected cell is built on the custody axiom:
 integrity is re-established at the governance boundary, not assumed from the
-store. Before lock, Clarion must commit to one of:
+store. Before lock, Loomweave must commit to one of:
 1. The `lineage(sei)` response carries a hash chain or signature the consumer
    can verify.
 2. The lineage endpoint is served from an append-only store with no backfill
@@ -80,9 +80,9 @@ Option 3 is acceptable to legis for v1 — legis will store a snapshot hash of
 the lineage at each governance decision and detect divergence on re-read. The
 ask is that the approach be *explicit*, not left ambiguous.
 
-> **RESOLVED (2026-06-02) — Clarion committed to Option 3.** Clarion ships **no**
+> **RESOLVED (2026-06-02) — Loomweave committed to Option 3.** Loomweave ships **no**
 > lineage hash-chain or signature in v1 (`contracts.md` §legis governance
-> consumption: "Integrity is legis's boundary, not Clarion's"). legis establishes
+> consumption: "Integrity is legis's boundary, not Loomweave's"). legis establishes
 > prefix-hash custody at the governance boundary: it stores
 > `{length, hash(lineage[:length])}` at each decision and, on re-read, verifies
 > the snapshot is still a **prefix** of the current lineage — appends (rename/move)
@@ -91,17 +91,17 @@ ask is that the approach be *explicit*, not left ambiguous.
 
 **REQ-L-02 — §6 provider seam design (non-blocking; sequencing).**
 The SEI §3 matcher's git-rename detection should be designed as a typed
-provider interface (not Clarion-internal) before it ships, so legis can supply
+provider interface (not Loomweave-internal) before it ships, so legis can supply
 the event when its git interface is ready. No wire-contract change; sequencing
 only.
 
-> **RESOLVED (2026-06-02) — Clarion built the seam.** Clarion ships the typed
+> **RESOLVED (2026-06-02) — Loomweave built the seam.** Loomweave ships the typed
 > `GitRenameSource` trait + a `LegisGitRenameSource` consumer that pulls
 > `GET /git/renames` and owns the path→locator translation (legis stays
 > path-level). legis's provider half is contract-locked by
 > `tests/contract/test_git_renames_contract.py`. Operative enablement is jointly
-> gated on Clarion driving a committed rev-range (window-mismatch gap, surfaced
-> in clarion/docs/federation/contracts.md) — not a legis build item.
+> gated on Loomweave driving a committed rev-range (window-mismatch gap, surfaced
+> in loomweave/docs/federation/contracts.md) — not a legis build item.
 
 **Informational — lineage push surface.**
 A push/event surface on lineage would let legis react to SEI lifecycle events

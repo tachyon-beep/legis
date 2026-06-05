@@ -56,9 +56,9 @@ being weaker than "same structure as a verdict."
 ## Gated — legis-side ready, sibling pending (NOT gaps)
 
 - **§2.4 git-rename provider** (R-2.4-01, R-2.4-05, milestone 7): the rename-event shape exists
-  end-to-end (model → `/git/renames` endpoint → passing contract test that mirrors Clarion's
-  `parse_legis_rename_json`). Operative end correctly waits on Clarion committed-range driving
-  (README:50). Caveat: the contract is legis's *mirror* of Clarion's parser, not a cross-repo
+  end-to-end (model → `/git/renames` endpoint → passing contract test that mirrors Loomweave's
+  `parse_legis_rename_json`). Operative end correctly waits on Loomweave committed-range driving
+  (README:50). Caveat: the contract is legis's *mirror* of Loomweave's parser, not a cross-repo
   handshake (sibling repo absent) — consistent with Gated.
 - **§2.2 Wardline routing** is `GATED`-typed overall (waits on Wardline grammar), but legis's
   intake/routing side is built and gradeable — hence the Partial/Missing findings above are
@@ -76,7 +76,7 @@ being weaker than "same structure as a verdict."
   a forged record past the unkeyed integrity check yet the keyed HMAC still rejects it; decay
   sweep re-invokes `judge.evaluate`; signed field-set is a *superset* of the roadmap's six.
 - **§2.1 SEI-keyed attestations + Appendix A:** fully complete (32/32), correctly done not Gated
-  (Clarion shipped SEI 2026-06-02). REQ-L-01 is real snapshot-hash **divergence detection**
+  (Loomweave shipped SEI 2026-06-02). REQ-L-01 is real snapshot-hash **divergence detection**
   (prefix-integrity), not polling dressed up. Pull-only confirmed (no push surface).
 - **§2.3 lifecycle authority** (R-2.3-03): legis literally has no issue-status-transition method —
   Filigree authority preserved by construction.
@@ -96,7 +96,7 @@ being weaker than "same structure as a verdict."
 
 Two Sprint-5 Known Limitations not captured as gap IDs above are now CLOSED by
 `docs/superpowers/plans/2026-06-02-not-yets-track-1-protected-tier-integrity.md` (WP-A1/A2):
-(1) the `clarion` two-axis + lineage-snapshot block was carried on the simple-tier `/overrides`
+(1) the `loomweave` two-axis + lineage-snapshot block was carried on the simple-tier `/overrides`
 record only — protected and sign-off records now also carry the block (unsigned extension;
 signed identity binding unchanged); (2) orphan-gap and lineage-integrity detection read the
 simple-tier engine trail only — `find_orphan_gaps` / `find_lineage_divergence` now consume

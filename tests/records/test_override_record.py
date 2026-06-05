@@ -6,7 +6,7 @@ from legis.store.audit_store import AuditStore
 def make_record(**over):
     base = dict(
         policy="no-secret-in-log",
-        entity_key=EntityKey.from_locator("clarion:func:mod.foo"),
+        entity_key=EntityKey.from_locator("loomweave:func:mod.foo"),
         rationale="boundary validated by test_x",
         agent_id="agent-1",
         recorded_at="2026-06-01T00:00:00+00:00",
@@ -17,7 +17,7 @@ def make_record(**over):
 
 def test_record_mirrors_identity_stable_from_key():
     assert make_record().identity_stable is False
-    r2 = make_record(entity_key=EntityKey.from_sei("clarion:eid:x"))
+    r2 = make_record(entity_key=EntityKey.from_sei("loomweave:eid:x"))
     assert r2.identity_stable is True
 
 
@@ -26,7 +26,7 @@ def test_record_persists_through_store_and_round_trips(tmp_path):
     s.append(make_record().to_payload())
     stored = s.read_all()[0].payload
     assert stored["policy"] == "no-secret-in-log"
-    assert stored["entity_key"]["value"] == "clarion:func:mod.foo"
+    assert stored["entity_key"]["value"] == "loomweave:func:mod.foo"
     assert stored["identity_stable"] is False
     assert s.verify_integrity() is True
 

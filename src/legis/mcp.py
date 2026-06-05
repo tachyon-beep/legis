@@ -116,13 +116,13 @@ def build_runtime(agent_id: str) -> McpRuntime:
     clock = SystemClock()
     engine = None
     identity = None
-    clarion_url = os.environ.get("CLARION_API_URL")
-    if clarion_url:
-        from legis.identity.clarion_client import HttpClarionIdentity, clarion_hmac_key_from_env
+    loomweave_url = os.environ.get("LOOMWEAVE_API_URL")
+    if loomweave_url:
+        from legis.identity.loomweave_client import HttpLoomweaveIdentity, loomweave_hmac_key_from_env
         from legis.identity.resolver import IdentityResolver
 
         identity = IdentityResolver(
-            HttpClarionIdentity(clarion_url, hmac_key=clarion_hmac_key_from_env())
+            HttpLoomweaveIdentity(loomweave_url, hmac_key=loomweave_hmac_key_from_env())
         )
 
     protected_gate = None
@@ -265,7 +265,7 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "git_rename_feed_get",
             "description": (
-                "Clarion-ready rename feed: committed renames over base..head plus "
+                "Loomweave-ready rename feed: committed renames over base..head plus "
                 "optional uncommitted working-tree renames."
             ),
             "inputSchema": _schema(

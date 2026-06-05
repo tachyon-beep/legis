@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-01  
 **Status:** Approved design  
-**Scope:** Bootstrap `/home/john/legis` as a docs-first GitHub repository that explains Legis's role in Loom and gives Clarion, Filigree, and Wardline something concrete to review before implementation starts.
+**Scope:** Bootstrap `/home/john/legis` as a docs-first GitHub repository that explains Legis's role in Weft and gives Loomweave, Filigree, and Wardline something concrete to review before implementation starts.
 
 ---
 
@@ -13,14 +13,14 @@ It must explain:
 
 - what Legis is,
 - what Legis is not,
-- which authority it owns inside Loom, and
-- how it composes with Clarion, Filigree, and Wardline without pretending that code or APIs already exist.
+- which authority it owns inside Weft, and
+- how it composes with Loomweave, Filigree, and Wardline without pretending that code or APIs already exist.
 
 The repository is meant to be a durable coordination artifact for the suite, not a marketing stub.
 
 ## 2. Product role
 
-Legis is the planned fourth Loom product. Its bounded authority is:
+Legis is the planned fourth Weft product. Its bounded authority is:
 
 - **project change provenance,**
 - **git/branch/commit/PR context,**
@@ -37,17 +37,17 @@ Legis is **not**:
 
 - a federation registry,
 - a suite-wide broker,
-- a replacement for Clarion's code identity authority,
+- a replacement for Loomweave's code identity authority,
 - a replacement for Filigree's workflow authority, or
 - a replacement for Wardline's policy authority.
 
-The repo should present Legis as a narrow Loom member with a clearly bounded domain, not as hidden suite infrastructure.
+The repo should present Legis as a narrow Weft member with a clearly bounded domain, not as hidden suite infrastructure.
 
 ## 3. Pairwise composition with the suite
 
-### 3.1 Clarion
+### 3.1 Loomweave
 
-Clarion remains the authority for code identity and structure, including Stable Entity Identity (SEI) once that standard lands. Legis may later provide git-history and rename evidence that Clarion consumes during re-index and lineage work, but Clarion remains the sole authority for SEI minting, persistence, re-binding, and resolution.
+Loomweave remains the authority for code identity and structure, including Stable Entity Identity (SEI) once that standard lands. Legis may later provide git-history and rename evidence that Loomweave consumes during re-index and lineage work, but Loomweave remains the sole authority for SEI minting, persistence, re-binding, and resolution.
 
 ### 3.2 Filigree
 
@@ -69,7 +69,7 @@ Legis will eventually describe repository state and change lineage:
 - commit metadata,
 - pull-request context,
 - rename/history evidence, and
-- other project-change facts that sibling Loom products may consume.
+- other project-change facts that sibling Weft products may consume.
 
 ### 4.2 CI / check surface
 
@@ -88,10 +88,10 @@ Legis will eventually hold change-scoped governance facts and attestations. Once
 
 Legis must align with the approved SEI direction without claiming authority it does not have.
 
-- **Clarion is the SEI authority.**
+- **Loomweave is the SEI authority.**
 - **Legis consumes SEI as opaque.**
 - **Legis must never derive, parse, or reinterpret SEI.**
-- **Legis may later provide git-rename/history signals that Clarion consumes, but that does not make Legis an identity authority.**
+- **Legis may later provide git-rename/history signals that Loomweave consumes, but that does not make Legis an identity authority.**
 - **If Legis is absent, sibling products must still function and degrade honestly rather than guess.**
 
 The initial repo should make this explicit so the suite does not accidentally drift toward a hidden central dependency.
@@ -126,9 +126,9 @@ The repository starts as a docs-first skeleton with minimal scaffolding.
 
 The root README should do four jobs well:
 
-1. identify Legis as the planned fourth Loom product;
+1. identify Legis as the planned fourth Weft product;
 2. explain its bounded authority in plain language;
-3. give a pairwise story for Clarion, Filigree, and Wardline; and
+3. give a pairwise story for Loomweave, Filigree, and Wardline; and
 4. state the current status clearly: **design-ready, not implemented**.
 
 It should also link readers to the federation docs and design docs so other projects can review the intended fit without reading internal planning material first.
@@ -139,8 +139,8 @@ The initial repo should **not**:
 
 - claim a stable CLI or HTTP API,
 - act as a landing page for speculative feature lists,
-- recreate Loom URI / registry concepts,
-- centralize authority already owned by Clarion, Filigree, or Wardline, or
+- recreate Weft URI / registry concepts,
+- centralize authority already owned by Loomweave, Filigree, or Wardline, or
 - imply that Legis is required for existing suite members to function.
 
 ## 9. Quality bar
@@ -148,10 +148,10 @@ The initial repo should **not**:
 The initial repo is successful when:
 
 1. a newcomer can understand Legis's bounded role in under five minutes;
-2. a maintainer from Clarion, Filigree, or Wardline can review the repo and see how Legis is intended to compose with their product;
+2. a maintainer from Loomweave, Filigree, or Wardline can review the repo and see how Legis is intended to compose with their product;
 3. the docs are explicit that Legis is proposed/planned and not yet implemented; and
 4. the SEI implications for Legis are stated clearly enough that later implementation work does not accidentally violate the suite-wide standard.
 
 ## 10. Result
 
-The first Legis repository should behave like a clean contract boundary: small, explicit, and honest. It gives the Loom suite a fourth product shape to react to, while keeping future implementation work anchored to a clear authority boundary and a clear federation story.
+The first Legis repository should behave like a clean contract boundary: small, explicit, and honest. It gives the Weft suite a fourth product shape to react to, while keeping future implementation work anchored to a clear authority boundary and a clear federation story.

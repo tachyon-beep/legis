@@ -39,14 +39,14 @@ def test_no_identity_keys_on_locator_with_empty_extensions():
     assert ext == {}
 
 
-def test_identity_resolution_carries_clarion_extension_when_alive_known():
+def test_identity_resolution_carries_loomweave_extension_when_alive_known():
     resolved_key = EntityKey.from_locator("resolved")
     identity = _FakeIdentity(
         _FakeResult(resolved_key, alive=True, content_hash="abc", lineage_snapshot=["e1"])
     )
     key, ext = resolve_for_record(identity, "src/foo.py:bar")
     assert key == resolved_key
-    assert ext["clarion"] == {
+    assert ext["loomweave"] == {
         "alive": True,
         "content_hash": "abc",
         "lineage_snapshot": ["e1"],
@@ -55,14 +55,14 @@ def test_identity_resolution_carries_clarion_extension_when_alive_known():
     }
 
 
-def test_alive_false_records_clarion_extension_with_alive_false():
+def test_alive_false_records_loomweave_extension_with_alive_false():
     resolved_key = EntityKey.from_locator("src/foo.py:bar")
     identity = _FakeIdentity(
         _FakeResult(resolved_key, alive=False, content_hash=None, lineage_snapshot=None)
     )
     key, ext = resolve_for_record(identity, "src/foo.py:bar")
     assert key == resolved_key
-    assert ext["clarion"] == {
+    assert ext["loomweave"] == {
         "alive": False,
         "content_hash": None,
         "lineage_snapshot": None,
@@ -71,7 +71,7 @@ def test_alive_false_records_clarion_extension_with_alive_false():
     }
 
 
-def test_identity_with_unknown_alive_omits_clarion_extension():
+def test_identity_with_unknown_alive_omits_loomweave_extension():
     resolved_key = EntityKey.from_locator("resolved")
     identity = _FakeIdentity(
         _FakeResult(resolved_key, alive=None, content_hash=None, lineage_snapshot=None)

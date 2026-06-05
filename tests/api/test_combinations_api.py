@@ -33,7 +33,7 @@ class _FakeFiligree:
         self.attached.append(
             (issue_id, entity_id, content_hash, actor, signoff_seq, signature)
         )
-        return {"issue_id": issue_id, "clarion_entity_id": entity_id,
+        return {"issue_id": issue_id, "loomweave_entity_id": entity_id,
                 "content_hash_at_attach": content_hash, "attached_at": "t",
                 "attached_by": actor}
 
@@ -84,7 +84,7 @@ def test_bind_issue_endpoint_attaches_sei_from_cleared_record(tmp_path):
                        FixedClock("2026-06-02T12:00:00+00:00"))
     req = gate.request(
         policy="PY-WL-101",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         rationale="needs a human",
         agent_id="agent-1",
     )
@@ -94,10 +94,10 @@ def test_bind_issue_endpoint_attaches_sei_from_cleared_record(tmp_path):
     resp = c.post(f"/signoff/{req.seq}/bind-issue", json={"issue_id": "ISSUE-1"})
 
     assert resp.status_code == 201
-    assert resp.json()["clarion_entity_id"] == "clarion:eid:abc"
+    assert resp.json()["loomweave_entity_id"] == "loomweave:eid:abc"
     # SEI sourced from the trail; content_hash is "" because request() records no
-    # clarion ext — the honest behaviour of the real record.
-    assert fil.attached == [("ISSUE-1", "clarion:eid:abc", "", "legis", req.seq, None)]
+    # loomweave ext — the honest behaviour of the real record.
+    assert fil.attached == [("ISSUE-1", "loomweave:eid:abc", "", "legis", req.seq, None)]
 
 
 def test_bind_issue_endpoint_uses_resolved_backfill_for_locator_keyed_request(tmp_path):
@@ -115,12 +115,12 @@ def test_bind_issue_endpoint_uses_resolved_backfill_for_locator_keyed_request(tm
         {
             "event": "SEI_BACKFILL",
             "original_seq": req.seq,
-            "entity_key": EntityKey.from_sei("clarion:eid:abc").to_dict(),
+            "entity_key": EntityKey.from_sei("loomweave:eid:abc").to_dict(),
             "identity_stable": True,
             "agent_id": "legis-sei-backfill",
             "recorded_at": "2026-06-04T12:00:00+00:00",
             "extensions": {
-                "clarion": {
+                "loomweave": {
                     "alive": True,
                     "content_hash": "hash-abc",
                     "lineage_snapshot": {"length": 1, "hash": "lineage"},
@@ -140,9 +140,9 @@ def test_bind_issue_endpoint_uses_resolved_backfill_for_locator_keyed_request(tm
     resp = c.post(f"/signoff/{req.seq}/bind-issue", json={"issue_id": "ISSUE-1"})
 
     assert resp.status_code == 201
-    assert resp.json()["clarion_entity_id"] == "clarion:eid:abc"
+    assert resp.json()["loomweave_entity_id"] == "loomweave:eid:abc"
     assert fil.attached == [
-        ("ISSUE-1", "clarion:eid:abc", "hash-abc", "legis", req.seq, None)
+        ("ISSUE-1", "loomweave:eid:abc", "hash-abc", "legis", req.seq, None)
     ]
 
 
@@ -155,10 +155,10 @@ def test_bind_issue_endpoint_transmits_hmac_binding_signature(tmp_path):
                        FixedClock("2026-06-02T12:00:00+00:00"))
     req = gate.request(
         policy="PY-WL-101",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         rationale="needs a human",
         agent_id="agent-1",
-        extensions={"clarion": {"content_hash": "blake3"}},
+        extensions={"loomweave": {"content_hash": "blake3"}},
     )
     gate.sign_off(request_seq=req.seq, operator_id="operator-1")
 
@@ -170,7 +170,7 @@ def test_bind_issue_endpoint_transmits_hmac_binding_signature(tmp_path):
     assert verify(
         {
             "issue_id": "ISSUE-1",
-            "entity_id": "clarion:eid:abc",
+            "entity_id": "loomweave:eid:abc",
             "content_hash": "blake3",
             "signoff_seq": req.seq,
         },
@@ -178,7 +178,7 @@ def test_bind_issue_endpoint_transmits_hmac_binding_signature(tmp_path):
         key,
     )
     assert fil.attached == [
-        ("ISSUE-1", "clarion:eid:abc", "blake3", "legis", req.seq, sig)
+        ("ISSUE-1", "loomweave:eid:abc", "blake3", "legis", req.seq, sig)
     ]
 
 
@@ -188,7 +188,7 @@ def test_bind_issue_endpoint_rejects_uncleared_request(tmp_path):
                        FixedClock("2026-06-02T12:00:00+00:00"))
     req = gate.request(
         policy="PY-WL-101",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         rationale="needs a human",
         agent_id="agent-1",
     )
@@ -221,26 +221,26 @@ def test_bind_issue_records_to_ledger_and_binding_is_verifiable(tmp_path):
     fil = _FakeFiligree()
     c = _client(tmp_path, signoff_gate=sg, filigree=fil, binding_ledger=ledger)
 
-    sg.request(policy="prod-deploy", entity_key=EntityKey.from_sei("clarion:eid:abc"),
+    sg.request(policy="prod-deploy", entity_key=EntityKey.from_sei("loomweave:eid:abc"),
                rationale="r", agent_id="a",
-               extensions={"clarion": {"content_hash": "blake3", "alive": True,
+               extensions={"loomweave": {"content_hash": "blake3", "alive": True,
                                        "lineage_snapshot": None}})
     sg.sign_off(request_seq=1, operator_id="op-1")
 
     # The body's content_hash is attacker-supplied and must NOT win: the SEI and
     # content_hash come from the CLEARED sign-off record ("blake3"), never the body.
     resp = c.post("/signoff/1/bind-issue",
-                  json={"issue_id": "ISSUE-1", "sei": "clarion:eid:abc",
+                  json={"issue_id": "ISSUE-1", "sei": "loomweave:eid:abc",
                         "content_hash": "ATTACKER-SUPPLIED"})
     assert resp.status_code == 201
     assert resp.json()["binding_seq"] == 1
     # Full tuple: the cleared "blake3" wins at index [2], NOT "ATTACKER-SUPPLIED".
-    assert fil.attached[0] == ("ISSUE-1", "clarion:eid:abc", "blake3", "legis", 1, None)
+    assert fil.attached[0] == ("ISSUE-1", "loomweave:eid:abc", "blake3", "legis", 1, None)
 
     got = c.get("/signoff/1/binding")
     assert got.status_code == 200
     assert got.json()["issue_id"] == "ISSUE-1"
-    assert got.json()["entity_key"]["value"] == "clarion:eid:abc"
+    assert got.json()["entity_key"]["value"] == "loomweave:eid:abc"
     # The recorded binding reflects the cleared content_hash, not the body's.
     assert got.json()["content_hash"] == "blake3"
 
@@ -256,16 +256,16 @@ def test_bind_issue_fails_closed_on_tampered_signed_signoff_request(tmp_path):
     )
     req = gate.request(
         policy="prod-deploy",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         rationale="r",
         agent_id="a",
-        extensions={"clarion": {"content_hash": "blake3", "alive": True,
+        extensions={"loomweave": {"content_hash": "blake3", "alive": True,
                                 "lineage_snapshot": {"length": 1, "hash": "lh"}}},
     )
     gate.sign_off(request_seq=req.seq, operator_id="op-1")
     _tamper_first_record(
         db,
-        lambda p: p["extensions"]["clarion"].update({"content_hash": "forged"}),
+        lambda p: p["extensions"]["loomweave"].update({"content_hash": "forged"}),
     )
     c = _client(
         tmp_path,
@@ -293,7 +293,7 @@ def test_binding_read_500_on_forged_record(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'bind.db'}")
     ledger = BindingLedger(store, FixedClock("2026-06-02T12:00:00+00:00"), key=b"k")
     store.append({"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
-                  "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
+                  "entity_key": {"value": "loomweave:eid:x", "identity_stable": True},
                   "content_hash": "h", "recorded_at": "t",
                   "binding_signature": "hmac-sha256:v1:deadbeef"})
     c = _client(tmp_path, binding_ledger=ledger)
@@ -606,7 +606,7 @@ def test_closure_gate_200_on_real_verified_binding(tmp_path):
     ledger.record(
         signoff_seq=7,
         issue_id="ISSUE-7",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         content_hash="h7",
     )
     client = TestClient(create_app(binding_ledger=ledger))
@@ -634,7 +634,7 @@ def test_closure_gate_500_on_integrity_failure(tmp_path):
     ledger.record(
         signoff_seq=7,
         issue_id="ISSUE-7",
-        entity_key=EntityKey.from_sei("clarion:eid:abc"),
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
         content_hash="h7",
     )
     # Append a forged binding record (bad signature) — poisons the whole ledger.
@@ -642,7 +642,7 @@ def test_closure_gate_500_on_integrity_failure(tmp_path):
         "kind": "issue_binding",
         "signoff_seq": 8,
         "issue_id": "ISSUE-7",
-        "entity_key": {"value": "clarion:eid:abc", "identity_stable": True},
+        "entity_key": {"value": "loomweave:eid:abc", "identity_stable": True},
         "content_hash": "h7",
         "recorded_at": "t",
         "binding_signature": "hmac-sha256:v1:deadbeef",

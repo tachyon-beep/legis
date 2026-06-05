@@ -1,8 +1,8 @@
 # Federation Notes
 
-> The Loom federation hub at `~/loom` is the authoritative source for federation-wide patterns: the roster and axiom (`~/loom/doctrine.md`), the SEI conformance standard (`~/loom/sei-standard.md`), and the contracts index (`~/loom/contracts-index.md`). This directory holds Legis's own participation and consumer-conformance notes; it does not restate those federation-wide patterns.
+> The Weft federation hub at `~/weft` is the authoritative source for federation-wide patterns: the roster and axiom (`~/weft/doctrine.md`), the SEI conformance standard (`~/weft/sei-standard.md`), and the contracts index (`~/weft/contracts-index.md`). This directory holds Legis's own participation and consumer-conformance notes; it does not restate those federation-wide patterns.
 
-This directory describes how Legis is expected to participate in Loom as a planned product.
+This directory describes how Legis is expected to participate in Weft as a planned product.
 
 ## Legis in the federation
 
@@ -13,7 +13,7 @@ Legis contributes change-oriented context:
 - CI/check outcomes, and
 - governance or attestation facts about change.
 
-Legis does not replace sibling authorities. Clarion still owns code identity and structure, Filigree still owns workflow state, and Wardline still owns policy findings and dossier truth.
+Legis does not replace sibling authorities. Loomweave still owns code identity and structure, Filigree still owns workflow state, and Wardline still owns policy findings and dossier truth.
 
 ## Current documents
 

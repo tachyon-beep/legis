@@ -18,14 +18,14 @@ def _fake_fetch(responses):
 
 
 def test_attach_posts_entity_id_and_hash():
-    resp = {"issue_id": "ISSUE-1", "clarion_entity_id": "clarion:eid:abc",
+    resp = {"issue_id": "ISSUE-1", "loomweave_entity_id": "loomweave:eid:abc",
             "content_hash_at_attach": "h", "attached_at": "t", "attached_by": "legis"}
     fetch = _fake_fetch({("POST", "/api/issue/ISSUE-1/entity-associations"): resp})
     c = HttpFiligreeClient("http://localhost", fetch=fetch)
-    out = c.attach("ISSUE-1", "clarion:eid:abc", "h", actor="legis")
+    out = c.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
     assert out == resp
     assert fetch.calls[-1] == ("POST", "http://localhost/api/issue/ISSUE-1/entity-associations",
-                               {"entity_id": "clarion:eid:abc", "content_hash": "h", "actor": "legis"})
+                               {"entity_id": "loomweave:eid:abc", "content_hash": "h", "actor": "legis"})
 
 
 def test_attach_posts_signoff_attestation_when_supplied():
@@ -34,7 +34,7 @@ def test_attach_posts_signoff_attestation_when_supplied():
     c = HttpFiligreeClient("http://localhost", fetch=fetch)
     out = c.attach(
         "ISSUE-1",
-        "clarion:eid:abc",
+        "loomweave:eid:abc",
         "h",
         actor="legis",
         signoff_seq=7,
@@ -42,7 +42,7 @@ def test_attach_posts_signoff_attestation_when_supplied():
     )
     assert out == resp
     assert fetch.calls[-1][2] == {
-        "entity_id": "clarion:eid:abc",
+        "entity_id": "loomweave:eid:abc",
         "content_hash": "h",
         "actor": "legis",
         "signoff_seq": 7,
@@ -53,9 +53,9 @@ def test_attach_posts_signoff_attestation_when_supplied():
 def test_associations_for_entity_url_encodes_colons():
     fetch = _fake_fetch({("GET", "/api/entity-associations"): {"associations": []}})
     c = HttpFiligreeClient("http://localhost", fetch=fetch)
-    assert c.associations_for_entity("clarion:eid:abc") == []
+    assert c.associations_for_entity("loomweave:eid:abc") == []
     url = fetch.calls[-1][1]
-    assert "entity_id=clarion%3Aeid%3Aabc" in url   # colons percent-encoded
+    assert "entity_id=loomweave%3Aeid%3Aabc" in url   # colons percent-encoded
 
 
 def test_attach_escapes_path_traversal_payload():
@@ -63,7 +63,7 @@ def test_attach_escapes_path_traversal_payload():
     # Expected URL has quoted/escaped path traversal characters
     fetch = _fake_fetch({("POST", "/api/issue/..%2F..%2Fadmin%2Fdelete/entity-associations"): resp})
     c = HttpFiligreeClient("http://localhost", fetch=fetch)
-    c.attach("../../admin/delete", "clarion:eid:abc", "h", actor="legis")
+    c.attach("../../admin/delete", "loomweave:eid:abc", "h", actor="legis")
     assert fetch.calls[-1][1] == "http://localhost/api/issue/..%2F..%2Fadmin%2Fdelete/entity-associations"
 
 
@@ -71,18 +71,18 @@ def test_attach_rejects_non_object_response():
     fetch = _fake_fetch({("POST", "/api/issue/ISSUE-1/entity-associations"): []})
     with pytest.raises(FiligreeError):
         HttpFiligreeClient("http://localhost", fetch=fetch).attach(
-            "ISSUE-1", "clarion:eid:abc", "h", actor="legis"
+            "ISSUE-1", "loomweave:eid:abc", "h", actor="legis"
         )
 
 
 def test_associations_rejects_non_object_and_non_list_response():
     fetch = _fake_fetch({("GET", "/api/entity-associations"): []})
     with pytest.raises(FiligreeError):
-        HttpFiligreeClient("http://localhost", fetch=fetch).associations_for_entity("clarion:eid:abc")
+        HttpFiligreeClient("http://localhost", fetch=fetch).associations_for_entity("loomweave:eid:abc")
 
     fetch = _fake_fetch({("GET", "/api/entity-associations"): {"associations": "bad"}})
     with pytest.raises(FiligreeError):
-        HttpFiligreeClient("http://localhost", fetch=fetch).associations_for_entity("clarion:eid:abc")
+        HttpFiligreeClient("http://localhost", fetch=fetch).associations_for_entity("loomweave:eid:abc")
 
 
 def test_client_rejects_unsafe_base_urls():

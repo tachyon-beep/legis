@@ -22,26 +22,26 @@ def _ledger(tmp_path):
 def test_record_then_get_round_trips_the_binding(tmp_path):
     ledger, _ = _ledger(tmp_path)
     seq = ledger.record(signoff_seq=7, issue_id="ISSUE-1",
-                        entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h")
+                        entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="h")
     assert seq == 1
     got = ledger.get(7)
     assert got["signoff_seq"] == 7
     assert got["issue_id"] == "ISSUE-1"
-    assert got["entity_key"] == {"value": "clarion:eid:abc", "identity_stable": True}
+    assert got["entity_key"] == {"value": "loomweave:eid:abc", "identity_stable": True}
     assert got["content_hash"] == "h"
     assert got["binding_signature"].startswith("hmac-sha256:v2:")
 
 
 def test_verify_passes_for_a_legit_record(tmp_path):
     ledger, _ = _ledger(tmp_path)
-    ledger.record(signoff_seq=1, issue_id="I", entity_key=EntityKey.from_sei("clarion:eid:x"),
+    ledger.record(signoff_seq=1, issue_id="I", entity_key=EntityKey.from_sei("loomweave:eid:x"),
                   content_hash="h")
     ledger.verify()  # does not raise
 
 
 def test_unknown_signoff_seq_returns_none(tmp_path):
     ledger, _ = _ledger(tmp_path)
-    ledger.record(signoff_seq=1, issue_id="I", entity_key=EntityKey.from_sei("clarion:eid:x"),
+    ledger.record(signoff_seq=1, issue_id="I", entity_key=EntityKey.from_sei("loomweave:eid:x"),
                   content_hash="h")
     assert ledger.get(99) is None
 
@@ -49,7 +49,7 @@ def test_unknown_signoff_seq_returns_none(tmp_path):
 def test_forged_signature_is_rejected(tmp_path):
     ledger, store = _ledger(tmp_path)
     store.append({"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
-                  "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
+                  "entity_key": {"value": "loomweave:eid:x", "identity_stable": True},
                   "content_hash": "h", "recorded_at": "t",
                   "binding_signature": "hmac-sha256:v1:deadbeef"})
     with pytest.raises(BindingError):
@@ -60,7 +60,7 @@ def test_forged_signature_is_rejected(tmp_path):
 
 def _signed_payload(**overrides):
     payload = {"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
-               "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
+               "entity_key": {"value": "loomweave:eid:x", "identity_stable": True},
                "content_hash": "h", "recorded_at": "t"}
     payload["binding_signature"] = sign(binding_signing_fields(payload), KEY)
     payload.update(overrides)
@@ -73,7 +73,7 @@ def test_tampering_a_signed_field_is_rejected(tmp_path):
     # in the signed set.
     ledger, store = _ledger(tmp_path)
     store.append(_signed_payload(
-        entity_key={"value": "clarion:eid:x", "identity_stable": False},
+        entity_key={"value": "loomweave:eid:x", "identity_stable": False},
         recorded_at="2020-01-01T00:00:00+00:00",
     ))
     with pytest.raises(BindingError):
@@ -90,7 +90,7 @@ def test_tampering_content_hash_is_rejected(tmp_path):
 def test_missing_signature_is_rejected(tmp_path):
     ledger, store = _ledger(tmp_path)
     store.append({"kind": "issue_binding", "signoff_seq": 1, "issue_id": "I",
-                  "entity_key": {"value": "clarion:eid:x", "identity_stable": True},
+                  "entity_key": {"value": "loomweave:eid:x", "identity_stable": True},
                   "content_hash": "h", "recorded_at": "t"})
     with pytest.raises(BindingError):
         ledger.verify()
@@ -107,9 +107,9 @@ def test_malformed_binding_record_is_rejected(tmp_path):
 def test_broken_append_only_hash_chain_is_rejected(tmp_path):
     ledger, store = _ledger(tmp_path)
     ledger.record(signoff_seq=1, issue_id="I-1",
-                  entity_key=EntityKey.from_sei("clarion:eid:x"), content_hash="h1")
+                  entity_key=EntityKey.from_sei("loomweave:eid:x"), content_hash="h1")
     ledger.record(signoff_seq=2, issue_id="I-2",
-                  entity_key=EntityKey.from_sei("clarion:eid:y"), content_hash="h2")
+                  entity_key=EntityKey.from_sei("loomweave:eid:y"), content_hash="h2")
     con = sqlite3.connect(tmp_path / "bind.db")
     con.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")
     con.execute("DELETE FROM audit_log WHERE seq=1")
@@ -126,7 +126,7 @@ def test_broken_append_only_hash_chain_is_rejected(tmp_path):
 def test_get_by_issue_id_returns_verified_record(tmp_path):
     ledger, _ = _ledger(tmp_path)
     ledger.record(signoff_seq=7, issue_id="ISSUE-7",
-                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+                  entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="h7")
     got = ledger.get_by_issue_id("ISSUE-7")
     assert got is not None
     assert got["issue_id"] == "ISSUE-7"
@@ -137,7 +137,7 @@ def test_get_by_issue_id_returns_verified_record(tmp_path):
 def test_get_by_issue_id_returns_none_when_absent(tmp_path):
     ledger, _ = _ledger(tmp_path)
     ledger.record(signoff_seq=7, issue_id="ISSUE-7",
-                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+                  entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="h7")
     assert ledger.get_by_issue_id("ISSUE-MISSING") is None
 
 
@@ -145,10 +145,10 @@ def test_get_by_issue_id_raises_on_tampered_ledger(tmp_path):
     ledger, store = _ledger(tmp_path)
     # Record a legitimate ISSUE-7 binding first
     ledger.record(signoff_seq=7, issue_id="ISSUE-7",
-                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="h7")
+                  entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="h7")
     # Then append a forged binding record (bad signature) — poisons the whole ledger
     store.append({"kind": "issue_binding", "signoff_seq": 8, "issue_id": "ISSUE-7",
-                  "entity_key": {"value": "clarion:eid:abc", "identity_stable": True},
+                  "entity_key": {"value": "loomweave:eid:abc", "identity_stable": True},
                   "content_hash": "h7", "recorded_at": "t",
                   "binding_signature": "hmac-sha256:v1:deadbeef"})
     # Fail-closed: must raise rather than return the real record from a poisoned ledger
@@ -162,9 +162,9 @@ def test_get_by_issue_id_returns_last_binding_for_issue(tmp_path):
     # implementation — last-inserted must win, not highest seq.
     ledger, _ = _ledger(tmp_path)
     ledger.record(signoff_seq=5, issue_id="ISSUE-7",
-                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="hash-first")
+                  entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="hash-first")
     ledger.record(signoff_seq=1, issue_id="ISSUE-7",
-                  entity_key=EntityKey.from_sei("clarion:eid:abc"), content_hash="hash-second")
+                  entity_key=EntityKey.from_sei("loomweave:eid:abc"), content_hash="hash-second")
     got = ledger.get_by_issue_id("ISSUE-7")
     assert got is not None
     assert got["signoff_seq"] == 1
