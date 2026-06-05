@@ -16,6 +16,7 @@ import sys
 from typing import Any, TextIO
 
 from legis import __version__
+from legis.canonical import content_hash
 from legis.checks.models import CheckRun
 from legis.checks.surface import CheckSurface
 from legis.clock import SystemClock
@@ -522,10 +523,42 @@ def _judged_result_payload(
     }
 
 
-def _existing_idempotent_record(runtime: McpRuntime, key: str) -> Any | None:
+def _override_idempotency_request_hash(
+    *,
+    agent_id: str,
+    policy: str,
+    entity: str,
+    rationale: str,
+    cell: str,
+    file_fingerprint: str | None,
+    ast_path: str | None,
+) -> str:
+    return content_hash(
+        {
+            "version": 1,
+            "agent_id": agent_id,
+            "policy": policy,
+            "entity": entity,
+            "rationale": rationale,
+            "cell": cell,
+            "file_fingerprint": file_fingerprint,
+            "ast_path": ast_path,
+        }
+    )
+
+
+def _existing_idempotent_record(
+    runtime: McpRuntime, key: str, request_hash: str
+) -> Any | None:
     for rec in _verified_records(runtime):
-        if rec.payload.get("extensions", {}).get("mcp_idempotency_key") == key:
+        ext = rec.payload.get("extensions", {})
+        if ext.get("mcp_idempotency_key") != key:
+            continue
+        if ext.get("mcp_idempotency_request_hash") == request_hash:
             return rec
+        raise InvalidArgumentError(
+            "idempotency key already references a different override request"
+        )
     return None
 
 
@@ -640,16 +673,32 @@ def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str,
                 raise NotEnabledError(
                     f"cell {explanation.cell!r} is not enabled for override submission"
                 )
+            idempotency_request_hash = (
+                _override_idempotency_request_hash(
+                    agent_id=runtime.agent_id,
+                    policy=policy,
+                    entity=entity,
+                    rationale=rationale,
+                    cell=explanation.cell,
+                    file_fingerprint=_optional_string(args, "file_fingerprint"),
+                    ast_path=_optional_string(args, "ast_path"),
+                )
+                if idempotency_key is not None
+                else None
+            )
             extra_extensions = (
                 {
                     "mcp_idempotency_key": idempotency_key,
+                    "mcp_idempotency_request_hash": idempotency_request_hash,
                     "mcp_cell": explanation.cell,
                 }
                 if idempotency_key is not None
                 else {"mcp_cell": explanation.cell}
             )
-            if idempotency_key is not None:
-                existing = _existing_idempotent_record(runtime, idempotency_key)
+            if idempotency_key is not None and idempotency_request_hash is not None:
+                existing = _existing_idempotent_record(
+                    runtime, idempotency_key, idempotency_request_hash
+                )
                 if existing is not None:
                     return _tool_result(
                         _idempotent_override_response(existing.payload, existing.seq)
