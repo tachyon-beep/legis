@@ -38,13 +38,23 @@ def test_surface_override_cell_records_an_override(tmp_path):
     assert "untrusted reaches trusted" in trail[0]["rationale"]
 
 
-def test_invalid_trust_tier_properties_are_rejected():
-    import pytest
-
+def test_non_tier_diagnostic_properties_are_accepted_and_carried(tmp_path):
+    # Properties are write-only evidence (legis never acts on the values), so a
+    # non-tier diagnostic is carried verbatim, not rejected — and it lands in the
+    # record under "properties" (NOT mislabelled as "tiers").
+    eng = _engine(tmp_path)
     scan = _scan()
-    scan["findings"][0]["properties"] = {"actual_return": "ROOT"}
-    with pytest.raises(WardlinePayloadError, match="trust tier"):
-        active_defects(scan)
+    scan["findings"][0]["properties"] = {"actual_return": "ROOT", "sink": "os.system"}
+    route_findings(
+        active_defects(scan),
+        policy=WardlineCellPolicy.SURFACE_OVERRIDE,
+        agent_id="agent-1",
+        resolve=lambda q: (EntityKey.from_locator(q or "unknown"), {}),
+        engine=eng,
+    )
+    ward = eng.trail()[0]["extensions"]["wardline"]
+    assert ward["properties"] == {"actual_return": "ROOT", "sink": "os.system"}
+    assert "tiers" not in ward
 
 
 def test_suppressed_defect_without_proof_is_rejected():

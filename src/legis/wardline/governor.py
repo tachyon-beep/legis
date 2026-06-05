@@ -12,8 +12,9 @@ on (resolved to an SEI via the same Sprint-5 resolver when available); its
 ``message`` seeds the rationale.
 
 * **surface+override** records an override carrying the finding's
-  ``fingerprint``, trust ``tiers`` (the one shared vocabulary, verbatim from
-  ``properties``), and ``severity`` in the record's ``extensions``.
+  ``fingerprint``, its ``properties`` (carried verbatim — trust tiers AND any
+  diagnostics, never re-derived or constrained), and ``severity`` in the
+  record's ``extensions``.
 * **block+escalate** opens a sign-off request carrying ``rule_id`` (policy),
   the resolved entity, the seeded rationale, and the same Clarion/Wardline
   evidence extensions the surface paths preserve.
@@ -100,7 +101,7 @@ def route_findings(
         rationale = f"[wardline {f.rule_id}] {f.message}"
         wardline_ext = {
             "fingerprint": f.fingerprint,
-            "tiers": dict(f.properties),
+            "properties": dict(f.properties),
             "severity": f.severity.value,
             **dict(batch_provenance or {}),
         }
