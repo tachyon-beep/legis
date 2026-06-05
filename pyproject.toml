@@ -1,6 +1,6 @@
 [project]
 name = "legis"
-version = "1.0.0rc2"
+version = "1.0.0rc3"
 description = "Legis — the git/CI + governance layer of the Weft suite"
 readme = "README.md"
 license = "MIT"
@@ -11,6 +11,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    "pydantic>=2",
     "pyyaml>=6.0",
     "uvicorn[standard]>=0.30",
     "sqlalchemy>=2.0",
