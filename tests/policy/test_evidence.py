@@ -122,3 +122,30 @@ def test_shadowed_via_aug_assign():
     )
     res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
     assert res.code == "shadowed"
+
+
+def test_policy_not_asserted_when_boundary_result_is_only_in_the_message():
+    # The boundary result must be the assertion SUBJECT (in the condition),
+    # not merely mentioned in the assert message alongside the policy name
+    # (Q-M8). Here the asserted condition is unrelated; result + policy appear
+    # only in the f-string message.
+    fn = _fn(
+        'def test_x():\n'
+        '    result = guarded(1)\n'
+        '    unrelated = 5\n'
+        '    assert unrelated == 5, f"{result} satisfies PY-WL-101"\n'
+    )
+    res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
+    assert res.code == "policy_not_asserted"
+
+
+def test_ok_when_boundary_result_is_the_condition_and_policy_in_message():
+    # The established accepted pattern must keep passing: boundary result is
+    # the asserted subject; policy name may live in the message.
+    fn = _fn(
+        'def test_x():\n'
+        '    result = guarded(1)\n'
+        '    assert result == "ok", "PY-WL-101"\n'
+    )
+    res = evaluate_test_evidence(fn, {"guarded"}, ("PY-WL-101",))
+    assert res.code == "ok"
