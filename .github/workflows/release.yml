@@ -1,10 +1,9 @@
-name: publish
+name: release
 
 # Publishes legis to PyPI when a GitHub Release is published.
 # Authentication is PyPI Trusted Publishing (OIDC) — no API token is stored.
-# One-time setup on PyPI: register this repo + the `publish.yml` workflow as a
-# trusted publisher for the `legis` project (use a "pending" publisher for the
-# very first upload, since the project does not exist on PyPI yet).
+# The matching trusted publisher on PyPI is keyed to this repo, the `release.yml`
+# workflow, and the `pypi` environment below — keep those three in sync with it.
 
 on:
   release:
