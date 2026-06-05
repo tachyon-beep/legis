@@ -22,6 +22,7 @@ class PullSurface:
             Column("state", String(32), nullable=False, index=True),
             Column("url", Text, nullable=True),
             Column("recorded_by", Text, nullable=True),
+            Column("provenance", Text, nullable=True),
         )
         self._md.create_all(self._engine)
         self._ensure_schema()
@@ -34,6 +35,8 @@ class PullSurface:
             }
             if "recorded_by" not in cols:
                 conn.exec_driver_sql("ALTER TABLE pull_requests ADD COLUMN recorded_by TEXT")
+            if "provenance" not in cols:
+                conn.exec_driver_sql("ALTER TABLE pull_requests ADD COLUMN provenance TEXT")
 
     def record(self, pr: PullRequest) -> None:
         with self._engine.begin() as conn:
@@ -47,6 +50,7 @@ class PullSurface:
                     state=pr.state.value,
                     url=pr.url,
                     recorded_by=pr.recorded_by,
+                    provenance=pr.provenance,
                 )
             )
 
@@ -65,4 +69,5 @@ class PullSurface:
             state=PullRequestState(row.state),
             url=row.url,
             recorded_by=row.recorded_by,
+            provenance=row.provenance or "unauthenticated",
         )

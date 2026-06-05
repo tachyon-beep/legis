@@ -79,3 +79,16 @@ def test_check_api_records_server_owned_writer_provenance(tmp_path, monkeypatch)
     assert post.json()["recorded_by"] == "ci-bot"
     got = c.get(f"/checks/commit/{'a' * 40}").json()[0]
     assert got["recorded_by"] == "ci-bot"
+
+
+def test_recorded_check_is_labeled_unauthenticated_provenance(tmp_path):
+    # Q-M2: a POST /checks fact is a writer-supplied claim, not forge-verified.
+    # It must be labeled provenance: unauthenticated so a consumer never treats
+    # a writer-asserted "pass" as authoritative, and a writer cannot forge the
+    # label (provenance is server-controlled, not an input field).
+    c = client(tmp_path)
+    resp = c.post("/checks", json=a_run(provenance="authenticated"))
+    assert resp.status_code == 201
+    assert resp.json()["provenance"] == "unauthenticated"
+    read = c.get(f"/checks/commit/{'a' * 40}")
+    assert read.json()[0]["provenance"] == "unauthenticated"
