@@ -41,7 +41,24 @@ class PolicyCellRegistry:
 
 
 def default_policy_cells() -> PolicyCellRegistry:
+    """Dev/test default: unlisted policies land in the chill self-clear cell.
+
+    Convenient for local work, but NOT a safe production default — see
+    ``fail_closed_policy_cells``. Production composition roots must only select
+    this under an explicit dev opt-in (Q-M7 / audit H6).
+    """
     return PolicyCellRegistry(default_cell="chill")
+
+
+def fail_closed_policy_cells() -> PolicyCellRegistry:
+    """Production fail-closed default for absent configuration.
+
+    An unlisted policy escalates to a human operator (``structured`` /
+    block+escalate) instead of silently self-clearing (``chill``), so a typo,
+    a missing registry entry, or an incomplete deployment cannot downgrade
+    governance to self-clear (Q-M7 / audit H6).
+    """
+    return PolicyCellRegistry(default_cell="structured")
 
 
 def load_policy_cells(path: str | Path) -> PolicyCellRegistry:

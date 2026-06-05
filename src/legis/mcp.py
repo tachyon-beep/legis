@@ -30,6 +30,7 @@ from legis.governance.binding_ledger import BindingError
 from legis.policy.cells import (
     PolicyCellRegistry,
     default_policy_cells,
+    fail_closed_policy_cells,
     load_policy_cells,
 )
 from legis.policy.grammar import PolicyGrammar, default_grammar
@@ -108,7 +109,13 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
     if default_path.exists():
         return load_policy_cells(default_path)
 
-    return default_policy_cells()
+    # No configuration found. Fail closed — an unmatched policy escalates to a
+    # human operator (structured) — unless a deployment explicitly opts into the
+    # chill dev posture. Otherwise an incomplete deployment would silently
+    # downgrade governance to self-clear (Q-M7 / audit H6).
+    if os.environ.get("LEGIS_DEV_DEFAULT_CELLS") == "1":
+        return default_policy_cells()
+    return fail_closed_policy_cells()
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
@@ -450,7 +457,9 @@ def _check_to_dict(run: CheckRun) -> dict[str, Any]:
 
 
 def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
-    return runtime.cell_registry or default_policy_cells()
+    # Defensive fallback if a runtime was built without a registry: fail closed
+    # rather than self-clear (Q-M7 / audit H6).
+    return runtime.cell_registry or fail_closed_policy_cells()
 
 
 def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
