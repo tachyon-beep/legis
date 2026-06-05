@@ -1,0 +1,21 @@
+{
+  "plan": "docs/superpowers/plans/2026-06-05-legis-deferred-followups-remediation.md",
+  "review_date": "2026-06-05",
+  "mode": "simplified",
+  "dimensions_reviewed": ["reality"],
+  "verdict": "APPROVED",
+  "reality_verdict": "PLAN IS GROUNDED",
+  "summary": "Reality-only review. 0 hallucinations, 0 blocking issues, 3 LOW warnings. Every legis-side symbol, path, response shape, and spec cross-reference confirmed against the codebase. Both Section A gaps (A1 missing rename-feed contract-lock test, A2 status conflation in build_rename_feed) are real and correctly described. Sibling claims in Section B confirmed against local /home/john/clarion and /home/john/filigree copies; Filigree signature column (B1) and gate-call (B5) correctly described as still-open joint steps.",
+  "blocking_issues": [],
+  "warnings": [
+    {"id": "W1", "severity": "LOW", "issue": "Plan prose cites 2026-06-05-legis-home-closeout.review.json (source of M5/M6) but that file was removed in the superpowers-artifact cleanup. Labels are genuine (verified in git show 4cb1731); task descriptions are self-contained. A worker should not try to open the file."},
+    {"id": "W2", "severity": "LOW", "issue": "'480 passed, 2 skipped' is a time-sensitive baseline; collection currently shows 482 (480 runnable + 2 skip-collected). Math is consistent. Exit criterion is 'green', not a fixed count. Confirm with `uv run pytest -q` before Section A."},
+    {"id": "W3", "severity": "LOW", "issue": "tests/git/test_rename_feed.py currently asserts only old_path/new_path of RenameEvidence; A1's full-field contract-lock is correctly identified as new work."}
+  ],
+  "information_gaps": [
+    "Filigree close_issue/api_close_issue gate-call absence (B5) inferred from home-closeout design doc, not directly read in /home/john/filigree source — verify before coordinating.",
+    "Sibling claims verified against local /home/john/clarion and /home/john/filigree copies; ensure those are current before acting on Section B."
+  ],
+  "risk": {"implementation_risk": "Low", "reversibility": "Easy — Section A tasks are additive; /git/renames contract and Clarion consumer untouched."},
+  "next_steps": "Section A is safe to execute (run A1 contract-lock before A2 so the committed shape is pinned first). Sections B-D are coordination/tracking; their exits live in sibling repos."
+}

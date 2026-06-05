@@ -27,11 +27,18 @@ and (D) informational pre-lock asks to siblings.
 
 ---
 
-## Section A — Legis-side, actionable now (TDD)
+## Section A — Legis-side, actionable now (TDD) — ✅ done 2026-06-05
 
 Both tasks harden the additive `/git/rename-feed` surface *before* Clarion re-points to it
 (Section B, item B3). They are the two open review findings from
 `2026-06-05-legis-home-closeout.review.json` (M5, M6) that were accepted as follow-ups.
+
+> **✅ done 2026-06-05.** A1: `tests/contract/test_git_rename_feed_contract.py` pins the feed's
+> object shape + committed-entry field set + Clarion-parse re-point safety. A2: `build_rename_feed`
+> now returns an additive `worktree_checked: bool` (= `include_worktree`) disambiguating
+> "checked-and-clean" from "not-checked"; `status` semantics unchanged so A1's lock and the
+> `/git/renames` byte-compatibility hold. Suite `483 passed, 2 skipped`; mypy clean;
+> `policy-boundary-check: PASS`.
 
 ### Task A1: Contract-lock test for `/git/rename-feed` (review finding M6)
 
@@ -41,12 +48,13 @@ whereas the existing `/git/renames` returns an **array** — the shape Clarion's
 shape would break Clarion silently. Pin it now.
 
 **Files:**
-- Modify: `tests/git/test_rename_feed.py` (or the API contract test module that covers it)
+- Created: `tests/contract/test_git_rename_feed_contract.py`
 
-- [ ] **Step 1:** Write a contract-lock test asserting the exact top-level keys and value types
-  of the `/git/rename-feed` response (and each `RenameEvidence` entry's fields), mirroring the
-  style of the `/git/renames` contract test that mirrors Clarion's parser.
-- [ ] **Step 2:** Run it green: `uv run pytest tests/git/test_rename_feed.py -q`.
+- [x] **Step 1:** Contract-lock test asserts the required top-level keys (superset-tolerant so A2's
+  additive field is allowed), `status` ∈ known set, echoed `base`/`head`, and that each `committed`
+  entry carries *exactly* the `RenameEvidence` field set; a second test parses `committed[]` the way
+  Clarion's `parse_legis_rename_json` does and asserts the rename survives (re-point safety).
+- [x] **Step 2:** Green: `2 passed`.
 
 ### Task A2: Disambiguate "checked-and-clean" from "not-checked" in the rename feed (review finding M5)
 
@@ -58,12 +66,12 @@ with "I did not check the working tree." A consumer cannot tell the difference.
 - Modify: `src/legis/git/rename_feed.py`
 - Modify: `tests/git/test_rename_feed.py`
 
-- [ ] **Step 1:** Write a failing test: `include_worktree=True` + zero worktree renames must be
-  distinguishable from `include_worktree=False` (e.g. a `worktree_checked: bool` field, or a
-  distinct `status` value). Keep `/git/renames` untouched.
-- [ ] **Step 2:** Implement the disambiguation additively; do not change the committed-rename
-  shape A1 locks.
-- [ ] **Step 3:** Green the focused suite + full suite + mypy.
+- [x] **Step 1:** Failing test `test_worktree_checked_distinguishes_clean_from_unchecked`
+  (RED: `KeyError: 'worktree_checked'`). Both calls report `status=="committed_only"`, so only the
+  new flag distinguishes them. `/git/renames` untouched.
+- [x] **Step 2:** Added `worktree_checked: bool` (= `include_worktree`) to the feed dict; `status`
+  semantics and the committed-rename shape A1 locks are unchanged (additive only). Docstring updated.
+- [x] **Step 3:** Green — focused `17 passed`, full `483 passed, 2 skipped`, mypy clean.
 
 **Section A exit:** `uv run pytest -q` and `uv run mypy` green; the `/git/rename-feed` shape is
 contract-locked and worktree-checked state is observable.
@@ -131,13 +139,14 @@ agent-customer need appears, and design then.
 
 ---
 
-## Verification (Section A only)
+## Verification (Section A only) — ✅ 2026-06-05
 
-- [ ] `uv run pytest -q` green (currently `480 passed, 2 skipped`; the 2 skips are B2's
-  env-gated live oracle).
-- [ ] `uv run mypy` clean.
-- [ ] `/git/rename-feed` response shape is contract-locked and worktree-checked state is
-  observable.
+- [x] `uv run pytest -q` green — `483 passed, 2 skipped` (+3 vs. the 480 baseline; the 2 skips
+  are B2's env-gated live oracle).
+- [x] `uv run mypy` clean — `no issues found in 63 source files`.
+- [x] `/git/rename-feed` response shape is contract-locked and worktree-checked state is
+  observable (`worktree_checked` field).
+- [x] `uv run legis policy-boundary-check --root src --repo-root .` → `PASS`.
 
 Sections B–D have no legis-side verification — their exit criteria live in the sibling repos
 and are listed inline above.
