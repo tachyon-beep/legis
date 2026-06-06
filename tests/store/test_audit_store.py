@@ -1,8 +1,9 @@
+import logging
 import sqlite3
 
 import pytest
 
-from legis.store.audit_store import AuditStore
+from legis.store.audit_store import AuditStore, _apply_sqlite_pragmas
 
 
 def db_path(tmp_path):
@@ -126,6 +127,96 @@ def test_audit_store_concurrent_writes(tmp_path):
     recs = s.read_all()
     assert len(recs) == 100
     assert s.verify_integrity() is True
+
+
+def test_pragma_wal_actually_applied_on_file(tmp_path):
+    # The connect listener must put the on-disk DB into WAL mode. journal_mode is
+    # a persistent file-header property, so an *external* connection that never
+    # ran our listener still observes it — proof WAL truly applied to the file.
+    make_store(tmp_path)
+    conn = raw_conn(tmp_path)
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        conn.close()
+    assert mode.lower() == "wal"
+
+
+def test_pragma_busy_timeout_set_on_listener_connection(tmp_path):
+    # busy_timeout is per-connection (not persistent), so it must be read on a
+    # connection that went through the listener — i.e. one from the store engine.
+    s = make_store(tmp_path)
+    with s._engine.connect() as conn:
+        timeout = conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
+    assert timeout == 5000
+
+
+class _FakeCursor:
+    def __init__(self, journal_mode):
+        self._journal_mode = journal_mode
+        self.closed = False
+
+    def execute(self, _sql):
+        return self
+
+    def fetchone(self):
+        return (self._journal_mode,)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeConn:
+    def __init__(self, journal_mode):
+        self.cursor_obj = _FakeCursor(journal_mode)
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+class _RaisingCursor:
+    def __init__(self):
+        self.closed = False
+
+    def execute(self, _sql):
+        raise sqlite3.OperationalError("PRAGMA rejected")
+
+    def close(self):
+        self.closed = True
+
+
+class _RaisingConn:
+    def __init__(self):
+        self.cursor_obj = _RaisingCursor()
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def test_apply_pragmas_warns_when_wal_not_applied(caplog):
+    # The silent failure the bare `except` never caught: PRAGMA journal_mode=WAL
+    # does NOT raise when WAL is unavailable — it returns the mode actually in
+    # force (e.g. 'delete'/'memory'). That must surface as a warning.
+    conn = _FakeConn("delete")
+    with caplog.at_level(logging.WARNING, logger="legis.store.audit_store"):
+        _apply_sqlite_pragmas(conn, "sqlite:///some.db")
+    assert any(
+        "wal" in r.getMessage().lower() for r in caplog.records
+    ), f"expected a WAL-not-applied warning; got {[r.getMessage() for r in caplog.records]}"
+    assert conn.cursor_obj.closed is True
+
+
+def test_apply_pragmas_warns_with_exc_info_on_pragma_exception(caplog):
+    # A PRAGMA that genuinely raises must be logged (with exc_info), not swallowed,
+    # and the connection setup must still complete (cursor closed, no re-raise).
+    conn = _RaisingConn()
+    with caplog.at_level(logging.WARNING, logger="legis.store.audit_store"):
+        _apply_sqlite_pragmas(conn, "sqlite:///some.db")
+    assert caplog.records, "expected a warning when PRAGMA application raises"
+    rec = caplog.records[-1]
+    assert rec.levelno >= logging.WARNING
+    assert rec.exc_info is not None
+    assert conn.cursor_obj.closed is True
 
 
 def test_verify_integrity_handles_non_finite_float_as_integrity_failure(tmp_path):

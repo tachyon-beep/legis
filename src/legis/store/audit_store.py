@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -37,7 +38,49 @@ from sqlalchemy.pool import NullPool
 
 from legis.canonical import canonical_json, content_hash
 
+logger = logging.getLogger(__name__)
+
 GENESIS = "0" * 64
+
+
+def _apply_sqlite_pragmas(dbapi_connection: Any, url: str) -> None:
+    """Apply the durability/concurrency PRAGMAs to a freshly-opened connection.
+
+    Best-effort: a PRAGMA failure must not break connection setup (the store is
+    still usable without WAL), but it must NOT vanish silently either. Two
+    distinct failure channels are surfaced:
+
+    * An exception while issuing a PRAGMA → logged with ``exc_info``.
+    * WAL silently not taking effect → ``PRAGMA journal_mode=WAL`` does *not*
+      raise when WAL is unavailable (read-only mount, some network filesystems,
+      in-memory DBs); it returns the journal mode actually in force. The old
+      ``except Exception: pass`` never caught this most-likely case, so the
+      connection ran without WAL and the symptom surfaced much later as an
+      opaque "database is locked" under concurrency. Detect and log it here.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        journal_row = cursor.execute("PRAGMA journal_mode=WAL").fetchone()
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        journal_mode = journal_row[0] if journal_row else None
+        if journal_mode is not None and str(journal_mode).lower() != "wal":
+            logger.warning(
+                "audit store SQLite did not enter WAL mode (journal_mode=%r, "
+                "url=%s); concurrent appends may surface as opaque 'database is "
+                "locked' errors instead of waiting",
+                journal_mode,
+                url,
+            )
+    except Exception:  # noqa: BLE001  (PRAGMA failure must not break connect)
+        logger.warning(
+            "audit store failed to apply SQLite PRAGMAs (url=%s); connection "
+            "falls back to defaults (no WAL / default busy_timeout)",
+            url,
+            exc_info=True,
+        )
+    finally:
+        cursor.close()
 
 
 @dataclass(frozen=True)
@@ -68,17 +111,7 @@ class AuditStore:
         @event.listens_for(self._engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             if "sqlite" in url:
-                cursor = dbapi_connection.cursor()
-                try:
-                    cursor.execute("PRAGMA journal_mode=WAL")
-                    cursor.execute("PRAGMA synchronous=NORMAL")
-                    cursor.execute("PRAGMA busy_timeout=5000")
-                except Exception:
-                    pass
-                finally:
-                    cursor.close()
-
-        # Remove the global force_immediate_transaction event listener to prevent locking on read-only queries.
+                _apply_sqlite_pragmas(dbapi_connection, url)
 
         self._md = MetaData()
         self._log = Table(
