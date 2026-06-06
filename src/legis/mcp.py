@@ -1187,32 +1187,41 @@ def handle_request(request: dict[str, Any], runtime: McpRuntime) -> dict[str, An
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def _read_bounded_line(stream: TextIO, max_chars: int) -> tuple[str, bool]:
-    """Read one newline-terminated record, bounded to ``max_chars``.
+def _read_bounded_line(stream: TextIO, max_bytes: int) -> tuple[str, bool]:
+    """Read one newline-terminated record, bounded to ``max_bytes`` UTF-8 bytes.
 
     Returns ``(line, overflow)``. ``overflow`` is True when the record exceeded
-    the bound — the remainder of that over-long line is then drained to the next
-    newline so framing stays aligned for the following request. Returns
-    ``("", False)`` at EOF. ``readline(max_chars + 1)`` stops at a newline OR the
-    size cap, so a record longer than the bound comes back without a trailing
-    newline — the signal we key on.
+    the bound. ``readline(max_bytes + 1)`` caps the *character* read — a decoded
+    ``str`` holds at most 4 bytes per char, so this keeps the in-memory read
+    bounded — and is the cheap first gate: a record longer than the cap in
+    characters comes back without a trailing newline, so its physical remainder
+    is drained to the next newline to keep framing aligned. A record that fits in
+    characters but whose UTF-8 encoding still exceeds ``max_bytes`` (multibyte
+    content) is rejected too, so the limit means bytes as its name promises.
+    Returns ``("", False)`` at EOF.
     """
-    line = stream.readline(max_chars + 1)
+    line = stream.readline(max_bytes + 1)
     if line == "":
         return "", False
-    if len(line) > max_chars and not line.endswith("\n"):
+    if len(line) > max_bytes and not line.endswith("\n"):
+        # Truncated mid-record at the character cap: drain the rest of the
+        # physical line so the next read starts on a record boundary.
         while True:
-            extra = stream.readline(max_chars + 1)
+            extra = stream.readline(max_bytes + 1)
             if extra == "" or extra.endswith("\n"):
                 break
+        return line, True
+    if len(line.encode("utf-8")) > max_bytes:
+        # Complete (newline-terminated) but over the byte budget; framing is
+        # already aligned past the newline, so no drain is needed.
         return line, True
     return line, False
 
 
 def run_jsonrpc(input_stream: TextIO, output_stream: TextIO, runtime: McpRuntime) -> None:
-    max_chars = _max_request_bytes()
+    max_bytes = _max_request_bytes()
     while True:
-        line, overflow = _read_bounded_line(input_stream, max_chars)
+        line, overflow = _read_bounded_line(input_stream, max_bytes)
         if not line:
             break  # EOF
         if overflow:
@@ -1223,7 +1232,7 @@ def run_jsonrpc(input_stream: TextIO, output_stream: TextIO, runtime: McpRuntime
                         "id": None,
                         "error": {
                             "code": -32700,
-                            "message": f"request exceeds maximum size of {max_chars} bytes",
+                            "message": f"request exceeds maximum size of {max_bytes} bytes",
                         },
                     },
                     separators=(",", ":"),

@@ -1557,3 +1557,22 @@ def test_max_request_bytes_env_override_and_fallback(monkeypatch):
     for bad in ("not-an-int", "0", "-5"):
         monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", bad)
         assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+
+
+def test_read_bounded_line_enforces_bytes_not_chars():
+    # The bound is named in BYTES; readline() counts characters. A record that
+    # fits the char count but whose UTF-8 encoding exceeds the cap (multibyte
+    # content) must still overflow — otherwise the byte limit could be exceeded
+    # ~4×. The record AFTER it must stay framed.
+    from legis.mcp import _read_bounded_line
+
+    multibyte = "中" * 200  # 200 chars, 600 UTF-8 bytes — under 400 chars, over 400 bytes
+    stream = io.StringIO(f"{multibyte}\n" + '{"next":true}\n')
+
+    line, overflow = _read_bounded_line(stream, 400)
+    assert overflow is True
+    assert line.startswith("中")
+
+    nxt, nxt_overflow = _read_bounded_line(stream, 400)
+    assert nxt_overflow is False
+    assert nxt == '{"next":true}\n'
