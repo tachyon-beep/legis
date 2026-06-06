@@ -245,9 +245,12 @@ def test_build_runtime_initialize_does_not_create_local_state(tmp_path, monkeypa
     )
 
     assert responses[0]["result"]["serverInfo"]["name"] == "legis"
-    assert not (tmp_path / "legis-governance.db").exists()
-    assert not (tmp_path / "legis-checks.db").exists()
-    assert not (tmp_path / "legis-pulls.db").exists()
+    # The federated store subtree must not be created on the initialize path —
+    # stores are opened lazily, so neither the .weft/legis dir nor any DB appears.
+    assert not (tmp_path / ".weft").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-governance.db").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-checks.db").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-pulls.db").exists()
 
 
 def test_policy_explain_returns_service_explanation_payload(tmp_path):

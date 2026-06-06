@@ -26,10 +26,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from legis import __version__
-# Re-exported so existing `from legis.api.app import DEFAULT_*_DB` call sites
-# keep working, while the canonical definition lives in the transport-agnostic
-# config module instead of the HTTP layer (Q-H2).
-from legis.config import DEFAULT_CHECK_DB, DEFAULT_GOVERNANCE_DB
+# Store-location resolvers live in the transport-agnostic config module, not the
+# HTTP layer, so `mcp` and any other composition root share one source (Q-H2).
+from legis.config import (
+    binding_db_url,
+    check_db_url,
+    governance_db_url,
+    pull_db_url,
+)
 from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.enforcement.engine import EnforcementEngine
@@ -336,7 +340,7 @@ def create_app(
         from legis.clock import SystemClock
         from legis.store.audit_store import AuditStore
 
-        gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB)
+        gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
         gov_store = AuditStore(gov_db_url)
         clock = SystemClock()
 
@@ -367,7 +371,7 @@ def create_app(
 
         if binding_ledger is None:
             from legis.governance.binding_ledger import BindingLedger
-            bind_db_url = os.environ.get("LEGIS_BINDING_DB", "sqlite:///legis-binding.db")
+            bind_db_url = os.environ.get("LEGIS_BINDING_DB", binding_db_url())
             binding_ledger = BindingLedger(AuditStore(bind_db_url), clock, hmac_key)
     state: dict[str, Any] = {
         "checks": check_surface,
@@ -381,13 +385,13 @@ def create_app(
 
     def checks() -> CheckSurface:
         if state["checks"] is None:
-            check_db = os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
+            check_db = os.environ.get("LEGIS_CHECK_DB", check_db_url())
             state["checks"] = CheckSurface(check_db)
         return state["checks"]
 
     def pulls() -> PullSurface:
         if state["pulls"] is None:
-            pull_db = os.environ.get("LEGIS_PULL_DB", "sqlite:///legis-pulls.db")
+            pull_db = os.environ.get("LEGIS_PULL_DB", pull_db_url())
             state["pulls"] = PullSurface(pull_db)
         return state["pulls"]
 
@@ -396,7 +400,7 @@ def create_app(
             from legis.clock import SystemClock
             from legis.store.audit_store import AuditStore
 
-            gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB)
+            gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
             state["enforcement"] = EnforcementEngine(
                 AuditStore(gov_db_url), SystemClock()
             )
@@ -820,7 +824,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=f"unknown cell/severity: {exc}")
 
         # Only provision the governance store when a surface cell can actually run:
-        # engine() lazily creates legis-governance.db, so a pure block_escalate scan
+        # engine() lazily creates .weft/legis/legis-governance.db, so a pure block_escalate scan
         # must not touch it. signoff_gate is an injected param (no side effect).
         needs_engine = bool(cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
                                      WardlineCellPolicy.SURFACE_ONLY})

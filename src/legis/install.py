@@ -629,11 +629,15 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
 # .gitignore
 # ---------------------------------------------------------------------------
 
-_LEGIS_IGNORE_RULES = (".legis/", "legis.yaml")
+# Only legis's OWN rules — never another member's. ``.weft/legis/`` is legis's
+# machine-written runtime-state subtree (DBs &c.); ``.weft/`` as a whole is the
+# shared federation namespace and must NOT be claimed wholesale here.
+_LEGIS_IGNORE_RULES = (".legis/", "legis.yaml", ".weft/legis/")
 _LEGIS_IGNORE_BLOCK = (
-    "\n# Legis — local working dir / config (regenerated/local; never commit)\n"
+    "\n# Legis — local working dir / config + runtime state (regenerated/local; never commit)\n"
     ".legis/\n"
     "legis.yaml\n"
+    ".weft/legis/\n"
 )
 
 

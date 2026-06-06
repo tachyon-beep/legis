@@ -1,13 +1,142 @@
-"""Shared default store locations — the single source for the governance and
-check database URLs.
+"""Store-location resolver — the single source for legis's database URLs.
 
 These previously lived on ``legis.api.app``, which forced ``mcp`` (and any
 other composition root) to import from the HTTP layer just to learn where the
 governance store lives (Q-H2). They are transport-agnostic configuration, so
 they belong here; ``api`` and ``mcp`` both import them from this module.
+
+**Federated store layout.** legis's machine-written runtime state lives under
+``.weft/legis/`` at the project root — the federation convention shared with
+the other weft members. legis is the *sole writer* of this subtree. Resolution
+is anchored at the current working directory: the same notion the installer
+uses (``cli.py`` sets ``project_root = Path.cwd()``), and every member resolves
+``.weft/`` against that same cwd, so running each tool from the project root
+keeps them in agreement. The default URLs are therefore cwd-relative
+(``sqlite:///.weft/legis/...``), preserving the historical resolution semantics.
+
+**weft.toml is enrich-only, never load-bearing.** The operator-authored
+``weft.toml`` may carry a ``[legis]`` table; we read it but never write it.
+The single enrichment knob is ``store_dir`` (relocate the subtree; relative to
+the project root, or absolute). Per-DB overrides remain the ``LEGIS_*_DB`` env
+vars, which take precedence over weft.toml. An absent file, an absent
+``[legis]`` section, or even a malformed weft.toml must still boot on the
+built-in defaults — legis never *depends* on weft.toml (Doctrine §5 deletion
+test).
+
+**Clean break.** There is no fallback to the old cwd-root locations
+(``legis-governance.db`` &c.). Existing deployments move their files into
+``.weft/legis/`` or pin the ``LEGIS_*_DB`` env vars.
+
+**Keys are out of scope.** Operator-held signing keys are the authority-key
+carve-out — capability-confined and deliberately not agent-reachable. They are
+env-provided secrets, not files under this subtree; nothing here touches key
+storage.
 """
 
 from __future__ import annotations
 
-DEFAULT_CHECK_DB = "sqlite:///legis-checks.db"
-DEFAULT_GOVERNANCE_DB = "sqlite:///legis-governance.db"
+import logging
+import tomllib
+from pathlib import Path
+
+from sqlalchemy.engine import make_url
+
+logger = logging.getLogger(__name__)
+
+WEFT_MEMBER = "legis"
+
+# Built-in DB filenames under the member's runtime-state subtree. The legacy
+# names are preserved so a clean-break move is a relocation, not a rename.
+_CHECK_DB_NAME = "legis-checks.db"
+_GOVERNANCE_DB_NAME = "legis-governance.db"
+_BINDING_DB_NAME = "legis-binding.db"
+_PULL_DB_NAME = "legis-pulls.db"
+
+
+def project_root() -> Path:
+    """The directory the federation treats as project root (the cwd)."""
+    return Path.cwd()
+
+
+def _weft_legis_config() -> dict:
+    """Read the operator-authored ``[legis]`` table from ``weft.toml``.
+
+    Returns an empty enrichment ({}) when the file is absent, has no ``[legis]``
+    table, or cannot be parsed — weft.toml is never load-bearing, so a missing
+    or broken operator file degrades to built-in defaults rather than failing
+    boot. We are READ-ONLY here; this function never writes weft.toml.
+    """
+    path = project_root() / "weft.toml"
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, tomllib.TOMLDecodeError):
+        # A broken operator file must not be load-bearing. Surface it on the log
+        # (so a fat-fingered weft.toml is diagnosable) but boot on defaults.
+        logger.warning(
+            "weft.toml present but unreadable (%s); legis booting on built-in "
+            "store defaults",
+            path,
+            exc_info=True,
+        )
+        return {}
+    section = data.get(WEFT_MEMBER)
+    return section if isinstance(section, dict) else {}
+
+
+def _store_dir() -> Path:
+    """The runtime-state subtree: ``.weft/legis`` by default, or the operator's
+    ``[legis] store_dir`` if set. Relative paths resolve against cwd at connect
+    time (three-slash URL); an absolute store_dir yields an absolute URL.
+    """
+    configured = _weft_legis_config().get("store_dir")
+    if isinstance(configured, str) and configured:
+        return Path(configured)
+    return Path(".weft") / WEFT_MEMBER
+
+
+def _sqlite_url(path: Path) -> str:
+    """Render a filesystem path as a SQLite URL, preserving relative-ness.
+
+    A relative path stays relative (``sqlite:///.weft/legis/x.db``, resolved by
+    SQLite against cwd); an absolute path renders with the leading slash intact
+    (``sqlite:////abs/x.db``).
+    """
+    return f"sqlite:///{path.as_posix()}"
+
+
+def check_db_url() -> str:
+    return _sqlite_url(_store_dir() / _CHECK_DB_NAME)
+
+
+def governance_db_url() -> str:
+    return _sqlite_url(_store_dir() / _GOVERNANCE_DB_NAME)
+
+
+def binding_db_url() -> str:
+    return _sqlite_url(_store_dir() / _BINDING_DB_NAME)
+
+
+def pull_db_url() -> str:
+    return _sqlite_url(_store_dir() / _PULL_DB_NAME)
+
+
+def ensure_sqlite_parent(url: str) -> None:
+    """Create the parent directory for a SQLite *file* URL, if needed.
+
+    Called at store-open time (not at URL-compute time) so that merely importing
+    config or computing a default URL never litters ``.weft/`` directories — the
+    subtree appears only when a DB is actually opened. No-op for in-memory or
+    non-SQLite URLs. SQLite creates the ``.db`` file but never its parent, so
+    without this an open against a fresh ``.weft/legis/`` raises "unable to open
+    database file".
+    """
+    parsed = make_url(url)
+    if not parsed.drivername.startswith("sqlite"):
+        return
+    database = parsed.database
+    if not database or database == ":memory:":
+        return
+    Path(database).expanduser().parent.mkdir(parents=True, exist_ok=True)

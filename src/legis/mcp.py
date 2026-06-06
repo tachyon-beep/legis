@@ -158,7 +158,7 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
-    from legis.config import DEFAULT_GOVERNANCE_DB
+    from legis.config import binding_db_url, governance_db_url
 
     clock = SystemClock()
     engine = None
@@ -179,7 +179,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
     hmac_key = os.environ.get("LEGIS_HMAC_KEY")
     if hmac_key:
         key = hmac_key.encode("utf-8")
-        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
+        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url()))
         protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
         protected_policies = frozenset(
             p.strip() for p in protected_policies_str.split(",") if p.strip()
@@ -198,7 +198,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
         from legis.governance.binding_ledger import BindingLedger
 
         binding_ledger = BindingLedger(
-            AuditStore(os.environ.get("LEGIS_BINDING_DB", "sqlite:///legis-binding.db")),
+            AuditStore(os.environ.get("LEGIS_BINDING_DB", binding_db_url())),
             clock,
             key,
         )
@@ -559,27 +559,29 @@ def _git(runtime: McpRuntime) -> GitSurface:
 
 def _engine(runtime: McpRuntime) -> EnforcementEngine:
     if runtime.engine is None:
-        from legis.config import DEFAULT_GOVERNANCE_DB
+        from legis.config import governance_db_url
 
-        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", DEFAULT_GOVERNANCE_DB))
+        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url()))
         runtime.engine = EnforcementEngine(store, SystemClock())
     return runtime.engine
 
 
 def _checks(runtime: McpRuntime) -> CheckSurface:
     if runtime.check_surface is None:
-        from legis.config import DEFAULT_CHECK_DB
+        from legis.config import check_db_url
 
         runtime.check_surface = CheckSurface(
-            os.environ.get("LEGIS_CHECK_DB", DEFAULT_CHECK_DB)
+            os.environ.get("LEGIS_CHECK_DB", check_db_url())
         )
     return runtime.check_surface
 
 
 def _pulls(runtime: McpRuntime) -> PullSurface:
     if runtime.pull_surface is None:
+        from legis.config import pull_db_url
+
         runtime.pull_surface = PullSurface(
-            os.environ.get("LEGIS_PULL_DB", "sqlite:///legis-pulls.db")
+            os.environ.get("LEGIS_PULL_DB", pull_db_url())
         )
     return runtime.pull_surface
 

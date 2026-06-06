@@ -10,6 +10,9 @@ from legis.pulls.models import PullRequest, PullRequestState
 
 class PullSurface:
     def __init__(self, db_url: str) -> None:
+        from legis.config import ensure_sqlite_parent
+
+        ensure_sqlite_parent(db_url)
         self._engine = create_engine(db_url, future=True, poolclass=NullPool)
         self._md = MetaData()
         self._pulls = Table(

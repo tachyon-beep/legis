@@ -98,6 +98,11 @@ def _chain(prev_hash: str, c_hash: str) -> str:
 
 class AuditStore:
     def __init__(self, url: str) -> None:
+        # The federated store subtree (.weft/legis) is created lazily, here at
+        # open time — SQLite makes the .db file but never its parent directory.
+        from legis.config import ensure_sqlite_parent
+
+        ensure_sqlite_parent(url)
         # NullPool: hold no connection between operations — an append-only
         # audit store wants no lingering locks and clean resource lifecycle.
         self._engine = create_engine(url, future=True, poolclass=NullPool)

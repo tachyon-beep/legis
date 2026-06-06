@@ -50,4 +50,6 @@ jobs:
         # Remove this once a real governance DB is wired into CI.
         env:
           LEGIS_ALLOW_MISSING_GOVERNANCE_DB: "1"
-        run: uv run legis governance-gate --db sqlite:///legis-governance.db
+        # No --db: use the resolved default store (.weft/legis/legis-governance.db),
+        # the same location the server/MCP write to.
+        run: uv run legis governance-gate

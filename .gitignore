@@ -42,3 +42,5 @@ wardline.yaml
 *.db-wal
 .legis/
 legis.yaml
+# Federated runtime-state subtree (legis is the sole writer; never .weft/ wholesale)
+.weft/legis/

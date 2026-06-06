@@ -386,7 +386,7 @@ def test_scan_results_rejects_both_or_neither_cell_form(tmp_path):
 
 def test_scan_results_block_escalate_only_needs_no_engine(tmp_path):
     # A pure block_escalate scan must route with only a signoff gate wired — no
-    # enforcement engine, so engine()'s lazy legis-governance.db is never created.
+    # enforcement engine, so engine()'s lazy .weft/legis/legis-governance.db is never created.
     sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
                      FixedClock("2026-06-02T12:00:00+00:00"))
     c = TestClient(create_app(signoff_gate=sg))  # NOT _client: no enforcement injected

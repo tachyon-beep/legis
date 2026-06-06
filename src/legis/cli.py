@@ -90,14 +90,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_judge_flags(mcp)
 
     import os
-    gov_db_default = os.environ.get("LEGIS_GOVERNANCE_DB", "sqlite:///legis-governance.db")
+
+    from legis.config import governance_db_url
+    gov_db_default = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
     rate = subparsers.add_parser(
         "check-override-rate",
         help="Fail (exit 1) if the override-rate gate is FAIL — for CI",
     )
     rate.add_argument(
         "--db", default=gov_db_default,
-        help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
+        help="Governance store URL (defaults to the server's governance store)",
     )
     gate = subparsers.add_parser(
         "governance-gate",
@@ -105,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gate.add_argument(
         "--db", default=gov_db_default,
-        help="Governance store URL (mirrors the server's DEFAULT_GOVERNANCE_DB)",
+        help="Governance store URL (defaults to the server's governance store)",
     )
     backfill = subparsers.add_parser(
         "sei-backfill",
