@@ -21,7 +21,7 @@ def test_install_all_creates_every_artifact(tmp_path, monkeypatch, capsys):
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert "SessionStart" in settings["hooks"]
     gitignore = (tmp_path / ".gitignore").read_text()
-    assert ".legis/" in gitignore and "legis.yaml" in gitignore
+    assert ".weft/legis/" in gitignore
 
 
 def test_install_selective_gitignore_only(tmp_path, monkeypatch):

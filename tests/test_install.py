@@ -571,8 +571,7 @@ def test_ensure_gitignore_creates_file(tmp_path):
     ok, msg = ensure_gitignore(tmp_path)
     assert ok
     content = (tmp_path / ".gitignore").read_text()
-    assert ".legis/" in content
-    assert "legis.yaml" in content
+    assert ".weft/legis/" in content
 
 
 def test_ensure_gitignore_appends_missing_rules(tmp_path):
@@ -581,8 +580,7 @@ def test_ensure_gitignore_appends_missing_rules(tmp_path):
     assert ok
     content = (tmp_path / ".gitignore").read_text()
     assert "*.db" in content
-    assert ".legis/" in content
-    assert "legis.yaml" in content
+    assert ".weft/legis/" in content
 
 
 def test_ensure_gitignore_idempotent(tmp_path):
@@ -720,12 +718,11 @@ def test_inject_append_keeps_marker_off_users_last_line(tmp_path):
     assert content[idx - 1] == "\n"
 
 
-def test_ensure_gitignore_partial_present_appends_only_missing(tmp_path):
-    (tmp_path / ".gitignore").write_text("*.db\n.legis/\n")  # legis.yaml absent
+def test_ensure_gitignore_present_among_other_rules_not_duplicated(tmp_path):
+    # legis's rule already present alongside unrelated rules → nothing to add.
+    (tmp_path / ".gitignore").write_text("*.db\n.weft/legis/\n")
     ok, msg = ensure_gitignore(tmp_path)
     assert ok
-    assert "legis.yaml" in msg
-    assert ".legis/" not in msg  # already present — not re-reported
+    assert "already" in msg  # detected as present, not re-appended
     content = (tmp_path / ".gitignore").read_text()
-    assert content.count(".legis/") == 1  # not duplicated
-    assert content.count("legis.yaml") == 1
+    assert content.count(".weft/legis/") == 1  # not duplicated

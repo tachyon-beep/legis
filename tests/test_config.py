@@ -93,3 +93,21 @@ def test_ensure_sqlite_parent_is_idempotent(tmp_path, monkeypatch):
     config.ensure_sqlite_parent("sqlite:///.weft/legis/legis-checks.db")
     config.ensure_sqlite_parent("sqlite:///.weft/legis/legis-checks.db")
     assert (tmp_path / ".weft" / "legis").is_dir()
+
+
+def test_suite_isolates_store_locations_to_tmp():
+    """Regression guard for legis-3d295a6f7f: the autouse conftest fixture must
+    redirect every store env var off the repo-relative `.weft/legis/` default,
+    so a test that builds a default-path store can't leak a subtree into the
+    working tree."""
+    import os
+
+    for var in (
+        "LEGIS_CHECK_DB",
+        "LEGIS_GOVERNANCE_DB",
+        "LEGIS_BINDING_DB",
+        "LEGIS_PULL_DB",
+    ):
+        val = os.environ.get(var, "")
+        assert val.startswith("sqlite:"), f"{var} not redirected: {val!r}"
+        assert "legis-store" in val, f"{var} not pointed at the isolated tmp dir: {val!r}"

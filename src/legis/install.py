@@ -631,18 +631,19 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
 
 # Only legis's OWN rules — never another member's. ``.weft/legis/`` is legis's
 # machine-written runtime-state subtree (DBs &c.); ``.weft/`` as a whole is the
-# shared federation namespace and must NOT be claimed wholesale here.
-_LEGIS_IGNORE_RULES = (".legis/", "legis.yaml", ".weft/legis/")
+# shared federation namespace and must NOT be claimed wholesale here. The legacy
+# ``.legis/`` / ``legis.yaml`` surfaces were retired with the weft store
+# consolidation — no legis code reads them (``legis.yaml`` was the per-member
+# config that ``weft.toml`` ``[legis]`` now replaces).
+_LEGIS_IGNORE_RULES = (".weft/legis/",)
 _LEGIS_IGNORE_BLOCK = (
-    "\n# Legis — local working dir / config + runtime state (regenerated/local; never commit)\n"
-    ".legis/\n"
-    "legis.yaml\n"
+    "\n# Legis — machine-written runtime state (regenerated/local; never commit)\n"
     ".weft/legis/\n"
 )
 
 
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
-    """Ensure legis's local config surface (``.legis/``, ``legis.yaml``) is ignored."""
+    """Ensure legis's runtime-state subtree (``.weft/legis/``) is ignored."""
     try:
         gitignore = project_path(project_root, ".gitignore")
     except UnsafeInstallPathError as exc:
