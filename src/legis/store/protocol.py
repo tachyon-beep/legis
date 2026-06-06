@@ -37,6 +37,8 @@ class AppendOnlyStore(Protocol):
         ``read_by_seq``, ``verify_integrity``) is NOT guaranteed to observe
         uncommitted appends from the same batch — it sees a pre-batch snapshot
         — and on a single-connection backend (SQLite) may contend with the
-        held write transaction. Resolve all reads before opening the batch.
+        held write transaction. Resolve all reads before opening the batch. The
+        SQLite implementation (``AuditStore``) *enforces* this: an in-batch read
+        on the same thread raises ``RuntimeError`` instead of contending.
         """
         ...

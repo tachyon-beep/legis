@@ -122,13 +122,16 @@ class AuditStore:
         connection thread-locally; nested ``transaction()`` calls reuse the
         outer one.
 
-        Appends only. ``read_all`` / ``read_by_seq`` / ``verify_integrity`` open
-        their own connection via ``self._engine.begin()`` — they will NOT see
-        this batch's uncommitted appends, and on SQLite a read connection can
-        hit ``SQLITE_BUSY`` against the held ``BEGIN IMMEDIATE`` write lock. Do
-        all reads before entering the context (as ``wardline.governor`` does: it
-        resolves every entity before opening the batch). Only ``append``'s own
-        chain-head read is safe here, because it runs on the ambient connection.
+        Appends only, and now *enforced*: ``read_all`` / ``read_by_seq`` /
+        ``verify_integrity`` / ``get_latest_sequence_and_hash`` open their own
+        connection via ``self._engine.begin()``, so a read issued inside this
+        context would not see the batch's uncommitted appends and on SQLite would
+        hit ``SQLITE_BUSY`` against the held ``BEGIN IMMEDIATE`` write lock. Each
+        guards on the thread-local and raises ``RuntimeError`` rather than
+        contending silently (``_assert_no_batch_in_progress``). Do all reads
+        before entering the context (as ``wardline.governor`` does: it resolves
+        every entity before opening the batch). Only ``append``'s own chain-head
+        read is safe here, because it runs on the ambient connection.
         """
         if getattr(self._txn, "conn", None) is not None:
             # Already inside a batch on this thread — reuse it (nested no-op).
@@ -142,6 +145,26 @@ class AuditStore:
                 yield
             finally:
                 self._txn.conn = None
+
+    def _assert_no_batch_in_progress(self, method: str) -> None:
+        """Fail loudly if a fresh-connection read runs inside a held batch (Q-M5).
+
+        ``transaction()`` holds a ``BEGIN IMMEDIATE`` write lock on the ambient
+        thread-local connection. Every public read opens its OWN connection, so
+        a read issued while the batch is held would (a) contend with that lock
+        (``SQLITE_BUSY`` on SQLite, and possibly no error on other backends) and
+        (b) miss the batch's uncommitted appends. The original contract relied on
+        callers never doing this; this guard *enforces* it, turning a silent,
+        backend-dependent contention into an explicit, deterministic error so a
+        future in-batch read in a gate append path fails its tests immediately.
+        """
+        if getattr(self._txn, "conn", None) is not None:
+            raise RuntimeError(
+                f"AuditStore.{method}() called inside an active transaction() batch "
+                "on this thread. Fresh-connection reads contend with the batch's "
+                "held BEGIN IMMEDIATE write lock and cannot see its uncommitted "
+                "appends — resolve all reads before opening the batch (Q-M5)."
+            )
 
     def _insert(self, conn: Any, payload: dict[str, Any]) -> int:
         c_hash = content_hash(payload)
@@ -176,6 +199,7 @@ class AuditStore:
             return self._insert(conn, payload)
 
     def read_all(self) -> list[AuditRecord]:
+        self._assert_no_batch_in_progress("read_all")
         with self._engine.begin() as conn:
             rows = conn.execute(
                 select(self._log).order_by(self._log.c.seq.asc())
@@ -192,6 +216,7 @@ class AuditStore:
         ]
 
     def read_by_seq(self, seq: int) -> AuditRecord | None:
+        self._assert_no_batch_in_progress("read_by_seq")
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(self._log).where(self._log.c.seq == seq)
@@ -207,6 +232,7 @@ class AuditStore:
         )
 
     def verify_integrity(self) -> bool:
+        self._assert_no_batch_in_progress("verify_integrity")
         prev_hash = GENESIS
         try:
             records = self.read_all()
@@ -231,6 +257,7 @@ class AuditStore:
         return True
 
     def get_latest_sequence_and_hash(self) -> tuple[int, str]:
+        self._assert_no_batch_in_progress("get_latest_sequence_and_hash")
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(self._log.c.seq, self._log.c.chain_hash)
