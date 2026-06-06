@@ -21,7 +21,6 @@ from pathlib import Path
 from legis.install import (
     INSTRUCTIONS_MARKER,
     SKILL_NAME,
-    _build_instructions_block,  # noqa: F401  (kept for symmetry / tests)
     _get_skills_source_dir,
     _marker_token,
     _skill_tree_fingerprint,
