@@ -1,5 +1,6 @@
 import pytest
 
+import legis.filigree.client as client_mod
 from legis.filigree.client import FiligreeError, HttpFiligreeClient
 
 
@@ -213,3 +214,64 @@ def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
     ).encode("utf-8")
     expected = hmac.new(key, message, hashlib.sha256).hexdigest()
     assert signature == expected
+
+
+# --- roadmap 13: transport / error-path branches (the surface a security
+# reviewer cares about, and the unsigned-transport seam tied to Q-M4) ---
+
+def test_json_body_bytes_none_is_empty():
+    # A None body signs and sends zero bytes (the body-hash is over b"").
+    assert client_mod._json_body_bytes(None) == b""
+
+
+def test_path_and_query_includes_query_string():
+    # The signed message commits to path AND query; a verifier that dropped the
+    # query would compute a different signature, so the query must be carried.
+    assert (
+        client_mod._path_and_query("https://filigree/api/entity-associations?entity_id=x")
+        == "/api/entity-associations?entity_id=x"
+    )
+    # No query -> bare path; empty path -> "/".
+    assert client_mod._path_and_query("https://filigree/api/x") == "/api/x"
+    assert client_mod._path_and_query("https://filigree") == "/"
+
+
+def test_urllib_fetch_wraps_transport_error(monkeypatch):
+    # A urllib URLError (DNS failure, connection refused, timeout) surfaces as a
+    # typed FiligreeError, never an unhandled urllib exception.
+    import urllib.request
+
+    def boom(req, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    with pytest.raises(FiligreeError, match="connection refused"):
+        client_mod._urllib_fetch("GET", "https://filigree.example/api/x", None)
+
+
+def test_decode_rejects_non_json_content_type():
+    # A proxy/error page returning text/html must not be json-parsed; it is a
+    # typed transport error.
+    class _HtmlResp:
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def read(self, _n):  # pragma: no cover - not reached; type check first
+            return b"<html>503</html>"
+
+    with pytest.raises(FiligreeError, match="non-JSON content type"):
+        client_mod._decode_json_response(_HtmlResp(), "GET /api/x")
+
+
+def test_decode_rejects_oversized_response():
+    # A response larger than MAX_RESPONSE_BYTES is rejected before decode so a
+    # hostile/buggy Filigree cannot exhaust memory.
+    big = b"x" * (client_mod.MAX_RESPONSE_BYTES + 1)
+
+    class _BigResp:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self, n):
+            return big[:n]
+
+    with pytest.raises(FiligreeError, match="response too large"):
+        client_mod._decode_json_response(_BigResp(), "GET /api/x")
