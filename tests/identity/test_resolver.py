@@ -1,5 +1,13 @@
+import pytest
+
 from legis.canonical import content_hash
-from legis.identity.resolver import IdentityResolver
+from legis.identity.entity_key import EntityKey
+from legis.identity.resolver import (
+    IdentityResolution,
+    IdentityResolutionStatus,
+    IdentityResolver,
+    LineageSnapshotStatus,
+)
 
 
 class FakeClient:
@@ -43,6 +51,69 @@ def test_alive_sei_is_keyed_opaquely_with_two_axes():
     assert res.lineage_snapshot == {"length": 1, "hash": content_hash([{"event": "born"}])}
     assert res.identity_resolution_status == "resolved"
     assert res.lineage_snapshot_status == "verified"
+
+
+# --- the str,Enum axes + the IdentityResolution construction invariant ---
+
+
+def test_status_axes_are_str_enums_serializing_to_bare_strings():
+    # str,Enum members ARE their wire string — comparison and serialization
+    # are byte-identical to the old bare strings (the whole compat argument).
+    assert IdentityResolutionStatus.RESOLVED == "resolved"
+    assert LineageSnapshotStatus.NOT_APPLICABLE == "not_applicable"
+    assert content_hash({"s": IdentityResolutionStatus.NOT_ALIVE}) == content_hash(
+        {"s": "not_alive"}
+    )
+
+
+def test_identity_resolution_rejects_contradictory_status_alive():
+    # The sharpest case: a frozen record claiming "resolved" while alive is False
+    # is self-contradictory and must be unrepresentable at construction.
+    ek = EntityKey.from_locator("python:function:m.f")
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek,
+            False,
+            None,
+            None,
+            IdentityResolutionStatus.RESOLVED,
+            LineageSnapshotStatus.NOT_APPLICABLE,
+        )
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek,
+            None,
+            None,
+            None,
+            IdentityResolutionStatus.NOT_ALIVE,
+            LineageSnapshotStatus.NOT_APPLICABLE,
+        )
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek,
+            True,
+            None,
+            None,
+            IdentityResolutionStatus.UNAVAILABLE,
+            LineageSnapshotStatus.NOT_APPLICABLE,
+        )
+
+
+def test_identity_resolution_accepts_the_three_consistent_shapes():
+    ek = EntityKey.from_locator("python:function:m.f")
+    # alive None ↔ UNAVAILABLE, False ↔ NOT_ALIVE, True ↔ RESOLVED
+    IdentityResolution(
+        ek, None, None, None,
+        IdentityResolutionStatus.UNAVAILABLE, LineageSnapshotStatus.NOT_APPLICABLE,
+    )
+    IdentityResolution(
+        ek, False, None, None,
+        IdentityResolutionStatus.NOT_ALIVE, LineageSnapshotStatus.NOT_APPLICABLE,
+    )
+    IdentityResolution(
+        ek, True, "h", {"length": 1, "hash": "x"},
+        IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.VERIFIED,
+    )
 
 
 def test_capability_absent_degrades_to_locator():

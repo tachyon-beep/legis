@@ -51,20 +51,15 @@ def resolve_for_record(
     res = identity.resolve(locator)
     ext: dict = {}
     if res.alive is not None:
-        identity_status = getattr(
-            res, "identity_resolution_status", "resolved" if res.alive else "not_alive"
-        )
-        lineage_status = getattr(
-            res,
-            "lineage_snapshot_status",
-            "verified" if res.lineage_snapshot is not None else "not_applicable",
-        )
+        # Both status axes are mandatory str,Enum fields on IdentityResolution now,
+        # so read them directly — the old getattr fallbacks guarded a shape the
+        # type no longer permits. The members serialize as their bare strings.
         ext["loomweave"] = {
             "alive": res.alive,
             "content_hash": res.content_hash,
             "lineage_snapshot": res.lineage_snapshot,
-            "identity_resolution_status": identity_status,
-            "lineage_snapshot_status": lineage_status,
+            "identity_resolution_status": res.identity_resolution_status,
+            "lineage_snapshot_status": res.lineage_snapshot_status,
         }
     return res.entity_key, ext
 

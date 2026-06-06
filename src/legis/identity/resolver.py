@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable
 
 from legis.canonical import content_hash
@@ -23,14 +24,54 @@ from legis.identity.entity_key import EntityKey
 _DEFAULT_CAPABILITY_TTL_SECONDS = 300.0
 
 
+class IdentityResolutionStatus(str, Enum):
+    """The identity axis verdict (str,Enum — serializes as the bare string).
+
+    ``INVALID`` is produced only by the SEI backfill path (it keys raw dicts,
+    not :class:`IdentityResolution`); the resolver itself emits only the other
+    three.
+    """
+
+    RESOLVED = "resolved"
+    NOT_ALIVE = "not_alive"
+    UNAVAILABLE = "unavailable"
+    INVALID = "invalid"
+
+
+class LineageSnapshotStatus(str, Enum):
+    """The REQ-L-01 lineage-snapshot verdict (str,Enum — bare-string wire)."""
+
+    VERIFIED = "verified"
+    UNAVAILABLE = "unavailable"
+    NOT_APPLICABLE = "not_applicable"
+
+
 @dataclass(frozen=True)
 class IdentityResolution:
     entity_key: EntityKey
     alive: bool | None          # identity axis; None when no capability/decision
     content_hash: str | None    # content axis; None when unavailable
     lineage_snapshot: dict[str, Any] | None  # {"length": N, "hash": ...} or None
-    identity_resolution_status: str
-    lineage_snapshot_status: str
+    identity_resolution_status: IdentityResolutionStatus
+    lineage_snapshot_status: LineageSnapshotStatus
+
+    def __post_init__(self) -> None:
+        # The identity axis and its status are two views of one fact — keep them
+        # from contradicting each other at construction. A "resolved" record with
+        # alive=False (or any other crossed pair) was representable before this
+        # guard; the invariant lived only in the construction sites. The bijection
+        # is exactly the three shapes the resolver actually builds.
+        expected = {
+            None: IdentityResolutionStatus.UNAVAILABLE,
+            False: IdentityResolutionStatus.NOT_ALIVE,
+            True: IdentityResolutionStatus.RESOLVED,
+        }[self.alive]
+        if self.identity_resolution_status is not expected:
+            raise ValueError(
+                f"contradictory IdentityResolution: alive={self.alive!r} "
+                f"requires identity_resolution_status="
+                f"{expected.value!r}, got {self.identity_resolution_status.value!r}"
+            )
 
 
 class IdentityResolver:
@@ -78,12 +119,17 @@ class IdentityResolver:
             self._capable_checked_at = now
         return self._capable if self._capable is not None else False
 
-    def _snapshot(self, sei: str) -> tuple[dict[str, Any] | None, str]:
+    def _snapshot(
+        self, sei: str
+    ) -> tuple[dict[str, Any] | None, LineageSnapshotStatus]:
         try:
             lineage = self._client.lineage(sei)  # type: ignore[union-attr]
         except Exception:
-            return None, "unavailable"
-        return {"length": len(lineage), "hash": content_hash(lineage)}, "verified"
+            return None, LineageSnapshotStatus.UNAVAILABLE
+        return (
+            {"length": len(lineage), "hash": content_hash(lineage)},
+            LineageSnapshotStatus.VERIFIED,
+        )
 
     def resolve(self, locator: str) -> IdentityResolution:
         degraded = IdentityResolution(
@@ -91,8 +137,8 @@ class IdentityResolver:
             None,
             None,
             None,
-            "unavailable",
-            "not_applicable",
+            IdentityResolutionStatus.UNAVAILABLE,
+            LineageSnapshotStatus.NOT_APPLICABLE,
         )
         if not self._capability():
             return degraded
@@ -110,8 +156,8 @@ class IdentityResolver:
                 False,
                 None,
                 None,
-                "not_alive",
-                "not_applicable",
+                IdentityResolutionStatus.NOT_ALIVE,
+                LineageSnapshotStatus.NOT_APPLICABLE,
             )
         sei = res.get("sei")
         if not isinstance(sei, str) or not sei:
@@ -127,6 +173,6 @@ class IdentityResolver:
             True,
             content_hash_value,
             snapshot,
-            "resolved",
+            IdentityResolutionStatus.RESOLVED,
             snapshot_status,
         )

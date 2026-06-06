@@ -16,6 +16,7 @@ from legis.canonical import content_hash
 from legis.clock import Clock
 from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
+from legis.identity.resolver import IdentityResolutionStatus, LineageSnapshotStatus
 from legis.store.protocol import AppendOnlyStore, AuditRecordLike
 
 SEI_PREFIX = "loomweave:eid:"
@@ -206,7 +207,7 @@ def _resolved_event(
                 "alive": True,
                 "content_hash": resolution.get("content_hash"),
                 "lineage_snapshot": lineage_snapshot,
-                "identity_resolution_status": "resolved",
+                "identity_resolution_status": IdentityResolutionStatus.RESOLVED,
                 "lineage_snapshot_status": lineage_status,
             },
             "backfill": {
@@ -226,7 +227,11 @@ def _unresolved_event(
     reason: str,
 ) -> dict[str, Any]:
     locator_key = EntityKey.from_dict(rec.payload["entity_key"])
-    status = "invalid" if reason == "invalid" else "not_alive"
+    status = (
+        IdentityResolutionStatus.INVALID
+        if reason == "invalid"
+        else IdentityResolutionStatus.NOT_ALIVE
+    )
     return {
         "event": "SEI_BACKFILL_UNRESOLVED",
         "original_seq": rec.seq,
@@ -239,7 +244,7 @@ def _unresolved_event(
             "loomweave": {
                 "alive": False,
                 "identity_resolution_status": status,
-                "lineage_snapshot_status": "not_applicable",
+                "lineage_snapshot_status": LineageSnapshotStatus.NOT_APPLICABLE,
             },
             "backfill": {
                 "source": "pre_sei_locator",
@@ -252,9 +257,12 @@ def _unresolved_event(
 
 def _lineage_snapshot(
     client: LoomweaveIdentity, sei: str
-) -> tuple[dict[str, Any] | None, str]:
+) -> tuple[dict[str, Any] | None, LineageSnapshotStatus]:
     try:
         lineage = client.lineage(sei)
     except Exception:
-        return None, "unavailable"
-    return {"length": len(lineage), "hash": content_hash(lineage)}, "verified"
+        return None, LineageSnapshotStatus.UNAVAILABLE
+    return (
+        {"length": len(lineage), "hash": content_hash(lineage)},
+        LineageSnapshotStatus.VERIFIED,
+    )

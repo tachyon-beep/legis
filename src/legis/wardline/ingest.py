@@ -53,12 +53,33 @@ class WardlinePayloadError(ValueError):
     """A Wardline scan payload is not shaped like the trusted wire contract."""
 
 
-# A dirty working tree is not a malformed payload — it is "the dev environment
-# is not ready for a signed artifact yet". wardline emits an UNSIGNED, dirty:true
-# dev artifact for this case (signing stays clean-tree-only). legis classifies it
-# as a typed amber/skipped state, NOT a generic red, so a harness can tell
-# "commit first" apart from "legis/the scan is broken".
-SKIPPED_DIRTY_TREE = "SKIPPED_DIRTY_TREE"
+class ArtifactStatus(str, Enum):
+    """How far the Wardline artifact's provenance verified (str,Enum — the member
+    IS its bare-string wire value, so records serialize byte-identically)."""
+
+    VERIFIED = "verified"
+    DIRTY = "dirty"
+    UNVERIFIED = "unverified"
+
+
+class ScanOutcome(str, Enum):
+    """The ``scan_route`` boundary outcome (str,Enum — bare-string wire).
+
+    ``ROUTED`` — findings were governed into the configured cell. A dirty working
+    tree is not a malformed payload — it is "the dev environment is not ready for
+    a signed artifact yet". wardline emits an UNSIGNED, ``dirty: true`` dev
+    artifact for this case (signing stays clean-tree-only); legis classifies it
+    as the typed amber ``SKIPPED_DIRTY_TREE`` state, NOT a generic red, so a
+    harness can tell "commit first" apart from "legis/the scan is broken".
+    """
+
+    ROUTED = "ROUTED"
+    SKIPPED_DIRTY_TREE = "SKIPPED_DIRTY_TREE"
+
+
+# Back-compat alias for the bare-string constant callers/tests imported before the
+# enum existed; ``== "SKIPPED_DIRTY_TREE"`` still holds (str,Enum).
+SKIPPED_DIRTY_TREE = ScanOutcome.SKIPPED_DIRTY_TREE
 
 
 class WardlineDirtyTreeError(Exception):
@@ -117,8 +138,8 @@ def verify_wardline_artifact(
     strict boolean ``True`` because the scan dict is caller-controlled.
     """
     fields = wardline_artifact_fields(scan)
-    provenance = {
-        "artifact_status": "unverified",
+    provenance: dict[str, Any] = {
+        "artifact_status": ArtifactStatus.UNVERIFIED,
     }
     for key in ARTIFACT_PROVENANCE_FIELDS:
         value = scan.get(key)
@@ -132,7 +153,7 @@ def verify_wardline_artifact(
 
     if artifact_key is None:
         if is_dirty_dev_artifact:
-            provenance["artifact_status"] = "dirty"
+            provenance["artifact_status"] = ArtifactStatus.DIRTY
         return provenance
 
     if is_dirty_dev_artifact:
@@ -144,7 +165,7 @@ def verify_wardline_artifact(
                 "govern it unsigned in dev."
             )
         return {
-            "artifact_status": "dirty",
+            "artifact_status": ArtifactStatus.DIRTY,
             **{key: value for key in ARTIFACT_PROVENANCE_FIELDS
                if isinstance(value := scan.get(key), str) and value},
         }
@@ -164,7 +185,7 @@ def verify_wardline_artifact(
     if not verify(fields, signature, artifact_key):
         raise WardlinePayloadError("Wardline artifact signature does not verify")
     return {
-        "artifact_status": "verified",
+        "artifact_status": ArtifactStatus.VERIFIED,
         **{key: scan[key] for key in ARTIFACT_PROVENANCE_FIELDS},
         "artifact_signature": signature,
     }
@@ -232,8 +253,28 @@ class WardlineFinding:
 # be able to silently dismiss a defect. Non-agent suppressions
 # (``baselined`` / ``judged``) are simply not active and carry no proof. Any
 # other state is malformed and rejected.
-AGENT_SUPPRESSED: frozenset[str] = frozenset({"waived", "suppressed"})
-NON_AGENT_SUPPRESSED: frozenset[str] = frozenset({"baselined", "judged"})
+class Suppressed(str, Enum):
+    """The finding suppression-state vocabulary (str,Enum — bare-string wire).
+
+    The ``suppressed`` field stays ``str`` on the wire-facing dataclass so the
+    validation timing is unchanged (any string is accepted off the wire; only a
+    *defect* with an out-of-vocabulary state is rejected, in ``active_defects``).
+    This enum is the single source of truth for the vocabulary — members compare
+    and hash equal to their strings, so the frozensets below match the bare
+    ``suppressed`` strings carried verbatim from the scan.
+    """
+
+    ACTIVE = "active"
+    WAIVED = "waived"
+    SUPPRESSED = "suppressed"
+    BASELINED = "baselined"
+    JUDGED = "judged"
+
+
+AGENT_SUPPRESSED: frozenset[Suppressed] = frozenset({Suppressed.WAIVED, Suppressed.SUPPRESSED})
+NON_AGENT_SUPPRESSED: frozenset[Suppressed] = frozenset(
+    {Suppressed.BASELINED, Suppressed.JUDGED}
+)
 
 
 def _has_suppression_proof(finding: Mapping[str, Any]) -> bool:
@@ -272,7 +313,7 @@ def active_defects(scan: Mapping[str, Any]) -> list[WardlineFinding]:
         f = WardlineFinding.from_wire(raw)
         if f.kind != "defect":
             continue
-        if f.suppressed == "active":
+        if f.suppressed == Suppressed.ACTIVE:
             out.append(f)
             continue
         if f.suppressed in AGENT_SUPPRESSED:
