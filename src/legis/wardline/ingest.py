@@ -93,6 +93,9 @@ class WardlineDirtyTreeError(Exception):
     catch it and surface a typed ``SKIPPED_DIRTY_TREE`` outcome.
     """
 
+    # A ScanOutcome member (via the alias). Boundaries put it straight into the
+    # response as ``{"outcome": exc.reason}`` (app.py / mcp.py), so it is relied
+    # on to serialize as the bare ``"SKIPPED_DIRTY_TREE"`` string on the wire.
     reason = SKIPPED_DIRTY_TREE
 
 

@@ -1,12 +1,48 @@
+import json
+
 import pytest
 
+from legis.canonical import canonical_json, content_hash
 from legis.wardline.ingest import (
     TRUST_TIERS,
+    ArtifactStatus,
+    ScanOutcome,
+    Suppressed,
     WardlineFinding,
     WardlinePayloadError,
     WardlineSeverity,
     active_defects,
 )
+
+
+def test_str_enum_axes_are_byte_identical_to_bare_strings_on_the_wire():
+    # The load-bearing compat contract: a str,Enum serializes EXACTLY like its
+    # bare string through json.dumps and canonical_json (so wire payloads and the
+    # content-hashed audit chain are unchanged). Pin it directly so a future
+    # Python/enum change that alters str,Enum serialization fails here loudly,
+    # not silently downstream.
+    cases = [
+        (ScanOutcome.ROUTED, "ROUTED"),
+        (ScanOutcome.SKIPPED_DIRTY_TREE, "SKIPPED_DIRTY_TREE"),
+        (ArtifactStatus.VERIFIED, "verified"),
+        (ArtifactStatus.DIRTY, "dirty"),
+        (ArtifactStatus.UNVERIFIED, "unverified"),
+        (Suppressed.ACTIVE, "active"),
+        (Suppressed.WAIVED, "waived"),
+        (Suppressed.SUPPRESSED, "suppressed"),
+        (Suppressed.BASELINED, "baselined"),
+        (Suppressed.JUDGED, "judged"),
+    ]
+    for member, raw in cases:
+        assert member == raw
+        assert json.dumps({"k": member}) == json.dumps({"k": raw})
+        assert canonical_json({"k": member}) == canonical_json({"k": raw})
+        assert content_hash({"k": member}) == content_hash({"k": raw})
+    # The back-compat alias and the error's reason still equal the bare string
+    # that callers/boundaries imported and serialized before the enum existed
+    # (both are bound by the module-level import block below).
+    assert SKIPPED_DIRTY_TREE == "SKIPPED_DIRTY_TREE"
+    assert WardlineDirtyTreeError.reason == "SKIPPED_DIRTY_TREE"
 
 
 def _finding(**over):
