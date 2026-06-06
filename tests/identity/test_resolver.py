@@ -108,3 +108,75 @@ def test_alive_sei_with_lineage_failure_records_unavailable_status():
     assert res.lineage_snapshot is None
     assert res.identity_resolution_status == "resolved"
     assert res.lineage_snapshot_status == "unavailable"
+
+
+# --- Q-L6: the capability latch must revalidate (TTL), and content_hash must be
+# type-checked, not trusted verbatim from the Loomweave response. ---
+
+
+class _Probe(FakeClient):
+    """A client whose capability can be flipped, counting probes."""
+
+    def __init__(self, *, capable=True, resolve=None, lineage=None):
+        super().__init__(capable=capable, resolve=resolve, lineage=lineage)
+        self.probes = 0
+
+    def capability(self):
+        self.probes += 1
+        return self._capable
+
+
+def test_capability_is_cached_within_ttl():
+    # Within the TTL window the positive latch is reused — one probe across many
+    # resolves (the caching the original code intended).
+    clock = {"t": 1000.0}
+    client = _Probe(resolve=ALIVE, lineage=[{"event": "born"}])
+    r = IdentityResolver(client, capability_ttl=300.0, monotonic=lambda: clock["t"])
+    for _ in range(5):
+        assert r.resolve("python:function:m.f").entity_key.identity_stable is True
+    assert client.probes == 1
+
+
+def test_capability_latch_revalidates_after_ttl():
+    # A Loomweave that LOSES the sei capability mid-life must not be treated as
+    # capable forever by a long-lived resolver. After the TTL elapses the latch
+    # is re-probed and the resolver honestly degrades.
+    clock = {"t": 1000.0}
+    client = _Probe(resolve=ALIVE, lineage=[{"event": "born"}])
+    r = IdentityResolver(client, capability_ttl=300.0, monotonic=lambda: clock["t"])
+
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is True
+    assert client.probes == 1
+
+    client._capable = False           # capability revoked upstream
+    clock["t"] += 299.0               # still within TTL → stale latch reused
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is True
+    assert client.probes == 1
+
+    clock["t"] += 2.0                 # now past TTL → re-probe, sees the loss
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is False
+    assert client.probes == 2
+
+
+def test_capability_regained_after_ttl_is_noticed():
+    # Symmetric to revocation: a negative latch must also age out, so a Loomweave
+    # that GAINS the capability is eventually picked up.
+    clock = {"t": 0.0}
+    client = _Probe(capable=False, resolve=ALIVE, lineage=[{"event": "born"}])
+    r = IdentityResolver(client, capability_ttl=300.0, monotonic=lambda: clock["t"])
+
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is False
+    client._capable = True
+    clock["t"] += 301.0
+    assert r.resolve("python:function:m.f").entity_key.identity_stable is True
+
+
+def test_non_string_content_hash_is_dropped():
+    # content_hash is carried verbatim into the record; a non-string value from a
+    # buggy/hostile Loomweave must not land in the typed str|None field.
+    for bad in (12345, {"nested": "obj"}, ["list"], 3.14):
+        resolve = {**ALIVE, "content_hash": bad}
+        r = IdentityResolver(FakeClient(resolve=resolve, lineage=[{"event": "born"}]))
+        res = r.resolve("python:function:m.f")
+        assert res.entity_key.value == "loomweave:eid:deadbeef"
+        assert res.content_hash is None
