@@ -5,10 +5,8 @@ from fastapi.testclient import TestClient
 from legis.api.app import create_app
 from legis.cli import main
 from legis.clock import FixedClock
-from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitSurface, GitError
-from legis.identity.entity_key import EntityKey
 from legis.policy.decorator import check_policy_boundary, policy_boundary, fingerprint
 from legis.policy.grammar import PolicyGrammar, PolicyResult
 from legis.policy.exemptions import ExemptionRegistry, Exemption
