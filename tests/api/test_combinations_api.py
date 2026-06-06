@@ -556,6 +556,57 @@ def test_scan_results_records_verified_artifact_provenance(tmp_path, monkeypatch
     assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
 
 
+def _dirty_wardline_scan():
+    return {
+        "scanner_identity": "wardline@1.0.0rc1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "dirty": True,
+        "findings": [
+            {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+             "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+        ],
+    }
+
+
+def test_scan_results_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
+    # P1: key configured, dirty + unsigned, no dev-mode -> HTTP 200 typed amber
+    # SKIPPED_DIRTY_TREE (distinguishable from the 422 generic red); nothing
+    # governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
+    c = _client(tmp_path)
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a",
+                        "scan": _dirty_wardline_scan()})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert body["routed"] == []
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
+    # P0: the explicit dev-mode opt-in governs the unsigned dirty artifact,
+    # recorded honestly as artifact_status="dirty".
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", "1")
+    c = _client(tmp_path)
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a",
+                        "scan": _dirty_wardline_scan()})
+
+    assert resp.status_code == 200
+    assert resp.json()["outcome"] == "ROUTED"
+    wardline = c.get("/overrides").json()[0]["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "dirty"
+    assert "artifact_signature" not in wardline
+
+
 def test_scan_results_single_cell_still_works(tmp_path):
     c = _client(tmp_path)
     body = {"cell": "surface_override", "agent_id": "agent-1", "scan": {"findings": [

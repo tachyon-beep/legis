@@ -5,6 +5,22 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
+## [Unreleased]
+
+### Added
+- **Dirty-tree dev path** — `verify_wardline_artifact` now recognises the
+  unsigned `dirty: true` dev artifact emitted by `wardline scan --format legis
+  --allow-dirty`. In the keyless posture it governs but records the marker
+  honestly (`artifact_status: "dirty"`). In the CI posture (artifact key
+  configured) a dirty dev artifact is a typed amber **`SKIPPED_DIRTY_TREE`**
+  outcome on `scan_route` / `/wardline/scan-results` — distinguishable from the
+  generic red, never governed — unless `LEGIS_WARDLINE_ALLOW_DIRTY=1` opts into
+  governing it unsigned (recorded as `"dirty"`). The relaxation is scoped to
+  exactly `dirty is True AND no signature`: a signed payload still verifies
+  (a forged signature stays red) and a clean unsigned payload still requires a
+  signature, so the clean-tree signing guarantee is intact. (legis-d731c760c5,
+  legis-7e85e8e7ba; upstream wardline `--allow-dirty`.)
+
 ## [1.0.0rc1] — 2026-06-03
 
 First release candidate for 1.0. Everything built through Sprint 6 plus the
@@ -49,4 +65,5 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   (Filigree signature column, live-Loomweave oracle + HMAC auth, operative
   git-rename feed) remain.
 
+[Unreleased]: https://peps.python.org/pep-0440/
 [1.0.0rc1]: https://peps.python.org/pep-0440/

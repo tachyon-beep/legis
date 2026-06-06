@@ -59,7 +59,11 @@ from legis.policy.grammar import PolicyGrammar, default_grammar
 from legis.pulls.models import PullRequest, PullRequestState
 from legis.pulls.surface import PullSurface
 from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity
+from legis.wardline.ingest import (
+    WardlineDirtyTreeError,
+    WardlinePayloadError,
+    WardlineSeverity,
+)
 
 security = HTTPBearer(auto_error=False)
 
@@ -834,11 +838,21 @@ def create_app(
                     if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
                     else None
                 ),
+                allow_dirty=os.environ.get("LEGIS_WARDLINE_ALLOW_DIRTY") == "1",
             )
+        except WardlineDirtyTreeError as exc:
+            # Amber, not red: a dirty dev tree is "environment not ready", not a
+            # broken/tampered scan. 200 with a typed skip so a harness can tell
+            # it apart from the 422 generic failure and nothing is governed.
+            return {
+                "outcome": exc.reason,
+                "routed": [],
+                "detail": str(exc),
+            }
         except WardlinePayloadError as exc:
             raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"routed": routed}
+        return {"outcome": "ROUTED", "routed": routed}
 
     return app

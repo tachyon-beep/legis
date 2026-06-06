@@ -55,7 +55,7 @@ from legis.service.governance import (
 from legis.service.wardline import route_wardline_scan
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import WardlineSeverity
+from legis.wardline.ingest import WardlineDirtyTreeError, WardlineSeverity
 
 
 _AGENT_TOOLS = frozenset(
@@ -116,6 +116,7 @@ class McpRuntime:
     grammar: PolicyGrammar | None = None
     source_root: str | Path | None = None
     wardline_artifact_key: bytes | None = None
+    wardline_allow_dirty: bool = False
     binding_ledger: Any | None = None
 
 
@@ -202,6 +203,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
             if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
             else None
         ),
+        wardline_allow_dirty=os.environ.get("LEGIS_WARDLINE_ALLOW_DIRTY") == "1",
         binding_ledger=binding_ledger,
     )
 
@@ -269,7 +271,12 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "scan_route",
             "description": (
                 "Route Wardline scan findings through one cell, a severity_map "
-                "policy, or a cell plus fail_on threshold."
+                "policy, or a cell plus fail_on threshold. Returns a discriminated "
+                "outcome: ROUTED (governed) or SKIPPED_DIRTY_TREE (an unsigned "
+                "dirty-tree dev artifact arrived where signed provenance is "
+                "required — a typed amber skip, not a failure; commit for a "
+                "signed artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to govern "
+                "it unsigned in dev)."
             ),
             "inputSchema": _schema(
                 ["scan"],
@@ -949,24 +956,37 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
             }
     except (KeyError, ValueError) as exc:
         return _tool_error("INVALID_CELL_SPEC", str(exc))
-    routed = route_wardline_scan(
-        scan,
-        agent_id=runtime.agent_id,
-        identity=runtime.identity,
-        engine=_engine(runtime),
-        signoff=runtime.signoff_gate,
-        policy=scan_policy,
-        cell_map=scan_cell_map,
-        fail_on=scan_fail_on,
-        artifact_key=(
-            runtime.wardline_artifact_key
-            or (
-                os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
-                if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
-                else None
-            )
-        ),
-    )
+    try:
+        routed = route_wardline_scan(
+            scan,
+            agent_id=runtime.agent_id,
+            identity=runtime.identity,
+            engine=_engine(runtime),
+            signoff=runtime.signoff_gate,
+            policy=scan_policy,
+            cell_map=scan_cell_map,
+            fail_on=scan_fail_on,
+            artifact_key=(
+                runtime.wardline_artifact_key
+                or (
+                    os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
+                    if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
+                    else None
+                )
+            ),
+            allow_dirty=(
+                runtime.wardline_allow_dirty
+                or os.environ.get("LEGIS_WARDLINE_ALLOW_DIRTY") == "1"
+            ),
+        )
+    except WardlineDirtyTreeError as exc:
+        # Amber, not red (INVALID_ARGUMENT): a dirty dev tree is "environment
+        # not ready", not a broken/tampered scan. A typed outcome lets a harness
+        # tell "commit first" apart from a genuine legis/scan fault; nothing is
+        # governed.
+        return _tool_result(
+            {"outcome": exc.reason, "routed": [], "detail": str(exc)}
+        )
     return _tool_result({"outcome": "ROUTED", "routed": routed})
 
 

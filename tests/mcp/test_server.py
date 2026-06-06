@@ -997,6 +997,72 @@ def test_scan_route_records_verified_artifact_provenance(tmp_path, monkeypatch):
     assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
 
 
+def _dirty_scan():
+    return {
+        "scanner_identity": "wardline@1.0.0rc1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "dirty": True,
+        **_active_scan(),
+    }
+
+
+def test_scan_route_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
+    # P1: a dirty dev artifact in the CI posture (key configured) is a typed
+    # amber SKIPPED_DIRTY_TREE outcome, NOT the generic INVALID_ARGUMENT red,
+    # and nothing is governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
+    runtime, store = _runtime(tmp_path)
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _dirty_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result.get("isError") is not True
+    structured = result["structuredContent"]
+    assert structured["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert structured["routed"] == []
+    assert store.read_all() == []
+
+
+def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
+    # P0: the explicit server-side dev-mode opt-in governs the unsigned dirty
+    # artifact, recorded honestly as artifact_status="dirty".
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", "1")
+    runtime, store = _runtime(tmp_path)
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _dirty_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert result["outcome"] == "ROUTED"
+    assert result["routed"][0]["mode"] == "surface_only"
+    wardline = store.read_all()[0].payload["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "dirty"
+    assert "artifact_signature" not in wardline
+
+
 def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
     runtime, _store = _runtime(tmp_path)

@@ -32,8 +32,11 @@ def route_wardline_scan(
     cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None,
     fail_on: WardlineSeverity | None = None,
     artifact_key: bytes | None = None,
+    allow_dirty: bool = False,
 ) -> list[dict[str, Any]]:
-    artifact_provenance = verify_wardline_artifact(scan, artifact_key)
+    artifact_provenance = verify_wardline_artifact(
+        scan, artifact_key, allow_dirty=allow_dirty
+    )
     findings = active_defects(scan)
 
     def resolve(qualname: str | None) -> tuple[EntityKey, dict[str, Any]]:

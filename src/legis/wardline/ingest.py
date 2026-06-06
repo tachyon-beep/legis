@@ -53,6 +53,28 @@ class WardlinePayloadError(ValueError):
     """A Wardline scan payload is not shaped like the trusted wire contract."""
 
 
+# A dirty working tree is not a malformed payload — it is "the dev environment
+# is not ready for a signed artifact yet". wardline emits an UNSIGNED, dirty:true
+# dev artifact for this case (signing stays clean-tree-only). legis classifies it
+# as a typed amber/skipped state, NOT a generic red, so a harness can tell
+# "commit first" apart from "legis/the scan is broken".
+SKIPPED_DIRTY_TREE = "SKIPPED_DIRTY_TREE"
+
+
+class WardlineDirtyTreeError(Exception):
+    """A dirty-tree dev artifact arrived where signed CI provenance is required.
+
+    Deliberately NOT a ``WardlinePayloadError`` (which boundaries map to a
+    generic red — HTTP 422 / MCP ``INVALID_ARGUMENT``): the whole point is that
+    this amber/skipped state is *distinguishable* from a malformed-or-tampered
+    payload. Raised only in the CI posture (artifact key configured) when the
+    dirty dev artifact is unsigned and the dev-mode opt-in is off. Boundaries
+    catch it and surface a typed ``SKIPPED_DIRTY_TREE`` outcome.
+    """
+
+    reason = SKIPPED_DIRTY_TREE
+
+
 def wardline_artifact_fields(scan: Mapping[str, Any]) -> dict[str, Any]:
     """The Wardline artifact payload covered by ``artifact_signature``."""
     if not isinstance(scan, Mapping):
@@ -67,12 +89,32 @@ def wardline_artifact_fields(scan: Mapping[str, Any]) -> dict[str, Any]:
 def verify_wardline_artifact(
     scan: Mapping[str, Any],
     artifact_key: bytes | None,
+    *,
+    allow_dirty: bool = False,
 ) -> dict[str, Any]:
     """Validate optional server-required artifact authentication.
 
     When ``artifact_key`` is configured, the scan must carry signed scanner,
     rule-set, commit, and tree provenance. Without a configured key we still
     record any supplied metadata, but mark it explicitly unverified.
+
+    Dirty-tree dev artifacts (``dirty: true`` + no signature — wardline
+    ``--allow-dirty``) are a typed amber case, never a generic red:
+
+    * keyless dev posture — already permissive; the scan governs, but the
+      dirty marker is recorded honestly (``artifact_status == "dirty"``) so a
+      dirty dev scan is distinguishable from a clean unsigned one.
+    * CI posture (``artifact_key`` configured) — by default a dirty dev
+      artifact raises :class:`WardlineDirtyTreeError` (the boundary surfaces a
+      typed ``SKIPPED_DIRTY_TREE`` outcome). ``allow_dirty`` is the explicit
+      server-side dev-mode opt-in that lets legis govern it UNSIGNED, recorded
+      as ``"dirty"`` (never ``"verified"``).
+
+    The relaxation is scoped to exactly ``dirty is True AND no signature``: a
+    signed payload still verifies normally (so a forged signature stays red),
+    and a clean unsigned payload still requires a signature (``allow_dirty``
+    relaxes only the dirty case, not "any unsigned"). ``dirty`` is checked as
+    strict boolean ``True`` because the scan dict is caller-controlled.
     """
     fields = wardline_artifact_fields(scan)
     provenance = {
@@ -83,8 +125,29 @@ def verify_wardline_artifact(
         if isinstance(value, str) and value:
             provenance[key] = value
 
+    signature_present = isinstance(scan.get(ARTIFACT_SIGNATURE_FIELD), str) and bool(
+        scan.get(ARTIFACT_SIGNATURE_FIELD)
+    )
+    is_dirty_dev_artifact = scan.get("dirty") is True and not signature_present
+
     if artifact_key is None:
+        if is_dirty_dev_artifact:
+            provenance["artifact_status"] = "dirty"
         return provenance
+
+    if is_dirty_dev_artifact:
+        if not allow_dirty:
+            raise WardlineDirtyTreeError(
+                "wardline emitted an unsigned dirty-tree dev artifact "
+                "(dirty: true); signing is clean-tree-only. Commit for a "
+                "signed artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to "
+                "govern it unsigned in dev."
+            )
+        return {
+            "artifact_status": "dirty",
+            **{key: value for key in ARTIFACT_PROVENANCE_FIELDS
+               if isinstance(value := scan.get(key), str) and value},
+        }
 
     missing = [
         key for key in ARTIFACT_PROVENANCE_FIELDS
