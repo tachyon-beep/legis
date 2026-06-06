@@ -54,7 +54,7 @@ from legis.service.governance import (
 from legis.service.wardline import route_wardline_scan
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import WardlinePayloadError, WardlineSeverity
+from legis.wardline.ingest import WardlineSeverity
 
 
 _AGENT_TOOLS = frozenset(

@@ -15,8 +15,12 @@ jobs:
           enable-cache: true
       - name: Install dependencies
         run: uv sync --dev
+      - name: Run lint
+        run: uv run ruff check src
       - name: Run test suite
-        run: uv run pytest --cov=legis --cov-report=term-missing --cov-fail-under=70
+        run: uv run pytest --cov=legis --cov-report=term-missing --cov-report=json --cov-fail-under=88
+      - name: Enforce per-package coverage floors
+        run: uv run python scripts/check_coverage_floors.py
       - name: Run SEI conformance oracle
         run: uv run pytest tests/conformance/test_sei_oracle.py
       - name: Run live Loomweave oracle
