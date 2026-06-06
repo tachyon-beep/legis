@@ -39,6 +39,21 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   legis-7e85e8e7ba; upstream wardline `--allow-dirty`.)
 
 ### Changed
+- **Typed outcome/status axes (str Enums)** — five stringly-typed axes are now
+  `str, Enum` following the existing `WardlineSeverity` model: `ScanOutcome`
+  (`ROUTED` / `SKIPPED_DIRTY_TREE`), `ArtifactStatus`
+  (`verified` / `dirty` / `unverified`), `IdentityResolutionStatus`,
+  `LineageSnapshotStatus`, and `Suppressed`. A `str, Enum` serializes identically
+  to the bare string, so wire payloads and HMAC artifact signatures are
+  byte-identical (the signature path signs the raw scan, not legis's
+  enum-bearing provenance). `IdentityResolution` gains a `__post_init__`
+  bijection (`alive` `None`↔`UNAVAILABLE`, `False`↔`NOT_ALIVE`,
+  `True`↔`RESOLVED`) so a self-contradictory frozen record is no longer
+  representable; the dead `getattr` fallbacks in `service/governance.py` are
+  dropped. The `suppressed` field stays `str` on the wire-facing dataclass
+  (validation timing and error type unchanged); the enum is the vocabulary
+  source of truth. Behavior-preserving. (legis-bba4f22949; deferred from the
+  rc4 code review.)
 - **Table-driven MCP dispatch (Q-L8)** — `call_tool` now routes through a tool
   table instead of an if/elif ladder, and the stdio server bounds each stdin
   line so a malformed client cannot stream unbounded input. Behavior-preserving.
