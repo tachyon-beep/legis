@@ -140,6 +140,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format: human-readable text (default) or machine-readable json",
     )
 
+    install = subparsers.add_parser(
+        "install",
+        help="Inject legis instructions, install the legis-workflow skill, and register the hook",
+    )
+    install.add_argument("--claude-md", action="store_true", help="Inject instructions into CLAUDE.md only")
+    install.add_argument("--agents-md", action="store_true", help="Inject instructions into AGENTS.md only")
+    install.add_argument("--skills", action="store_true", help="Install the Claude Code skill pack only")
+    install.add_argument("--codex-skills", action="store_true", help="Install the Codex skill pack only")
+    install.add_argument("--hooks", action="store_true", help="Register the Claude Code SessionStart hook only")
+    install.add_argument("--gitignore", action="store_true", help="Add legis config rules to .gitignore only")
+
+    subparsers.add_parser(
+        "session-context",
+        help="SessionStart hook: refresh drifted legis instructions/skills in the cwd",
+    )
+
     return parser
 
 
@@ -221,6 +237,52 @@ def _check_override_rate(db_url: str) -> int:
     return 1 if res.status is GateStatus.FAIL else 0
 
 
+def _run_install(args) -> int:
+    from legis.install import (
+        ensure_gitignore,
+        inject_instructions,
+        install_claude_code_hooks,
+        install_codex_skills,
+        install_skills,
+    )
+
+    project_root = Path.cwd()
+    install_all = not any(
+        [args.claude_md, args.agents_md, args.skills, args.codex_skills, args.hooks, args.gitignore]
+    )
+
+    steps: list[tuple[bool, str, object]] = [
+        (install_all or args.claude_md, "CLAUDE.md", lambda: inject_instructions(project_root / "CLAUDE.md")),
+        (install_all or args.agents_md, "AGENTS.md", lambda: inject_instructions(project_root / "AGENTS.md")),
+        (install_all or args.skills, "Claude Code skill", lambda: install_skills(project_root)),
+        (install_all or args.codex_skills, "Codex skill", lambda: install_codex_skills(project_root)),
+        (install_all or args.hooks, "Claude Code hook", lambda: install_claude_code_hooks(project_root)),
+        (install_all or args.gitignore, ".gitignore", lambda: ensure_gitignore(project_root)),
+    ]
+
+    failures = 0
+    for selected, name, step in steps:
+        if not selected:
+            continue
+        ok, message = step()  # type: ignore[operator]
+        mark = "OK" if ok else "FAIL"
+        print(f"[{mark}] {name}: {message}")
+        if not ok:
+            failures += 1
+    return 1 if failures else 0
+
+
+def _refresh_instructions_best_effort() -> None:
+    """Refresh drifted legis instructions on MCP boot. Never raises."""
+    try:
+        from legis.hooks import refresh_instructions
+
+        for message in refresh_instructions(Path.cwd()):
+            print(message, file=sys.stderr)
+    except Exception:  # noqa: BLE001  (boot refresh must never break the server)
+        pass
+
+
 def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -245,6 +307,17 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         _apply_judge_env(args)
 
         run("legis.api.app:create_app", host=args.host, port=args.port, factory=True)
+        return 0
+
+    if args.command == "install":
+        return _run_install(args)
+
+    if args.command == "session-context":
+        from legis.hooks import generate_session_context
+
+        context = generate_session_context()
+        if context:
+            print(context)
         return 0
 
     if args.command in {"check-override-rate", "governance-gate"}:
@@ -274,6 +347,12 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         if args.policy_cells:
             os.environ["LEGIS_POLICY_CELLS"] = args.policy_cells
         _apply_judge_env(args)
+
+        # Universal refresh trigger: every agent (Claude or Codex) reaches legis
+        # by booting this MCP server, so refreshing here keeps the instruction
+        # block + skill pack fresh even in Codex-only repos with no SessionStart
+        # hook. Best-effort — it must never block or break server startup.
+        _refresh_instructions_best_effort()
 
         from legis.mcp import main as mcp_main
 

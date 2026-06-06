@@ -36,7 +36,9 @@ loomweave.yaml
 .wardline/
 wardline.yaml
 # Legis — local audit/scratch databases + their SQLite WAL sidecars
-# (audit data is never committed)
+# (audit data is never committed) and local working dir / config
 *.db
 *.db-shm
 *.db-wal
+.legis/
+legis.yaml
