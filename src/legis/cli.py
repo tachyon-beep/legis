@@ -285,7 +285,7 @@ def _refresh_instructions_best_effort() -> None:
     except Exception:  # noqa: BLE001  (boot refresh must never break the server)
         # Best-effort: never break the server, but don't vanish silently either —
         # the sibling SessionStart path (hooks.generate_session_context) logs too.
-        logger.debug("Best-effort instruction refresh on MCP boot failed", exc_info=True)
+        logger.warning("Best-effort instruction refresh on MCP boot failed", exc_info=True)
 
 
 def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:

@@ -9,6 +9,7 @@ append-only lineage snapshot at the moment of the governance decision.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -17,6 +18,8 @@ from typing import Any, Callable
 from legis.canonical import content_hash
 from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
+
+logger = logging.getLogger(__name__)
 
 # A long-lived resolver re-probes the Loomweave sei capability at most once per
 # this window. Without it a positive latch is permanent: a Loomweave that loses
@@ -112,7 +115,14 @@ class IdentityResolver:
                 self._capable = bool(self._client.capability())
             except Exception:
                 # Honest transient degrade — clear the latch so the next resolve
-                # retries rather than trusting a stale value.
+                # retries rather than trusting a stale value. Log it: the typed
+                # return is indistinguishable from a Loomweave that genuinely has
+                # no sei capability, so the warning is the only operator signal
+                # that the integration is broken rather than absent.
+                logger.warning(
+                    "Loomweave sei-capability probe failed; degrading to locator keys",
+                    exc_info=True,
+                )
                 self._capable = None
                 self._capable_checked_at = None
                 return False
@@ -125,6 +135,10 @@ class IdentityResolver:
         try:
             lineage = self._client.lineage(sei)  # type: ignore[union-attr]
         except Exception:
+            logger.warning(
+                "Loomweave lineage snapshot failed; recording lineage as unavailable",
+                exc_info=True,
+            )
             return None, LineageSnapshotStatus.UNAVAILABLE
         return (
             {"length": len(lineage), "hash": content_hash(lineage)},
@@ -145,6 +159,10 @@ class IdentityResolver:
         try:
             res = self._client.resolve_locator(locator)  # type: ignore[union-attr]
         except Exception:
+            logger.warning(
+                "Loomweave locator resolve failed; degrading to locator key",
+                exc_info=True,
+            )
             return degraded
         if not isinstance(res, dict):
             return degraded

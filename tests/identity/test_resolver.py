@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from legis.canonical import content_hash
@@ -11,12 +13,22 @@ from legis.identity.resolver import (
 
 
 class FakeClient:
-    def __init__(self, *, capable=True, resolve=None, lineage=None, boom=False, lineage_boom=False):
+    def __init__(
+        self,
+        *,
+        capable=True,
+        resolve=None,
+        lineage=None,
+        boom=False,
+        lineage_boom=False,
+        resolve_boom=False,
+    ):
         self._capable = capable
         self._resolve = resolve or {"alive": False}
         self._lineage = lineage or []
         self._boom = boom
         self._lineage_boom = lineage_boom
+        self._resolve_boom = resolve_boom
 
     def capability(self):
         if self._boom:
@@ -24,6 +36,8 @@ class FakeClient:
         return self._capable
 
     def resolve_locator(self, locator):
+        if self._resolve_boom:
+            raise RuntimeError("resolve_locator down")
         return self._resolve
 
     def resolve_sei(self, sei):  # not used by the resolver
@@ -179,6 +193,49 @@ def test_alive_sei_with_lineage_failure_records_unavailable_status():
     assert res.lineage_snapshot is None
     assert res.identity_resolution_status == "resolved"
     assert res.lineage_snapshot_status == "unavailable"
+
+
+# --- each degrade path must leave an operator-visible trail. A broken Loomweave
+# (auth/network/HMAC failure) returns the SAME typed-degraded record as a genuine
+# "no SEI" — so when governance shows `unavailable` en masse, the WARNING is the
+# only thing telling an operator "integration broken" from "nothing to resolve".
+# One test per except block, each needing a differently-configured fake. ---
+
+
+def test_capability_probe_failure_is_logged_with_exc_info(caplog):
+    r = IdentityResolver(FakeClient(boom=True))
+    with caplog.at_level(logging.WARNING, logger="legis.identity.resolver"):
+        res = r.resolve("python:function:m.f")
+    assert res.entity_key.identity_stable is False  # typed return unchanged
+    assert caplog.records, "expected a warning when capability() raises"
+    rec = caplog.records[-1]
+    assert rec.levelno >= logging.WARNING
+    assert rec.exc_info is not None
+
+
+def test_resolve_locator_failure_is_logged_with_exc_info(caplog):
+    r = IdentityResolver(FakeClient(resolve_boom=True))
+    with caplog.at_level(logging.WARNING, logger="legis.identity.resolver"):
+        res = r.resolve("python:function:m.f")
+    assert res.entity_key.identity_stable is False  # typed return unchanged
+    assert caplog.records, "expected a warning when resolve_locator() raises"
+    rec = caplog.records[-1]
+    assert rec.levelno >= logging.WARNING
+    assert rec.exc_info is not None
+
+
+def test_lineage_snapshot_failure_is_logged_with_exc_info(caplog):
+    r = IdentityResolver(FakeClient(resolve=ALIVE, lineage_boom=True))
+    with caplog.at_level(logging.WARNING, logger="legis.identity.resolver"):
+        res = r.resolve("python:function:m.f")
+    # The resolution still succeeds; only the lineage axis degrades — but the
+    # failure must still surface.
+    assert res.alive is True
+    assert res.lineage_snapshot_status == "unavailable"
+    assert caplog.records, "expected a warning when lineage() raises"
+    rec = caplog.records[-1]
+    assert rec.levelno >= logging.WARNING
+    assert rec.exc_info is not None
 
 
 # --- Q-L6: the capability latch must revalidate (TTL), and content_hash must be

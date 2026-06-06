@@ -1461,6 +1461,20 @@ cell = "protected"
     assert runtime.cell_registry.cell_for("ordinary.policy") == "chill"
 
 
+def test_tool_registries_are_in_sync():
+    # mcp.py hand-maintains three parallel name registries: the public schema
+    # (tool_definitions), the dispatch table (_TOOL_HANDLERS), and the agent-
+    # exposed set (_AGENT_TOOLS). They MUST agree. A handler without a schema
+    # entry is reachable-but-unvalidated (it accepts arbitrary arg keys); a
+    # schema entry without a handler advertises a tool that errors UNKNOWN_TOOL.
+    # The table-driven dispatch makes exactly this drift easy to introduce, so
+    # pin it directly rather than inferring it from per-tool listing tests.
+    from legis.mcp import _AGENT_TOOLS, _TOOL_HANDLERS, tool_definitions
+
+    defined = {t["name"] for t in tool_definitions()}
+    assert defined == set(_TOOL_HANDLERS) == set(_AGENT_TOOLS)
+
+
 def test_git_rename_feed_get_is_listed():
     from legis.mcp import tool_definitions
 

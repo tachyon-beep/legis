@@ -112,3 +112,31 @@ def test_mcp_boot_refresh_failure_does_not_break_startup(tmp_path, monkeypatch):
     rc = main(["mcp", "--agent-id", "agent-1"])
     assert rc == 0
     assert calls == ["agent-1"]
+
+
+def test_mcp_boot_refresh_failure_is_logged_with_exc_info(tmp_path, monkeypatch, caplog):
+    # The boot refresh is the ONLY refresh trigger in a Codex-only repo with no
+    # SessionStart hook. A persistently failing refresh must be visible at the
+    # default level (WARNING), not swallowed at DEBUG — otherwise agents run on
+    # drifted instructions with no signal. Mirrors hooks.generate_session_context.
+    monkeypatch.chdir(tmp_path)
+
+    import logging
+
+    import legis.hooks as hooks_module
+    import legis.mcp as mcp_module
+
+    def boom(_root):
+        raise RuntimeError("refresh exploded")
+
+    monkeypatch.setattr(hooks_module, "refresh_instructions", boom)
+    monkeypatch.setattr(mcp_module, "main", lambda agent_id: 0)
+
+    with caplog.at_level(logging.WARNING, logger="legis.cli"):
+        rc = main(["mcp", "--agent-id", "agent-1"])
+
+    assert rc == 0
+    assert caplog.records, "expected a warning when boot refresh raises"
+    rec = caplog.records[-1]
+    assert rec.levelno >= logging.WARNING
+    assert rec.exc_info is not None
