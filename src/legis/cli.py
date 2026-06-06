@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from legis.governance.sei_backfill import run_pre_sei_backfill
 from legis.identity.loomweave_client import HttpLoomweaveIdentity, loomweave_hmac_key_from_env
 from legis.policy.boundary_scan import scan_policy_boundaries
 from legis.store.audit_store import AuditStore
+
+logger = logging.getLogger(__name__)
 
 
 def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
@@ -280,7 +283,9 @@ def _refresh_instructions_best_effort() -> None:
         for message in refresh_instructions(Path.cwd()):
             print(message, file=sys.stderr)
     except Exception:  # noqa: BLE001  (boot refresh must never break the server)
-        pass
+        # Best-effort: never break the server, but don't vanish silently either —
+        # the sibling SessionStart path (hooks.generate_session_context) logs too.
+        logger.debug("Best-effort instruction refresh on MCP boot failed", exc_info=True)
 
 
 def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
