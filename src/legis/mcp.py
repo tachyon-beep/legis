@@ -8,6 +8,7 @@ identity from call arguments.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 import json
 import os
@@ -77,6 +78,25 @@ _AGENT_TOOLS = frozenset(
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
 _SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26")
 _DEFAULT_PROTOCOL_VERSION = _SUPPORTED_PROTOCOL_VERSIONS[-1]
+
+# Upper bound on a single JSON-RPC line read from stdin. The hand-rolled framing
+# is one object per line; without a bound a peer (or a corrupted pipe) sending a
+# line with no newline forces an unbounded read into memory. 16 MiB comfortably
+# fits a maximal scan_route request (MAX_FINDINGS=500 with properties) while
+# refusing a pathological one. Override with LEGIS_MCP_MAX_REQUEST_BYTES.
+_DEFAULT_MAX_REQUEST_BYTES = 16 * 1024 * 1024
+
+
+def _max_request_bytes() -> int:
+    raw = os.environ.get("LEGIS_MCP_MAX_REQUEST_BYTES")
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return _DEFAULT_MAX_REQUEST_BYTES
+        if value > 0:
+            return value
+    return _DEFAULT_MAX_REQUEST_BYTES
 
 
 @dataclass
@@ -688,365 +708,398 @@ def _verified_records(runtime: McpRuntime) -> list[Any]:
     return runtime.engine.records()
 
 
+def _tool_policy_explain(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    explanation = explain_policy(
+        _registry(runtime),
+        policy=_require(args, "policy"),
+        entity=_require(args, "entity"),
+        engine=runtime.engine,
+        protected_gate=runtime.protected_gate,
+        signoff_gate=runtime.signoff_gate,
+    )
+    return _tool_result(_explanation_payload(explanation))
+
+
+def _tool_override_submit(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    policy = _require(args, "policy")
+    entity = _require(args, "entity")
+    rationale = _require(args, "rationale")
+    idempotency_key = _optional_string(args, "idempotency_key")
+    simple_engine = (
+        _engine(runtime)
+        if _registry(runtime).cell_for(policy) in ("chill", "coached")
+        else runtime.engine
+    )
+    explanation = explain_policy(
+        _registry(runtime),
+        policy=policy,
+        entity=entity,
+        engine=simple_engine,
+        protected_gate=runtime.protected_gate,
+        signoff_gate=runtime.signoff_gate,
+    )
+    if not explanation.enabled:
+        raise NotEnabledError(
+            f"cell {explanation.cell!r} is not enabled for override submission"
+        )
+    idempotency_request_hash = (
+        _override_idempotency_request_hash(
+            agent_id=runtime.agent_id,
+            policy=policy,
+            entity=entity,
+            rationale=rationale,
+            cell=explanation.cell,
+            file_fingerprint=_optional_string(args, "file_fingerprint"),
+            ast_path=_optional_string(args, "ast_path"),
+        )
+        if idempotency_key is not None
+        else None
+    )
+    extra_extensions = (
+        {
+            "mcp_idempotency_key": idempotency_key,
+            "mcp_idempotency_request_hash": idempotency_request_hash,
+            "mcp_cell": explanation.cell,
+        }
+        if idempotency_key is not None
+        else {"mcp_cell": explanation.cell}
+    )
+    if idempotency_key is not None and idempotency_request_hash is not None:
+        existing = _existing_idempotent_record(
+            runtime, idempotency_key, idempotency_request_hash
+        )
+        if existing is not None:
+            return _tool_result(
+                _idempotent_override_response(existing.payload, existing.seq)
+            )
+    if explanation.cell in ("chill", "coached"):
+        override_result = submit_override(
+            _engine(runtime),
+            identity=runtime.identity,
+            policy=policy,
+            entity=entity,
+            rationale=rationale,
+            agent_id=runtime.agent_id,
+            extra_extensions=extra_extensions,
+        )
+        if explanation.cell == "chill":
+            return _tool_result(
+                {
+                    "outcome": "ACCEPTED_SELF",
+                    "cell": "chill",
+                    "seq": override_result.seq,
+                    "note": "self-cleared; human reviews asynchronously",
+                }
+            )
+        return _tool_result(
+            _judged_result_payload(
+                cell="coached",
+                seq=override_result.seq,
+                accepted=override_result.accepted,
+                judge_model=override_result.judge_model,
+                judge_rationale=override_result.judge_rationale,
+            )
+        )
+    if explanation.cell == "structured":
+        signoff = request_signoff(
+            runtime.signoff_gate,
+            identity=runtime.identity,
+            policy=policy,
+            entity=entity,
+            rationale=rationale,
+            agent_id=runtime.agent_id,
+            extra_extensions=extra_extensions,
+        )
+        return _tool_result(
+            {
+                "outcome": "ESCALATED_PENDING",
+                "cell": "structured",
+                "seq": signoff.seq,
+                "cleared": signoff.cleared,
+                "human_required": True,
+                "operator_instruction": (
+                    f"Human sign-off required for seq {signoff.seq}."
+                ),
+                "poll_tool": "signoff_status_get",
+                "poll_handle": signoff.seq,
+            }
+        )
+    if explanation.cell == "protected":
+        missing = [
+            item.to_payload()
+            for item in explanation.required_inputs
+            if not _optional_string(args, item.field)
+        ]
+        if missing:
+            return _tool_result(
+                {
+                    "outcome": "NEED_INPUTS",
+                    "cell": "protected",
+                    "required_inputs": missing,
+                }
+            )
+        protected = submit_protected_override(
+            runtime.protected_gate,
+            identity=runtime.identity,
+            policy=policy,
+            entity=entity,
+            rationale=rationale,
+            agent_id=runtime.agent_id,
+            file_fingerprint=_require(args, "file_fingerprint"),
+            ast_path=_require(args, "ast_path"),
+            source_root=runtime.source_root,
+            extra_extensions=extra_extensions,
+        )
+        return _tool_result(
+            _judged_result_payload(
+                cell="protected",
+                seq=protected.seq,
+                accepted=protected.accepted,
+                judge_model=protected.judge_model,
+                judge_rationale=protected.judge_rationale,
+            )
+        )
+    raise NotEnabledError(f"unsupported policy cell {explanation.cell!r}")
+
+
+def _tool_signoff_status_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    seq = _require_int(args, "seq")
+    if runtime.signoff_gate is None:
+        raise NotEnabledError("structured cell not enabled")
+    request = runtime.signoff_gate.request_record(seq)
+    if request is None:
+        return _tool_error("NO_SUCH_REQUEST", f"no sign-off request at seq {seq}")
+    if not runtime.signoff_gate.is_cleared(seq):
+        return _tool_result({"cleared": False, "seq": seq})
+    signed = _signoff_signed_record(runtime, seq)
+    payload: dict[str, Any] = {"cleared": True, "seq": seq}
+    if signed is not None:
+        payload["signed_by"] = signed.get("agent_id")
+        payload["signed_at"] = signed.get("recorded_at")
+    return _tool_result(payload)
+
+
+def _tool_policy_evaluate(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    ev = evaluate_policy(
+        _grammar(runtime),
+        engine=_engine(runtime),
+        policy=_require(args, "policy"),
+        target=_require_object(args, "target"),
+    )
+    return _tool_result(
+        {
+            "outcome": ev.result.value,
+            "detail": ev.detail,
+            "provenance_gap": ev.provenance_gap,
+        }
+    )
+
+
+def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
+    server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
+    if server_cell and server_cell_by_severity:
+        return _tool_error(
+            "INVALID_CELL_SPEC", "server Wardline routing is misconfigured"
+        )
+    has_cell = "cell" in args
+    has_map = "severity_map" in args
+    has_fail_on = "fail_on" in args
+    server_routing = server_cell is not None or server_cell_by_severity is not None
+    if server_routing and (has_cell or has_map or has_fail_on):
+        return _tool_error(
+            "INVALID_CELL_SPEC", "Wardline routing is server-owned"
+        )
+    if not server_routing:
+        if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
+            return _tool_error(
+                "INVALID_CELL_SPEC",
+                "Wardline routing is server-owned; configure "
+                "LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
+            )
+        if has_fail_on:
+            if not has_cell or has_map:
+                return _tool_error(
+                    "INVALID_CELL_SPEC",
+                    "fail_on routing requires cell and forbids severity_map",
+                )
+        elif has_cell == has_map:
+            return _tool_error(
+                "INVALID_CELL_SPEC",
+                "provide exactly one of cell or severity_map",
+            )
+    scan = _require_object(args, "scan")
+    scan_policy: WardlineCellPolicy | None = None
+    scan_cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
+    scan_fail_on: WardlineSeverity | None = None
+    try:
+        if server_cell_by_severity is not None:
+            scan_cell_map = _parse_wardline_cell_map(server_cell_by_severity)
+        elif server_cell is not None:
+            scan_policy = WardlineCellPolicy(server_cell)
+        elif has_cell:
+            scan_policy = WardlineCellPolicy(_require(args, "cell"))
+            if has_fail_on:
+                scan_fail_on = WardlineSeverity[_require(args, "fail_on")]
+        else:
+            raw_map = _require_object(args, "severity_map")
+            scan_cell_map = {
+                WardlineSeverity[severity]: WardlineCellPolicy(cell)
+                for severity, cell in raw_map.items()
+            }
+    except (KeyError, ValueError) as exc:
+        return _tool_error("INVALID_CELL_SPEC", str(exc))
+    routed = route_wardline_scan(
+        scan,
+        agent_id=runtime.agent_id,
+        identity=runtime.identity,
+        engine=_engine(runtime),
+        signoff=runtime.signoff_gate,
+        policy=scan_policy,
+        cell_map=scan_cell_map,
+        fail_on=scan_fail_on,
+        artifact_key=(
+            runtime.wardline_artifact_key
+            or (
+                os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
+                if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
+                else None
+            )
+        ),
+    )
+    return _tool_result({"outcome": "ROUTED", "routed": routed})
+
+
+def _tool_git_branch_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    return _tool_result(
+        {"branches": [asdict(branch) for branch in _git(runtime).branches()]}
+    )
+
+
+def _tool_git_commit_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    return _tool_result(
+        {"commit": asdict(_git(runtime).commit(_require(args, "sha")))}
+    )
+
+
+def _tool_git_rename_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    return _tool_result(
+        {
+            "renames": [
+                asdict(rename)
+                for rename in _git(runtime).renames(_require(args, "rev_range"))
+            ]
+        }
+    )
+
+
+def _tool_git_rename_feed_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    from legis.git.rename_feed import build_rename_feed
+
+    return _tool_result(
+        build_rename_feed(
+            runtime.source_root or os.getcwd(),
+            base=_require(args, "base"),
+            head=args.get("head", "HEAD"),
+            include_worktree=bool(args.get("include_worktree", False)),
+        )
+    )
+
+
+def _tool_filigree_closure_gate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    from legis.governance.filigree_gate import evaluate_issue_closure
+
+    if runtime.binding_ledger is None:
+        raise NotEnabledError("binding ledger not enabled")
+    return _tool_result(
+        evaluate_issue_closure(runtime.binding_ledger, issue_id=_require(args, "issue_id"))
+    )
+
+
+def _tool_pull_request_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    number = _require_int(args, "number")
+    pull = _pulls(runtime).get(number)
+    if pull is None:
+        return _tool_error("NOT_FOUND", f"unknown PR: {number}")
+    pull_payload = asdict(pull)
+    pull_payload["state"] = pull.state.value
+    pull_checks = (
+        _checks(runtime).for_pr(number)
+        if runtime.check_surface is not None
+        else []
+    )
+    pull_payload["checks"] = [_check_to_dict(run) for run in pull_checks]
+    return _tool_result(pull_payload)
+
+
+def _tool_check_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    check_surface = _checks(runtime)
+    target_type = _require(args, "target_type")
+    target = _require(args, "target")
+    if target_type == "commit":
+        checks = check_surface.for_commit(target)
+        response_target: str | int = target
+    elif target_type == "branch":
+        checks = check_surface.for_branch(target)
+        response_target = target
+    elif target_type == "pr":
+        try:
+            pr_number = int(target)
+        except ValueError as exc:
+            raise InvalidArgumentError(
+                "target_type 'pr' requires an integer target"
+            ) from exc
+        checks = check_surface.for_pr(pr_number)
+        response_target = pr_number
+    else:
+        raise InvalidArgumentError(
+            "target_type must be one of: commit, branch, pr"
+        )
+    return _tool_result(
+        {
+            "target_type": target_type,
+            "target": response_target,
+            "checks": [_check_to_dict(run) for run in checks],
+        }
+    )
+
+
+def _tool_override_rate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    rate = compute_override_rate(_verified_records(runtime))
+    return _tool_result(
+        {
+            "status": rate.status.value,
+            "rate": rate.rate,
+            "sample_size": rate.sample_size,
+            "note": _OVERRIDE_RATE_NOTE,
+        }
+    )
+
+
+_TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any]]] = {
+    "policy_explain": _tool_policy_explain,
+    "override_submit": _tool_override_submit,
+    "signoff_status_get": _tool_signoff_status_get,
+    "policy_evaluate": _tool_policy_evaluate,
+    "scan_route": _tool_scan_route,
+    "git_branch_list": _tool_git_branch_list,
+    "git_commit_get": _tool_git_commit_get,
+    "git_rename_list": _tool_git_rename_list,
+    "git_rename_feed_get": _tool_git_rename_feed_get,
+    "filigree_closure_gate_get": _tool_filigree_closure_gate_get,
+    "pull_request_get": _tool_pull_request_get,
+    "check_list": _tool_check_list,
+    "override_rate_get": _tool_override_rate_get,
+}
+
+
 def call_tool(runtime: McpRuntime, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         _validate_argument_keys(name, args)
-        if name == "policy_explain":
-            explanation = explain_policy(
-                _registry(runtime),
-                policy=_require(args, "policy"),
-                entity=_require(args, "entity"),
-                engine=runtime.engine,
-                protected_gate=runtime.protected_gate,
-                signoff_gate=runtime.signoff_gate,
-            )
-            return _tool_result(_explanation_payload(explanation))
-
-        if name == "override_submit":
-            policy = _require(args, "policy")
-            entity = _require(args, "entity")
-            rationale = _require(args, "rationale")
-            idempotency_key = _optional_string(args, "idempotency_key")
-            simple_engine = (
-                _engine(runtime)
-                if _registry(runtime).cell_for(policy) in ("chill", "coached")
-                else runtime.engine
-            )
-            explanation = explain_policy(
-                _registry(runtime),
-                policy=policy,
-                entity=entity,
-                engine=simple_engine,
-                protected_gate=runtime.protected_gate,
-                signoff_gate=runtime.signoff_gate,
-            )
-            if not explanation.enabled:
-                raise NotEnabledError(
-                    f"cell {explanation.cell!r} is not enabled for override submission"
-                )
-            idempotency_request_hash = (
-                _override_idempotency_request_hash(
-                    agent_id=runtime.agent_id,
-                    policy=policy,
-                    entity=entity,
-                    rationale=rationale,
-                    cell=explanation.cell,
-                    file_fingerprint=_optional_string(args, "file_fingerprint"),
-                    ast_path=_optional_string(args, "ast_path"),
-                )
-                if idempotency_key is not None
-                else None
-            )
-            extra_extensions = (
-                {
-                    "mcp_idempotency_key": idempotency_key,
-                    "mcp_idempotency_request_hash": idempotency_request_hash,
-                    "mcp_cell": explanation.cell,
-                }
-                if idempotency_key is not None
-                else {"mcp_cell": explanation.cell}
-            )
-            if idempotency_key is not None and idempotency_request_hash is not None:
-                existing = _existing_idempotent_record(
-                    runtime, idempotency_key, idempotency_request_hash
-                )
-                if existing is not None:
-                    return _tool_result(
-                        _idempotent_override_response(existing.payload, existing.seq)
-                    )
-            if explanation.cell in ("chill", "coached"):
-                override_result = submit_override(
-                    _engine(runtime),
-                    identity=runtime.identity,
-                    policy=policy,
-                    entity=entity,
-                    rationale=rationale,
-                    agent_id=runtime.agent_id,
-                    extra_extensions=extra_extensions,
-                )
-                if explanation.cell == "chill":
-                    return _tool_result(
-                        {
-                            "outcome": "ACCEPTED_SELF",
-                            "cell": "chill",
-                            "seq": override_result.seq,
-                            "note": "self-cleared; human reviews asynchronously",
-                        }
-                    )
-                return _tool_result(
-                    _judged_result_payload(
-                        cell="coached",
-                        seq=override_result.seq,
-                        accepted=override_result.accepted,
-                        judge_model=override_result.judge_model,
-                        judge_rationale=override_result.judge_rationale,
-                    )
-                )
-            if explanation.cell == "structured":
-                signoff = request_signoff(
-                    runtime.signoff_gate,
-                    identity=runtime.identity,
-                    policy=policy,
-                    entity=entity,
-                    rationale=rationale,
-                    agent_id=runtime.agent_id,
-                    extra_extensions=extra_extensions,
-                )
-                return _tool_result(
-                    {
-                        "outcome": "ESCALATED_PENDING",
-                        "cell": "structured",
-                        "seq": signoff.seq,
-                        "cleared": signoff.cleared,
-                        "human_required": True,
-                        "operator_instruction": (
-                            f"Human sign-off required for seq {signoff.seq}."
-                        ),
-                        "poll_tool": "signoff_status_get",
-                        "poll_handle": signoff.seq,
-                    }
-                )
-            if explanation.cell == "protected":
-                missing = [
-                    item.to_payload()
-                    for item in explanation.required_inputs
-                    if not _optional_string(args, item.field)
-                ]
-                if missing:
-                    return _tool_result(
-                        {
-                            "outcome": "NEED_INPUTS",
-                            "cell": "protected",
-                            "required_inputs": missing,
-                        }
-                    )
-                protected = submit_protected_override(
-                    runtime.protected_gate,
-                    identity=runtime.identity,
-                    policy=policy,
-                    entity=entity,
-                    rationale=rationale,
-                    agent_id=runtime.agent_id,
-                    file_fingerprint=_require(args, "file_fingerprint"),
-                    ast_path=_require(args, "ast_path"),
-                    source_root=runtime.source_root,
-                    extra_extensions=extra_extensions,
-                )
-                return _tool_result(
-                    _judged_result_payload(
-                        cell="protected",
-                        seq=protected.seq,
-                        accepted=protected.accepted,
-                        judge_model=protected.judge_model,
-                        judge_rationale=protected.judge_rationale,
-                    )
-                )
-            raise NotEnabledError(f"unsupported policy cell {explanation.cell!r}")
-
-        if name == "signoff_status_get":
-            seq = _require_int(args, "seq")
-            if runtime.signoff_gate is None:
-                raise NotEnabledError("structured cell not enabled")
-            request = runtime.signoff_gate.request_record(seq)
-            if request is None:
-                return _tool_error("NO_SUCH_REQUEST", f"no sign-off request at seq {seq}")
-            if not runtime.signoff_gate.is_cleared(seq):
-                return _tool_result({"cleared": False, "seq": seq})
-            signed = _signoff_signed_record(runtime, seq)
-            payload: dict[str, Any] = {"cleared": True, "seq": seq}
-            if signed is not None:
-                payload["signed_by"] = signed.get("agent_id")
-                payload["signed_at"] = signed.get("recorded_at")
-            return _tool_result(payload)
-
-        if name == "policy_evaluate":
-            ev = evaluate_policy(
-                _grammar(runtime),
-                engine=_engine(runtime),
-                policy=_require(args, "policy"),
-                target=_require_object(args, "target"),
-            )
-            return _tool_result(
-                {
-                    "outcome": ev.result.value,
-                    "detail": ev.detail,
-                    "provenance_gap": ev.provenance_gap,
-                }
-            )
-
-        if name == "scan_route":
-            server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
-            server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
-            if server_cell and server_cell_by_severity:
-                return _tool_error(
-                    "INVALID_CELL_SPEC", "server Wardline routing is misconfigured"
-                )
-            has_cell = "cell" in args
-            has_map = "severity_map" in args
-            has_fail_on = "fail_on" in args
-            server_routing = server_cell is not None or server_cell_by_severity is not None
-            if server_routing and (has_cell or has_map or has_fail_on):
-                return _tool_error(
-                    "INVALID_CELL_SPEC", "Wardline routing is server-owned"
-                )
-            if not server_routing:
-                if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
-                    return _tool_error(
-                        "INVALID_CELL_SPEC",
-                        "Wardline routing is server-owned; configure "
-                        "LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
-                    )
-                if has_fail_on:
-                    if not has_cell or has_map:
-                        return _tool_error(
-                            "INVALID_CELL_SPEC",
-                            "fail_on routing requires cell and forbids severity_map",
-                        )
-                elif has_cell == has_map:
-                    return _tool_error(
-                        "INVALID_CELL_SPEC",
-                        "provide exactly one of cell or severity_map",
-                    )
-            scan = _require_object(args, "scan")
-            scan_policy: WardlineCellPolicy | None = None
-            scan_cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
-            scan_fail_on: WardlineSeverity | None = None
-            try:
-                if server_cell_by_severity is not None:
-                    scan_cell_map = _parse_wardline_cell_map(server_cell_by_severity)
-                elif server_cell is not None:
-                    scan_policy = WardlineCellPolicy(server_cell)
-                elif has_cell:
-                    scan_policy = WardlineCellPolicy(_require(args, "cell"))
-                    if has_fail_on:
-                        scan_fail_on = WardlineSeverity[_require(args, "fail_on")]
-                else:
-                    raw_map = _require_object(args, "severity_map")
-                    scan_cell_map = {
-                        WardlineSeverity[severity]: WardlineCellPolicy(cell)
-                        for severity, cell in raw_map.items()
-                    }
-            except (KeyError, ValueError) as exc:
-                return _tool_error("INVALID_CELL_SPEC", str(exc))
-            routed = route_wardline_scan(
-                scan,
-                agent_id=runtime.agent_id,
-                identity=runtime.identity,
-                engine=_engine(runtime),
-                signoff=runtime.signoff_gate,
-                policy=scan_policy,
-                cell_map=scan_cell_map,
-                fail_on=scan_fail_on,
-                artifact_key=(
-                    runtime.wardline_artifact_key
-                    or (
-                        os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
-                        if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")
-                        else None
-                    )
-                ),
-            )
-            return _tool_result({"outcome": "ROUTED", "routed": routed})
-
-        if name == "git_branch_list":
-            return _tool_result(
-                {"branches": [asdict(branch) for branch in _git(runtime).branches()]}
-            )
-
-        if name == "git_commit_get":
-            return _tool_result(
-                {"commit": asdict(_git(runtime).commit(_require(args, "sha")))}
-            )
-
-        if name == "git_rename_list":
-            return _tool_result(
-                {
-                    "renames": [
-                        asdict(rename)
-                        for rename in _git(runtime).renames(_require(args, "rev_range"))
-                    ]
-                }
-            )
-
-        if name == "git_rename_feed_get":
-            from legis.git.rename_feed import build_rename_feed
-
-            return _tool_result(
-                build_rename_feed(
-                    runtime.source_root or os.getcwd(),
-                    base=_require(args, "base"),
-                    head=args.get("head", "HEAD"),
-                    include_worktree=bool(args.get("include_worktree", False)),
-                )
-            )
-
-        if name == "filigree_closure_gate_get":
-            from legis.governance.filigree_gate import evaluate_issue_closure
-
-            if runtime.binding_ledger is None:
-                raise NotEnabledError("binding ledger not enabled")
-            return _tool_result(
-                evaluate_issue_closure(runtime.binding_ledger, issue_id=_require(args, "issue_id"))
-            )
-
-        if name == "pull_request_get":
-            number = _require_int(args, "number")
-            pull = _pulls(runtime).get(number)
-            if pull is None:
-                return _tool_error("NOT_FOUND", f"unknown PR: {number}")
-            pull_payload = asdict(pull)
-            pull_payload["state"] = pull.state.value
-            pull_checks = (
-                _checks(runtime).for_pr(number)
-                if runtime.check_surface is not None
-                else []
-            )
-            pull_payload["checks"] = [_check_to_dict(run) for run in pull_checks]
-            return _tool_result(pull_payload)
-
-        if name == "check_list":
-            check_surface = _checks(runtime)
-            target_type = _require(args, "target_type")
-            target = _require(args, "target")
-            if target_type == "commit":
-                checks = check_surface.for_commit(target)
-                response_target: str | int = target
-            elif target_type == "branch":
-                checks = check_surface.for_branch(target)
-                response_target = target
-            elif target_type == "pr":
-                try:
-                    pr_number = int(target)
-                except ValueError as exc:
-                    raise InvalidArgumentError(
-                        "target_type 'pr' requires an integer target"
-                    ) from exc
-                checks = check_surface.for_pr(pr_number)
-                response_target = pr_number
-            else:
-                raise InvalidArgumentError(
-                    "target_type must be one of: commit, branch, pr"
-                )
-            return _tool_result(
-                {
-                    "target_type": target_type,
-                    "target": response_target,
-                    "checks": [_check_to_dict(run) for run in checks],
-                }
-            )
-
-        if name == "override_rate_get":
-            rate = compute_override_rate(_verified_records(runtime))
-            return _tool_result(
-                {
-                    "status": rate.status.value,
-                    "rate": rate.rate,
-                    "sample_size": rate.sample_size,
-                    "note": _OVERRIDE_RATE_NOTE,
-                }
-            )
-
-        return _tool_error("UNKNOWN_TOOL", f"unknown tool: {name}")
+        handler = _TOOL_HANDLERS.get(name)
+        if handler is None:
+            return _tool_error("UNKNOWN_TOOL", f"unknown tool: {name}")
+        return handler(runtime, args)
     except Exception as exc:
         return _service_error(exc)
 
@@ -1113,8 +1166,51 @@ def handle_request(request: dict[str, Any], runtime: McpRuntime) -> dict[str, An
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
+def _read_bounded_line(stream: TextIO, max_chars: int) -> tuple[str, bool]:
+    """Read one newline-terminated record, bounded to ``max_chars``.
+
+    Returns ``(line, overflow)``. ``overflow`` is True when the record exceeded
+    the bound — the remainder of that over-long line is then drained to the next
+    newline so framing stays aligned for the following request. Returns
+    ``("", False)`` at EOF. ``readline(max_chars + 1)`` stops at a newline OR the
+    size cap, so a record longer than the bound comes back without a trailing
+    newline — the signal we key on.
+    """
+    line = stream.readline(max_chars + 1)
+    if line == "":
+        return "", False
+    if len(line) > max_chars and not line.endswith("\n"):
+        while True:
+            extra = stream.readline(max_chars + 1)
+            if extra == "" or extra.endswith("\n"):
+                break
+        return line, True
+    return line, False
+
+
 def run_jsonrpc(input_stream: TextIO, output_stream: TextIO, runtime: McpRuntime) -> None:
-    for line in input_stream:
+    max_chars = _max_request_bytes()
+    while True:
+        line, overflow = _read_bounded_line(input_stream, max_chars)
+        if not line:
+            break  # EOF
+        if overflow:
+            output_stream.write(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32700,
+                            "message": f"request exceeds maximum size of {max_chars} bytes",
+                        },
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            output_stream.flush()
+            continue
         if not line.strip():
             continue
         try:

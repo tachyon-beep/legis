@@ -1393,3 +1393,45 @@ def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_p
 
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+
+
+# --- roadmap 14: stdin JSON-RPC line-size bound ---
+
+def test_run_jsonrpc_rejects_oversized_line_and_stays_framed(tmp_path, monkeypatch):
+    # A single line over the bound is rejected with -32700 and does not consume
+    # the following request — framing realigns at the next newline.
+    monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", "400")
+    runtime, _store = _runtime(tmp_path)
+    runtime.initialized = False
+    oversized = {
+        "jsonrpc": "2.0", "id": 99, "method": "tools/list",
+        "params": {"pad": "A" * 2000},
+    }
+    responses = _run(
+        _messages(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "2025-03-26"}},
+            oversized,
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ),
+        runtime,
+    )
+
+    assert responses[0]["id"] == 1 and "result" in responses[0]
+    assert responses[1]["id"] is None
+    assert responses[1]["error"]["code"] == -32700
+    assert "maximum size" in responses[1]["error"]["message"]
+    # The request AFTER the oversized line is still parsed and answered.
+    assert responses[2]["id"] == 2 and "result" in responses[2]
+
+
+def test_max_request_bytes_env_override_and_fallback(monkeypatch):
+    from legis.mcp import _DEFAULT_MAX_REQUEST_BYTES, _max_request_bytes
+
+    monkeypatch.delenv("LEGIS_MCP_MAX_REQUEST_BYTES", raising=False)
+    assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+    monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", "4096")
+    assert _max_request_bytes() == 4096
+    for bad in ("not-an-int", "0", "-5"):
+        monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", bad)
+        assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
