@@ -17,13 +17,17 @@ import hashlib
 import importlib.metadata
 import importlib.resources
 import json
+import logging
 import os
+import re
 import shlex
 import shutil
 import stat
 import tempfile
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -33,6 +37,29 @@ INSTRUCTIONS_MARKER = "<!-- legis:instructions"
 """Detection prefix for legis instruction blocks in markdown files."""
 
 _END_MARKER = "<!-- /legis:instructions -->"
+
+# Recognises ANY tool's instruction-block fence (open or close) by its vendor
+# namespace, so legis can bound its own rewrite at a *foreign* fence and never
+# delete a co-resident sibling block (wardline/filigree) in a shared
+# CLAUDE.md/AGENTS.md (peer of filigree-bcbd4d66fd). The namespace match is
+# case-insensitive: an uppercase-namespaced sibling must still register as a
+# boundary. The cross-tool multi-owner block contract lives in weft
+# conventions.md (C-4).
+_INSTR_FENCE_RE = re.compile(r"<!--\s*/?([A-Za-z0-9_-]+):instructions")
+
+
+def _first_foreign_fence_pos(content: str, search_from: int) -> int:
+    """Index of the first non-legis instruction fence at/after *search_from*.
+
+    Own-namespace (``legis``) fences are absorbed — never treated as a
+    boundary — so duplicate or unclosed legis blocks still collapse to one
+    clean block (the orphan-tail idempotency invariant). When no foreign fence
+    follows, returns ``len(content)`` (i.e. bound at EOF).
+    """
+    for m in _INSTR_FENCE_RE.finditer(content, search_from):
+        if m.group(1).lower() != "legis":
+            return m.start()
+    return len(content)
 
 SKILL_NAME = "legis-workflow"
 """Name of the legis skill pack directory."""
@@ -152,6 +179,14 @@ def _build_instructions_block() -> str:
 
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write *content* to *path* atomically (temp + rename), preserving mode."""
+    # Refuse-to-empty guard (filigree-04bad2a2bf parity). Every caller of this
+    # writer (instruction injection, .gitignore management, settings.json) always
+    # has non-empty content; an empty or whitespace-only payload can only be
+    # corruption or a logic bug. Refuse loudly rather than rename an empty temp
+    # file over a populated CLAUDE.md/AGENTS.md/.gitignore.
+    if not content.strip():
+        msg = f"refusing to write empty content to {path}"
+        raise ValueError(msg)
     reject_symlink(path)
     existing_mode: int | None
     try:
@@ -195,17 +230,47 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
 
     content = file_path.read_text(encoding="utf-8")
     if INSTRUCTIONS_MARKER in content:
+        # Bound legis's writable region at the first of:
+        #   (a) its own close marker, *if* that close precedes any foreign fence
+        #       → normal in-place replace;
+        #   (b) the next foreign-namespace fence — bounded recovery for a
+        #       malformed/unclosed block, and for the unclosed-first / closed-
+        #       later "Shape 2" where a bare ``find`` would otherwise jump over a
+        #       foreign block to a later legis close;
+        #   (c) EOF.
+        # Own-namespace fences are absorbed (see _first_foreign_fence_pos), so
+        # duplicate/unclosed legis blocks still collapse to one clean block —
+        # preserving the orphan-tail idempotency invariant. Monotonic safety:
+        # in every branch ``bound`` ≤ the old code's cut point, so this can only
+        # *preserve* bytes the old code deleted, never delete bytes it kept.
         start = content.index(INSTRUCTIONS_MARKER)
-        end_pos = content.find(_END_MARKER, start)
-        if end_pos != -1:
-            end = end_pos + len(_END_MARKER)
-            content = content[:start] + block + content[end:]
+        own_end = content.find(_END_MARKER, start)
+        foreign = _first_foreign_fence_pos(content, start + len(INSTRUCTIONS_MARKER))
+        if own_end != -1 and own_end < foreign:
+            bound = own_end + len(_END_MARKER)
+            tail = content[bound:]
+            sep = ""
         else:
-            # Missing end marker — the block is unclosed, so everything from
-            # the start marker onward belongs to the broken block. Replace
-            # from the start marker through EOF rather than leaving orphan
-            # content the next run can no longer distinguish from user text.
-            content = content[:start] + block
+            # Bounded recovery: stop at the foreign fence (or EOF). Re-insert the
+            # separating newline we may have eaten, so our close marker is never
+            # glued mid-line against a following foreign fence — keeping us
+            # independent of whether a sibling's block detector is line-anchored.
+            bound = foreign
+            tail = content[bound:]
+            sep = "\n" if (bound < len(content) and not tail.startswith("\n")) else ""
+        if INSTRUCTIONS_MARKER in tail:
+            # A second legis block survives beyond the boundary because
+            # canonicalising it would mean reaching across a block we don't own.
+            # It is STALE, conflicting guidance — not a harmless duplicate — so
+            # surface it instead of silently shipping a split brain
+            # (foreign-safety wins over own-dedup).
+            logger.warning(
+                "legis instruction block in %s has a duplicate that could not be "
+                "canonicalised without crossing another tool's block; the stale copy "
+                "was left in place. Resolve it by hand.",
+                file_path,
+            )
+        content = content[:start] + block + sep + tail
         _atomic_write_text(file_path, content)
         return True, f"Updated instructions in {file_path}"
 

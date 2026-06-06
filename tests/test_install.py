@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 
@@ -162,6 +163,109 @@ def test_inject_rejects_symlink_target(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# inject_instructions — foreign-block safety (peer of filigree-bcbd4d66fd)
+# ---------------------------------------------------------------------------
+
+_WARDLINE_BLOCK = (
+    "<!-- wardline:instructions:v1:abcd1234 -->\n"
+    "wardline body\n"
+    "<!-- /wardline:instructions -->\n"
+)
+
+
+def test_inject_malformed_block_preserves_coresident_foreign_block(tmp_path):
+    """An unclosed legis block must NOT truncate a sibling block that follows it."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body, block NOT closed\n"
+        + _WARDLINE_BLOCK
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # The foreign block survives intact.
+    assert "wardline body" in content
+    assert "<!-- wardline:instructions:v1:abcd1234 -->" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # Exactly one well-formed legis block remains; the orphan body is gone.
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert "block NOT closed" not in content
+    assert content.count("<!-- /legis:instructions -->") == 1
+
+
+def test_inject_shape2_sandwich_preserves_foreign_block(tmp_path, caplog):
+    """Unclosed-first / closed-later legis must not splice over a sandwiched sibling.
+
+    The stale second legis block surviving beyond the foreign fence must also be
+    surfaced as a warning (refinement 4), not silently shipped as a split brain.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "first legis body (unclosed)\n"
+        + _WARDLINE_BLOCK
+        + f"{INSTRUCTIONS_MARKER}:vY:beef -->\n"
+        "second legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # Stale duplicate beyond the foreign fence is surfaced, not silent.
+    assert "duplicate that could not be canonicalised" in caplog.text
+
+
+def test_inject_uppercase_namespace_sibling_survives(tmp_path):
+    """A sibling block with an upper-cased namespace is still a boundary (refinement 1)."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body no close\n"
+        "<!-- Wardline:instructions:v1:abcd1234 -->\n"
+        "wardline body\n"
+        "<!-- /Wardline:instructions -->\n"
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /Wardline:instructions -->" in content
+
+
+def test_instructions_body_has_no_fence_token():
+    """Pin: the shipped body must not contain a ``:instructions`` fence (refinement 2).
+
+    The bounded scan runs across legis's own body; a fence token there would
+    misroute the common well-formed path into bounded recovery.
+    """
+    assert ":instructions" not in _instructions_text()
+
+
+def test_inject_bounded_recovery_is_idempotent(tmp_path):
+    """Repairing a malformed block next to a foreign one is byte-stable on re-run (refinement 3)."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body no close\n"
+        + _WARDLINE_BLOCK
+    )
+    inject_instructions(target)
+    first = target.read_text()
+    inject_instructions(target)
+    second = target.read_text()
+    assert first == second
+    assert "wardline body" in second
+
+
+# ---------------------------------------------------------------------------
 # _atomic_write_text
 # ---------------------------------------------------------------------------
 
@@ -182,6 +286,17 @@ def test_reject_symlink_raises_on_symlink(tmp_path):
     link.symlink_to(real)
     with pytest.raises(UnsafeInstallPathError):
         reject_symlink(link)
+
+
+@pytest.mark.parametrize("payload", ["", "   \n\t  \n"])
+def test_atomic_write_refuses_empty_content(tmp_path, payload):
+    """Refuse-to-empty guard (filigree-04bad2a2bf parity): never truncate a file to nothing."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("populated content\n")
+    with pytest.raises(ValueError, match="empty"):
+        install._atomic_write_text(target, payload)
+    # The populated file is left untouched.
+    assert target.read_text() == "populated content\n"
 
 
 # ---------------------------------------------------------------------------

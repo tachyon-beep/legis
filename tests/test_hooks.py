@@ -117,6 +117,30 @@ def test_generate_session_context_returns_messages_on_drift(tmp_path, monkeypatc
     assert "CLAUDE.md" in context
 
 
+def test_refresh_auto_fire_preserves_coresident_foreign_block(tmp_path):
+    """SessionStart drift-refresh must not wipe a co-resident sibling block.
+
+    This is the "deletes with no user action" path (hooks.py refresh →
+    inject_instructions): a stale/unclosed legis block whose token has drifted
+    triggers re-injection, and the bounded scan must spare the wardline block.
+    """
+    md = tmp_path / "CLAUDE.md"
+    # Open marker carries a stale token (drift), but the block is NOT closed —
+    # so the legacy truncate-to-EOF path would delete the wardline block below.
+    md.write_text(
+        "<!-- legis:instructions:vX:dead -->\n"
+        "legis body, block NOT closed\n"
+        "<!-- wardline:instructions:v1:abcd1234 -->\n"
+        "wardline body\n"
+        "<!-- /wardline:instructions -->\n"
+    )
+    messages = refresh_instructions(tmp_path)
+    content = md.read_text()
+    assert any("CLAUDE.md" in m for m in messages)  # drift was acted on
+    assert "wardline body" in content
+    assert "<!-- /wardline:instructions -->" in content
+
+
 def test_generate_session_context_swallows_errors(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
 
