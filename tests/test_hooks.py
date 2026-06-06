@@ -12,6 +12,7 @@ from legis.install import (
     SKILL_NAME,
     _marker_token,
     inject_instructions,
+    install_codex_skills,
     install_skills,
 )
 
@@ -44,6 +45,29 @@ def test_refresh_updates_drifted_block_in_both_files(tmp_path, monkeypatch):
     assert any("AGENTS.md" in m for m in messages)
     assert "DRIFTED BODY" in (tmp_path / "CLAUDE.md").read_text()
     assert "DRIFTED BODY" in (tmp_path / "AGENTS.md").read_text()
+
+
+def test_refresh_updates_on_version_bump_with_identical_content(tmp_path, monkeypatch):
+    # Pins the documented "automatic versioning" contract: a package-version
+    # bump re-injects even when instructions.md is byte-identical. This is the
+    # only test that would catch a regression collapsing freshness to hash-only.
+    inject_instructions(tmp_path / "CLAUDE.md")
+    monkeypatch.setattr(install, "_instructions_version", lambda: "9.9.9")
+    messages = refresh_instructions(tmp_path)
+    assert any("CLAUDE.md" in m for m in messages)
+    assert "v9.9.9:" in (tmp_path / "CLAUDE.md").read_text()
+
+
+def test_refresh_reinstalls_drifted_codex_skill_pack(tmp_path):
+    install_codex_skills(tmp_path)
+    skill = tmp_path / ".agents" / "skills" / SKILL_NAME / "SKILL.md"
+    source = skill.read_text()
+    skill.write_text(source + "\nLOCAL EDIT\n")
+
+    messages = refresh_instructions(tmp_path)
+
+    assert any("Codex skill pack" in m for m in messages)
+    assert skill.read_text() == source
 
 
 def test_refresh_skips_file_without_marker(tmp_path):

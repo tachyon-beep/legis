@@ -403,3 +403,88 @@ def test_upgrade_hook_commands_tolerates_non_dict_settings():
 def test_has_unscoped_session_start_hook_tolerates_non_dict():
     assert install._has_unscoped_session_start_hook({"hooks": "nope"}, "legis session-context") is False
     assert install._has_unscoped_session_start_hook({}, "legis session-context") is False
+
+
+def test_install_hooks_leaves_user_scoped_block_command_untouched(tmp_path, monkeypatch):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "resume", "hooks": [{"type": "command", "command": "legis session-context"}]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    install_claude_code_hooks(tmp_path)
+    blocks = json.loads((claude / "settings.json").read_text())["hooks"]["SessionStart"]
+
+    scoped = [b for b in blocks if b.get("matcher") == "resume"][0]
+    # The user's portable bare command must NOT be pinned to a venv path.
+    assert scoped["hooks"][0]["command"] == "legis session-context"
+    # legis still adds its own unscoped block with the resolved command.
+    unscoped = [b for b in blocks if "matcher" not in b or b.get("matcher") in (None, "*")]
+    assert any(h["command"] == "/opt/bin/legis session-context" for b in unscoped for h in b["hooks"])
+
+
+def test_install_hooks_backs_up_nested_corrupt_structure(tmp_path):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"hooks": "important user data", "keep": 1}))
+    ok, _ = install_claude_code_hooks(tmp_path)
+    assert ok
+    bak = claude / "settings.json.bak"
+    assert bak.is_file()
+    assert "important user data" in bak.read_text()
+    settings = json.loads((claude / "settings.json").read_text())
+    assert settings.get("keep") == 1  # sibling key preserved
+    assert any(c.endswith("session-context") for c in _session_commands(settings))
+
+
+def test_install_skills_restores_original_on_genuine_swap_failure(tmp_path, monkeypatch):
+    install_skills(tmp_path)
+    skill = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+    original = skill.read_text()
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def flaky_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the staging -> target swap
+            raise OSError("simulated swap failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(install.os, "rename", flaky_rename)
+    ok, msg = install_skills(tmp_path)
+
+    assert ok is False
+    assert "swap failed" in msg
+    # The previously installed pack must survive a genuine swap failure.
+    assert skill.is_file()
+    assert skill.read_text() == original
+
+
+def test_inject_append_keeps_marker_off_users_last_line(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("# Project\nlast line no newline")  # no trailing newline
+    inject_instructions(target)
+    content = target.read_text()
+    assert "last line no newline\n" in content
+    idx = content.index(INSTRUCTIONS_MARKER)
+    assert content[idx - 1] == "\n"
+
+
+def test_ensure_gitignore_partial_present_appends_only_missing(tmp_path):
+    (tmp_path / ".gitignore").write_text("*.db\n.legis/\n")  # legis.yaml absent
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    assert "legis.yaml" in msg
+    assert ".legis/" not in msg  # already present — not re-reported
+    content = (tmp_path / ".gitignore").read_text()
+    assert content.count(".legis/") == 1  # not duplicated
+    assert content.count("legis.yaml") == 1

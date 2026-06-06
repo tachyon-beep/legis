@@ -134,7 +134,11 @@ def _marker_token() -> str:
     """Return the ``v{version}:{hash}`` identity carried by the open marker.
 
     Freshness compares this whole token, so a content edit (hash drift) *or* a
-    package-version bump both re-inject and keep the marker truthful.
+    package-version bump both re-inject and keep the marker truthful. This is a
+    deliberate divergence from filigree (which compares the hash segment only):
+    legis treats ``CLAUDE.md`` / ``AGENTS.md`` as regenerated, git-ignored
+    artifacts, so a marker-only rewrite on a version bump produces no committed
+    diff — it just keeps the embedded version honest.
     """
     return f"v{_instructions_version()}:{_instructions_hash()}"
 
@@ -262,6 +266,7 @@ def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, s
     staging = Path(tempfile.mkdtemp(dir=target_dir.parent, prefix=f"{SKILL_NAME}.installing."))
     staging.rmdir()
     staging_consumed = False
+    swap_done = False
     backup: Path | None = None
     try:
         shutil.copytree(skill_source, staging)
@@ -276,13 +281,32 @@ def _install_skill_to(project_root: Path, target_subpath: Path) -> tuple[bool, s
         try:
             os.rename(staging, target_dir)
             staging_consumed = True
+            swap_done = True
         except OSError:
-            # A peer raced ahead with identical content — accept their result.
-            pass
+            # Distinguish a peer winning the race (target now holds their
+            # identical content) from a genuine failure. Only the former is
+            # safe to report as success — otherwise we would claim a successful
+            # install over a pack we just destroyed.
+            if target_dir.exists() and target_dir.is_dir():
+                swap_done = True
+            else:
+                # Genuine failure: restore the original pack we set aside and
+                # report failure rather than a false-positive "Installed".
+                if backup is not None and backup.exists():
+                    try:
+                        os.rename(backup, target_dir)
+                        backup = None
+                    except OSError:
+                        # Could not restore — leave the backup in place (it may
+                        # be the only surviving copy) rather than delete it.
+                        pass
+                return False, f"Failed to install skill pack to {target_dir}: swap failed"
     finally:
         if not staging_consumed and staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
-        if backup is not None and backup.exists():
+        # Only discard the prior pack once the new one is in place. If the swap
+        # failed we must not delete the backup — it may be the only copy left.
+        if backup is not None and swap_done and backup.exists():
             shutil.rmtree(backup, ignore_errors=True)
 
     return True, f"Installed skill pack to {target_dir}"
@@ -385,6 +409,11 @@ def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_comm
     for matcher in session_start:
         if not isinstance(matcher, dict):
             continue
+        # Only upgrade commands in unscoped blocks legis owns. A user's scoped
+        # block (e.g. {"matcher": "resume"}) is their config — never rewrite a
+        # portable bare command there into a venv-specific absolute path.
+        if "matcher" in matcher and matcher.get("matcher") not in (None, "*"):
+            continue
         hook_list = matcher.get("hooks", [])
         if not isinstance(hook_list, list):
             continue
@@ -443,35 +472,36 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
             return True, f"Upgraded hook command in .claude/settings.json to use {prefix}"
         return True, "Hook already registered in .claude/settings.json"
 
-    hooks = settings.setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        hooks = settings["hooks"] = {}
-    session_start = hooks.setdefault("SessionStart", [])
-    if not isinstance(session_start, list):
-        session_start = hooks["SessionStart"] = []
+    # A valid top-level object whose "hooks"/"SessionStart" is the wrong type
+    # parses cleanly (so the malformed-JSON backup above did not fire), but the
+    # resets below would silently drop that user data — preserve a recoverable
+    # copy first.
+    existing_hooks = settings.get("hooks")
+    existing_ss = existing_hooks.get("SessionStart") if isinstance(existing_hooks, dict) else None
+    nested_corrupt = (existing_hooks is not None and not isinstance(existing_hooks, dict)) or (
+        isinstance(existing_hooks, dict) and "SessionStart" in existing_hooks and not isinstance(existing_ss, list)
+    )
+    if nested_corrupt and settings_path.exists():
+        backup = settings_path.with_suffix(".json.bak")
+        try:
+            reject_symlink(backup)
+        except UnsafeInstallPathError as exc:
+            return False, str(exc)
+        shutil.copy2(settings_path, backup)
 
-    matcher_block: dict[str, Any] | None = None
-    for matcher in session_start:
-        if not isinstance(matcher, dict):
-            continue
-        if "matcher" in matcher and matcher.get("matcher") not in (None, "*"):
-            continue
-        hook_list = matcher.get("hooks", [])
-        if not isinstance(hook_list, list):
-            continue
-        if any(
-            isinstance(hook, dict) and _hook_cmd_matches(hook.get("command", ""), SESSION_CONTEXT_COMMAND)
-            for hook in hook_list
-        ):
-            matcher_block = matcher
-            break
+    if not isinstance(settings.get("hooks"), dict):
+        settings["hooks"] = {}
+    hooks = settings["hooks"]
+    if not isinstance(hooks.get("SessionStart"), list):
+        hooks["SessionStart"] = []
+    session_start = hooks["SessionStart"]
 
-    if matcher_block is None:
-        matcher_block = {"hooks": []}
-        session_start.append(matcher_block)
-
-    matcher_block.setdefault("hooks", []).append(
-        {"type": "command", "command": session_context_cmd, "timeout": 5000}
+    # needs_add is True only when no unscoped block already carries the legis
+    # hook (see _has_unscoped_session_start_hook), so there is never a reusable
+    # block to find — append a dedicated matcher-less block that fires on every
+    # SessionStart source regardless of how neighbouring blocks are scoped.
+    session_start.append(
+        {"hooks": [{"type": "command", "command": session_context_cmd, "timeout": 5000}]}
     )
 
     _atomic_write_text(settings_path, json.dumps(settings, indent=2) + "\n")
@@ -507,7 +537,10 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
             return True, "legis config already in .gitignore"
         if not content.endswith("\n"):
             content += "\n"
-        content += _LEGIS_IGNORE_BLOCK
+        # Append only the rules that are actually absent — writing the whole
+        # block when one rule is already present would duplicate the other.
+        content += "\n# Legis — local working dir / config (regenerated/local; never commit)\n"
+        content += "".join(f"{rule}\n" for rule in missing)
         _atomic_write_text(gitignore, content)
         return True, f"Added {', '.join(missing)} to .gitignore"
 
