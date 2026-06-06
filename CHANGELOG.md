@@ -8,6 +8,23 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 ## [1.0.0rc4] — 2026-06-06
 
 ### Added
+- **Self-install (`legis install`)** — legis now stands itself up like its
+  siblings: it injects a lean, versioned agent-orientation block into CLAUDE.md /
+  AGENTS.md, installs the `legis-workflow` skill pack (Claude + Codex), registers
+  a `SessionStart` hook, and extends `.gitignore` with the local config surface
+  (`.legis/`, `legis.yaml`). The block carries a content-hashed, version-pinned
+  marker (`<!-- legis:instructions:v{version}:{hash} -->`); a drift check
+  re-injects it when either the bundled content or the package version changes.
+  Two triggers keep it fresh — the SessionStart hook (`legis session-context`)
+  and a best-effort refresh on `legis mcp` boot, the latter closing the
+  Codex-only-repo gap a hook-only approach leaves open. Mirrors filigree's
+  inject/replace/append install mechanism (atomic write, symlink rejection,
+  idempotent hook registration), right-sized for legis; the lean block +
+  skill-pack split keeps the injected context small while the skill carries the
+  full CLI + MCP-tool reference. Design spec:
+  `docs/superpowers/specs/2026-06-06-legis-instruction-injection-design.md`.
+  (legis-0127b66; hardening — skill swap, hook upgrade, gitignore, nested-corrupt
+  settings — in legis-b245710.)
 - **Dirty-tree dev path** — `verify_wardline_artifact` now recognises the
   unsigned `dirty: true` dev artifact emitted by `wardline scan --format legis
   --allow-dirty`. In the keyless posture it governs but records the marker
@@ -21,11 +38,116 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   signature, so the clean-tree signing guarantee is intact. (legis-d731c760c5,
   legis-7e85e8e7ba; upstream wardline `--allow-dirty`.)
 
+### Changed
+- **Table-driven MCP dispatch (Q-L8)** — `call_tool` now routes through a tool
+  table instead of an if/elif ladder, and the stdio server bounds each stdin
+  line so a malformed client cannot stream unbounded input. Behavior-preserving.
+- **Release CI gates** — the coverage floor is raised to 88% with a `ruff` lint
+  gate added (Q-L7), live Loomweave conformance is now non-optional for releases
+  (no silent skip when the oracle is down), and the Filigree client's transport /
+  error branches are covered.
+
 ### Fixed
+- **Fingerprint reconciliation + RFC-8785 deferral (Q-L5 / Q-L4)** — the policy
+  gate and the static boundary scanner now extract the same fingerprint (they had
+  diverged); the RFC-8785 canonical-JSON upgrade is explicitly deferred (its
+  trigger is a *non-Python* verifier, and the one cross-tool verifier — Wardline —
+  is a byte-for-byte Python replica pinned by a golden vector).
+- **AuditStore batch read-free invariant (Q-M5)** — the batch append path is
+  guarded against issuing a read mid-batch, with a regression test pinning the
+  three-layer append-only enforcement.
+- **Capability-latch TTL revalidation (Q-L6)** — the SEI capability latch is
+  TTL-revalidated rather than cached indefinitely, and `content_hash` is
+  type-checked at its call sites.
 - **Lint** — cleared the remaining `ruff` findings in the test suite (unused
   imports, mid-file imports hoisted to module top, and `# noqa: F821` on the
   honesty-gate fixture functions whose free `handler` name is fingerprinted by
   source, not executed). `ruff check src tests` is now clean.
+- **`pull_request_get` reports recorded checks unconditionally** — the tool no
+  longer short-circuits to an empty `checks` list on a fresh runtime whose check
+  surface has not yet been lazily initialised. A PR's CI outcomes are now
+  call-order-independent, so a governance agent can never be told a PR is clean
+  when failing checks exist.
+
+## [1.0.0rc3] — 2026-06-06
+
+Audit remediation: the `Q-*` series hardening the governance, transport, and
+read paths surfaced by the rc2 architecture analysis.
+
+### Changed
+- **Service layer is the one path to governance decisions (Q-H2)** — the FastAPI
+  and MCP adapters both drive `legis.service`; no decision logic lives in a route
+  closure.
+- **Weft-component HMAC on the Filigree transport (Q-M4)** — the Filigree binding
+  hop is authenticated, and the wire carries the canonical signed bytes (signing
+  and transport agree byte-for-byte).
+- **Recorded check/PR facts labelled unauthenticated (Q-M2 / Q-M4)** — `Check`
+  and `PullRequest` records carry an explicit unauthenticated provenance label;
+  legis never presents an unsigned upstream fact as verified.
+- **Core modules typed against the `AppendOnlyStore` protocol (Q-L3)** — the
+  governance modules depend on the append-only contract, not a concrete store.
+
+### Fixed
+- **Single-secret mode is writer-scoped (Q-H1)** — a single shared secret grants
+  writer scope only; operator force-past stays an explicit opt-in, never implied.
+- **LLM judge is advisory-only on protected policies (Q-H3)** — on a protected
+  cell the judge cannot clear a verdict; the protected gate decides.
+- **`verify_integrity` fails on non-finite-float tamper (Q-M3)** — a record
+  carrying a NaN/Inf that survives decode now fails integrity verification rather
+  than passing silently.
+- **Fail closed when policy-cell config is absent (Q-M7)** — a missing cell
+  configuration is a block, not a default-allow.
+- **Honesty gate requires the boundary result as the assertion subject (Q-M8)** —
+  the static policy-boundary gate cannot be satisfied by an unrelated assertion.
+- **Same-cell batch routing is atomic (Q-M5)** — a batch routed into one cell
+  commits or fails as a unit.
+- **Read paths hardened against malformed `entity_key` (Q-L1 / Q-L2)** — the
+  governance read surfaces reject a malformed locator instead of raising.
+- **Source-binding contract clarified and signed status proven (Q-M1 / Q-M6)** —
+  the Filigree binding-availability contract is decided and documented
+  (ADR-0003).
+- Declared the `pydantic` runtime dependency explicitly.
+
+## [1.0.0rc2] — 2026-06-06
+
+The agent-facing MCP surface, the deployable LLM judge, and the sibling
+integration surfaces (Filigree closure-gate, Loomweave git-rename feed) that rc1
+listed as not-yet-built.
+
+### Added
+- **MCP stdio surface (WP-M2 / WP-M3)** — the ratified agent tool catalog is
+  loaded and callable over an MCP stdio server: the policy-cell registry and
+  `policy_explain` contract (WP-M2), the callable tool catalog with store/registry
+  flags (WP-M3), plus the `git_rename_feed_get` and `filigree_closure_gate_get`
+  tools.
+- **Deployable LLM judge** — an OpenRouter judge client behind the `LLMClient`
+  seam, wired into both the API and MCP runtimes via deployable judge
+  configuration flags.
+- **Filigree closure-gate** — a governance decision function exposed over
+  `GET /filigree/closure-gate` and the `filigree_closure_gate_get` MCP tool, with
+  a verified `get_by_issue_id` on the `BindingLedger`.
+- **Git rename feed** — a Clarion/Loomweave-ready rename-feed builder with
+  working-tree rename detection on `GitSurface`, exposed over `GET /git/rename-feed`
+  and the `git_rename_feed_get` MCP tool; the feed contract is locked.
+- **Static policy-boundary honesty gate** — a static scanner plus the
+  `legis policy-boundary-check` CLI command, enforced in CI; the static scanner
+  is converged onto the same runtime evidence gate.
+- **PyPI Trusted Publishing** — a release workflow and package metadata for
+  publishing to PyPI.
+
+### Changed
+- **Rebrand Clarion→Loomweave and Loom→Weft** across legis (identifiers, docs,
+  and config references).
+- **MCP idempotency replays scoped** so a replayed call resolves against its own
+  prior result, not a sibling's.
+
+### Fixed
+- **Ingest accepts realistic scans** — the over-strict Wardline ingest validator
+  was relaxed to accept the diagnostics a real scan carries while keeping the
+  trust-grammar projection.
+- **CLI fails closed on protected override-rate trails** — a missing or
+  unverifiable protected trail exits non-zero rather than reporting a clean rate.
+- Hardened the governance audit boundaries with regression coverage.
 
 ## [1.0.0rc1] — 2026-06-03
 
@@ -71,5 +193,7 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   (Filigree signature column, live-Loomweave oracle + HMAC auth, operative
   git-rename feed) remain.
 
-[1.0.0rc4]: https://peps.python.org/pep-0440/
-[1.0.0rc1]: https://peps.python.org/pep-0440/
+[1.0.0rc4]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc3...HEAD
+[1.0.0rc3]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc2...v1.0.0rc3
+[1.0.0rc2]: https://github.com/foundryside-dev/legis/releases/tag/v1.0.0rc2
+[1.0.0rc1]: https://github.com/foundryside-dev/legis/releases/tag/v1.0.0rc1
