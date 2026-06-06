@@ -55,7 +55,7 @@ from legis.service.governance import (
 from legis.service.wardline import route_wardline_scan
 from legis.store.audit_store import AuditStore
 from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import WardlineDirtyTreeError, WardlineSeverity
+from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError, WardlineSeverity
 
 
 _AGENT_TOOLS = frozenset(
@@ -987,7 +987,7 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
         return _tool_result(
             {"outcome": exc.reason, "routed": [], "detail": str(exc)}
         )
-    return _tool_result({"outcome": "ROUTED", "routed": routed})
+    return _tool_result({"outcome": ScanOutcome.ROUTED, "routed": routed})
 
 
 def _tool_git_branch_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:

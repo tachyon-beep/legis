@@ -60,6 +60,7 @@ from legis.pulls.models import PullRequest, PullRequestState
 from legis.pulls.surface import PullSurface
 from legis.wardline.governor import WardlineCellPolicy
 from legis.wardline.ingest import (
+    ScanOutcome,
     WardlineDirtyTreeError,
     WardlinePayloadError,
     WardlineSeverity,
@@ -853,6 +854,6 @@ def create_app(
             raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"outcome": "ROUTED", "routed": routed}
+        return {"outcome": ScanOutcome.ROUTED, "routed": routed}
 
     return app
