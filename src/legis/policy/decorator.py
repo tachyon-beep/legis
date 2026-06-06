@@ -104,14 +104,42 @@ def policy_boundary(
 def get_normalized_ast_str(source: str) -> str:
     import ast
     parsed = ast.parse(source)
-    # Strip docstrings
     for node in ast.walk(parsed):
+        # Strip docstrings.
         if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
             if node.body and isinstance(node.body[0], ast.Expr):
                 val = node.body[0].value
                 if isinstance(val, ast.Constant) and isinstance(val.value, str):
                     node.body.pop(0)
+        # Strip decorators so the fingerprint does not depend on whether the
+        # extracted source carried the decorator lines. The runtime gate reads
+        # the test via inspect.getsource (decorators INCLUDED); the static
+        # scanner reads it via ast.get_source_segment of the FunctionDef
+        # (decorators EXCLUDED). Without this, a decorated or class-method
+        # test_ref fingerprints differently on each path (Q-L5).
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            node.decorator_list = []
     return ast.dump(parsed)
+
+
+def fingerprint_source(source: str) -> str:
+    """The single canonicalization both fingerprint paths share (Q-L5).
+
+    Normalizes platform line endings (CRLF->LF) and indentation, then hashes the
+    docstring- and decorator-stripped AST. Falls back to hashing the normalized
+    source text when it cannot be parsed (e.g. an extracted fragment). The
+    runtime honesty gate (``fingerprint``) and the static scanner
+    (``boundary_scan``) MUST both route through here so they can never compute
+    divergent fingerprints for the same referenced test.
+    """
+    import textwrap
+
+    source = source.replace("\r\n", "\n")
+    source = textwrap.dedent(source)
+    try:
+        return content_hash(get_normalized_ast_str(source))
+    except Exception:
+        return content_hash(source)
 
 
 def fingerprint(test_fn: Callable[..., Any]) -> str:
@@ -126,16 +154,9 @@ def fingerprint(test_fn: Callable[..., Any]) -> str:
     except (OSError, TypeError) as exc:
         raise OSError(f"Source code not available for test: {exc}") from exc
 
-    # Normalize CRLF to LF to handle platform line ending differences
-    source = source.replace("\r\n", "\n")
-
-    try:
-        import textwrap
-        source = textwrap.dedent(source)
-        normalized = get_normalized_ast_str(source)
-        return content_hash(normalized)
-    except Exception:
-        return content_hash(source)
+    # Route through the shared canonicalization the static scanner also uses, so
+    # the two paths cannot diverge (Q-L5).
+    return fingerprint_source(source)
 
 
 @dataclass(frozen=True)

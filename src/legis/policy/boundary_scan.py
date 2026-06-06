@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import ast
-import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from legis.canonical import content_hash
-from legis.policy.decorator import get_normalized_ast_str
+from legis.policy.decorator import fingerprint_source
 from legis.policy.evidence import evaluate_test_evidence
 
 
@@ -154,9 +152,10 @@ class _BoundaryVisitor(ast.NodeVisitor):
 
             test_source, test_node = test_result
             test_segment = ast.get_source_segment(test_source, test_node) or ""
-            actual_fingerprint = content_hash(
-                get_normalized_ast_str(textwrap.dedent(test_segment))
-            )
+            # Same canonicalization the runtime honesty gate uses — CRLF/dedent
+            # normalization and a decorator-insensitive AST hash — so the two
+            # paths cannot diverge for a decorated / class-method test_ref (Q-L5).
+            actual_fingerprint = fingerprint_source(test_segment)
             if actual_fingerprint != test_fingerprint:
                 self._add(
                     "POLICY_BOUNDARY_TEST_FINGERPRINT_MISMATCH",
