@@ -5,7 +5,7 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
-## [Unreleased]
+## [1.0.0rc4] — 2026-06-06
 
 ### Added
 - **Dirty-tree dev path** — `verify_wardline_artifact` now recognises the
@@ -20,6 +20,12 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   (a forged signature stays red) and a clean unsigned payload still requires a
   signature, so the clean-tree signing guarantee is intact. (legis-d731c760c5,
   legis-7e85e8e7ba; upstream wardline `--allow-dirty`.)
+
+### Fixed
+- **Lint** — cleared the remaining `ruff` findings in the test suite (unused
+  imports, mid-file imports hoisted to module top, and `# noqa: F821` on the
+  honesty-gate fixture functions whose free `handler` name is fingerprinted by
+  source, not executed). `ruff check src tests` is now clean.
 
 ## [1.0.0rc1] — 2026-06-03
 
@@ -65,5 +71,5 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   (Filigree signature column, live-Loomweave oracle + HMAC auth, operative
   git-rename feed) remain.
 
-[Unreleased]: https://peps.python.org/pep-0440/
+[1.0.0rc4]: https://peps.python.org/pep-0440/
 [1.0.0rc1]: https://peps.python.org/pep-0440/
