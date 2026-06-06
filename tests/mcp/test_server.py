@@ -1634,3 +1634,59 @@ def test_read_bounded_line_enforces_bytes_not_chars():
     nxt, nxt_overflow = _read_bounded_line(stream, 400)
     assert nxt_overflow is False
     assert nxt == '{"next":true}\n'
+
+
+def test_read_bounded_line_at_byte_boundary():
+    # The bound counts the trailing newline (fail-safe off-by-one): a 399-byte
+    # data record + "\n" == 400 bytes passes; one more byte overflows.
+    from legis.mcp import _read_bounded_line
+
+    ok_line, ok_overflow = _read_bounded_line(io.StringIO("x" * 399 + "\n"), 400)
+    assert ok_overflow is False
+    assert ok_line == "x" * 399 + "\n"
+
+    _, over_overflow = _read_bounded_line(io.StringIO("x" * 400 + "\n"), 400)
+    assert over_overflow is True
+
+
+def test_read_bounded_line_drains_oversized_multibyte_record():
+    # A record longer than the *character* cap forces the drain loop (first
+    # branch) — exercise it with multibyte content and assert the next record
+    # stays framed (the existing multibyte test stays under the char cap and
+    # hits the second branch instead).
+    from legis.mcp import _read_bounded_line
+
+    stream = io.StringIO("中" * 20 + "\n" + "{}\n")  # 20 chars > 10-char cap
+    line, overflow = _read_bounded_line(stream, 10)
+    assert overflow is True
+    assert line.startswith("中")
+
+    nxt, nxt_overflow = _read_bounded_line(stream, 10)
+    assert nxt == "{}\n"
+    assert nxt_overflow is False
+
+
+def test_service_error_logs_unexpected_internal_error(caplog):
+    # An unexpected exception is surfaced to the caller as INTERNAL_ERROR; it must
+    # also be logged server-side (with the exception) so the operator/Sentry sees
+    # what the agent caller's payload alone would hide.
+    from legis.mcp import _service_error
+
+    with caplog.at_level(logging.ERROR, logger="legis.mcp"):
+        result = _service_error(RuntimeError("kaboom"))
+
+    assert result["structuredContent"]["error_code"] == "INTERNAL_ERROR"
+    assert any(r.levelno == logging.ERROR and r.exc_info for r in caplog.records)
+
+
+def test_service_error_does_not_log_expected_typed_errors(caplog):
+    # Expected, typed service errors map to typed codes and must NOT spam the
+    # server log — only the unexpected INTERNAL_ERROR fall-through logs.
+    from legis.mcp import _service_error
+    from legis.service.errors import NotFoundError
+
+    with caplog.at_level(logging.ERROR, logger="legis.mcp"):
+        result = _service_error(NotFoundError("nope"))
+
+    assert result["structuredContent"]["error_code"] == "NOT_FOUND"
+    assert not caplog.records

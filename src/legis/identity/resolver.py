@@ -64,6 +64,14 @@ class IdentityResolution:
         # alive=False (or any other crossed pair) was representable before this
         # guard; the invariant lived only in the construction sites. The bijection
         # is exactly the three shapes the resolver actually builds.
+        #
+        # ``alive`` must be exactly None/False/True by identity: a bare ``in`` /
+        # dict lookup would alias ints (1 == True, 0 == False) and a non-bool
+        # would surface as a KeyError, not this guard's ValueError.
+        if not any(self.alive is v for v in (None, False, True)):
+            raise ValueError(
+                f"IdentityResolution.alive must be None/False/True, got {self.alive!r}"
+            )
         expected = {
             None: IdentityResolutionStatus.UNAVAILABLE,
             False: IdentityResolutionStatus.NOT_ALIVE,
@@ -74,6 +82,21 @@ class IdentityResolution:
                 f"contradictory IdentityResolution: alive={self.alive!r} "
                 f"requires identity_resolution_status="
                 f"{expected.value!r}, got {self.identity_resolution_status.value!r}"
+            )
+        # The lineage axis is the record's other half: a snapshot is present iff
+        # the status is VERIFIED (the resolver pairs them so — VERIFIED carries a
+        # snapshot; UNAVAILABLE/NOT_APPLICABLE carry None). Keep that pairing from
+        # contradicting itself too, so the whole record — not just the identity
+        # axis — is impossible to construct in a self-contradictory state.
+        snapshot_present = self.lineage_snapshot is not None
+        verified = self.lineage_snapshot_status is LineageSnapshotStatus.VERIFIED
+        if snapshot_present != verified:
+            raise ValueError(
+                f"contradictory IdentityResolution: lineage_snapshot "
+                f"{'present' if snapshot_present else 'absent'} requires "
+                f"lineage_snapshot_status"
+                f"{'==' if snapshot_present else '!='} VERIFIED, got "
+                f"{self.lineage_snapshot_status.value!r}"
             )
 
 

@@ -130,6 +130,56 @@ def test_identity_resolution_accepts_the_three_consistent_shapes():
     )
 
 
+def test_identity_resolution_rejects_contradictory_lineage_axis():
+    # The lineage axis is the other half of the record: a snapshot is present
+    # iff the status is VERIFIED. Any crossed pair is self-contradictory.
+    ek = EntityKey.from_locator("python:function:m.f")
+    # VERIFIED but no snapshot.
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek, True, "h", None,
+            IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.VERIFIED,
+        )
+    # Snapshot present but status NOT_APPLICABLE.
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek, False, None, {"length": 1, "hash": "x"},
+            IdentityResolutionStatus.NOT_ALIVE, LineageSnapshotStatus.NOT_APPLICABLE,
+        )
+    # Snapshot present but status UNAVAILABLE.
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek, True, "h", {"length": 1, "hash": "x"},
+            IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.UNAVAILABLE,
+        )
+
+
+def test_identity_resolution_accepts_resolved_with_unavailable_lineage():
+    # A real producer shape: RESOLVED identity but the lineage probe failed —
+    # snapshot None, status UNAVAILABLE. Must construct.
+    ek = EntityKey.from_locator("python:function:m.f")
+    IdentityResolution(
+        ek, True, "h", None,
+        IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.UNAVAILABLE,
+    )
+
+
+def test_identity_resolution_rejects_non_bool_alive_as_value_error():
+    # A non-bool alive (and int aliases like 1/0 that collide with True/False)
+    # must raise the guard's own ValueError, not a KeyError.
+    ek = EntityKey.from_locator("python:function:m.f")
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek, "yes", None, None,  # type: ignore[arg-type]
+            IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.VERIFIED,
+        )
+    with pytest.raises(ValueError):
+        IdentityResolution(
+            ek, 1, None, None,  # type: ignore[arg-type]
+            IdentityResolutionStatus.RESOLVED, LineageSnapshotStatus.VERIFIED,
+        )
+
+
 def test_capability_absent_degrades_to_locator():
     r = IdentityResolver(FakeClient(capable=False))
     res = r.resolve("python:function:m.f")

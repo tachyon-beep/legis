@@ -420,6 +420,12 @@ def _service_error(exc: Exception) -> dict[str, Any]:
         return _tool_error("SERVICE_ERROR", str(exc))
     if isinstance(exc, ValueError):
         return _tool_error("INVALID_ARGUMENT", str(exc))
+    # Unexpected: the typed cases above are expected and reach the caller as their
+    # own codes, so they stay quiet. This fall-through is a genuine surprise — the
+    # caller gets INTERNAL_ERROR, but the operator/Sentry would see nothing unless
+    # we log it here with the exception. (exc_info=exc, not True: _service_error
+    # may be called outside an active except block.)
+    logger.error("unhandled MCP tool error: %s", exc, exc_info=exc)
     return _tool_error("INTERNAL_ERROR", str(exc))
 
 
@@ -1230,8 +1236,9 @@ def _read_bounded_line(stream: TextIO, max_bytes: int) -> tuple[str, bool]:
                 break
         return line, True
     if len(line.encode("utf-8")) > max_bytes:
-        # Complete (newline-terminated) but over the byte budget; framing is
-        # already aligned past the newline, so no drain is needed.
+        # Complete record (newline-terminated, or the final EOF record with no
+        # trailing newline) but over the byte budget; framing is already aligned
+        # — nothing follows the read — so no drain is needed.
         return line, True
     return line, False
 

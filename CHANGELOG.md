@@ -50,7 +50,9 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   bijection (`alive` `None`↔`UNAVAILABLE`, `False`↔`NOT_ALIVE`,
   `True`↔`RESOLVED`) so a self-contradictory frozen record is no longer
   representable; the dead `getattr` fallbacks in `service/governance.py` are
-  dropped. The `suppressed` field stays `str` on the wire-facing dataclass
+  dropped. The guard now covers the record's *other* half too — the lineage axis
+  (`lineage_snapshot` present iff `lineage_snapshot_status` is `VERIFIED`) — and
+  rejects a non-bool `alive` with its own `ValueError` rather than a `KeyError`. The `suppressed` field stays `str` on the wire-facing dataclass
   (validation timing and error type unchanged); the enum is the vocabulary
   source of truth. Behavior-preserving. (legis-bba4f22949; deferred from the
   rc4 code review.)
@@ -100,6 +102,18 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   refusal such as a symlinked target, the upstream `except` never saw it and agents
   could run on drifted instructions with zero signal. Both paths now log a
   `WARNING` with the reason on failure (peer of the boot-log path closed earlier).
+- **Unexpected MCP tool errors are logged server-side** — the `INTERNAL_ERROR`
+  fall-through in `_service_error` reached the agent caller but left no
+  server/Sentry record; an unexpected exception now logs at `ERROR` with the
+  exception attached. The typed, expected errors (`NOT_FOUND`, `INVALID_ARGUMENT`,
+  …) stay quiet.
+- **Corrupt `settings.json` recovery is surfaced** — `install_claude_code_hooks`
+  already backed a malformed or wrong-typed `settings.json` up to `.json.bak`
+  before resetting it, but reported ordinary success; it now logs a `WARNING` and
+  names the backup in its return message so the user knows to reconcile.
+- **Injector handles an empty target file cleanly** — injecting into an existing
+  zero-byte / whitespace-only `CLAUDE.md` / `AGENTS.md` now writes just the block
+  (like the create path) instead of leaving leading blank-line artifacts.
 
 ## [1.0.0rc3] — 2026-06-06
 

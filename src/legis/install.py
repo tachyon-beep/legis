@@ -303,6 +303,12 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
         _atomic_write_text(file_path, content)
         return True, f"Updated instructions in {file_path}"
 
+    if not content.strip():
+        # An existing empty / whitespace-only file is effectively a create: write
+        # just the block rather than leaving leading blank-line artifacts.
+        _atomic_write_text(file_path, block + "\n")
+        return True, f"Created {file_path}"
+
     if not content.endswith("\n"):
         content += "\n"
     content += "\n" + block + "\n"
@@ -539,6 +545,8 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     except UnsafeInstallPathError as exc:
         return False, str(exc)
 
+    recovered_backup: str | None = None  # set when a corrupt file was backed up
+
     settings: dict[str, Any] = {}
     if settings_path.exists():
         try:
@@ -553,6 +561,12 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
             except UnsafeInstallPathError as exc:
                 return False, str(exc)
             shutil.copy2(settings_path, backup)
+            recovered_backup = backup.name
+            logger.warning(
+                "malformed .claude/settings.json backed up to %s and replaced with "
+                "a fresh file; reconcile any lost settings by hand",
+                backup.name,
+            )
 
     prefix = shlex.join(_find_legis_command())
     session_context_cmd = f"{prefix} session-context"
@@ -582,6 +596,12 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
         except UnsafeInstallPathError as exc:
             return False, str(exc)
         shutil.copy2(settings_path, backup)
+        recovered_backup = backup.name
+        logger.warning(
+            "corrupt hooks structure in .claude/settings.json backed up to %s "
+            "before resetting it; reconcile any lost hooks by hand",
+            backup.name,
+        )
 
     if not isinstance(settings.get("hooks"), dict):
         settings["hooks"] = {}
@@ -599,7 +619,10 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     )
 
     _atomic_write_text(settings_path, json.dumps(settings, indent=2) + "\n")
-    return True, f"Registered hook in .claude/settings.json: {session_context_cmd}"
+    msg = f"Registered hook in .claude/settings.json: {session_context_cmd}"
+    if recovered_backup is not None:
+        msg += f" (backed up malformed settings.json to {recovered_backup})"
+    return True, msg
 
 
 # ---------------------------------------------------------------------------

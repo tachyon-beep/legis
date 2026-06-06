@@ -323,6 +323,68 @@ def test_inject_bounded_recovery_is_idempotent(tmp_path):
     assert "wardline body" in second
 
 
+def test_inject_into_empty_file_produces_clean_single_block(tmp_path):
+    """An existing zero-byte file gets a clean block, not leading blank lines."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("")
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    # No leading blank-line artifact: the block starts at byte 0.
+    assert content.startswith(INSTRUCTIONS_MARKER)
+
+
+def test_inject_crlf_file_preserves_foreign_block(tmp_path):
+    """A CRLF-terminated shared file: the sibling block still survives recovery."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_bytes(
+        (
+            "HEAD\r\n"
+            f"{INSTRUCTIONS_MARKER}:vX:dead -->\r\n"
+            "legis body, block NOT closed\r\n"
+            "<!-- wardline:instructions:v1:abcd1234 -->\r\n"
+            "wardline body\r\n"
+            "<!-- /wardline:instructions -->\r\n"
+        ).encode("utf-8")
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /wardline:instructions -->" in content
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+
+
+def test_inject_two_clean_legis_blocks_canonicalises_first_keeps_second(tmp_path, caplog):
+    """Two well-formed legis blocks: the first is canonicalised, the second is kept.
+
+    Bounding at the first own close (not EOF) is deliberate — it preserves any
+    trailing content legis does not own, so a second block in the tail is surfaced
+    via a warning rather than silently deleted. Collapsing would require a deletion
+    window over the bytes between the two blocks, which may be user content.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "first legis body\n"
+        "<!-- /legis:instructions -->\n"
+        f"{INSTRUCTIONS_MARKER}:vY:beef -->\n"
+        "second legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # First block canonicalised (stale body gone); second block NOT deleted.
+    assert "first legis body" not in content
+    assert "second legis body" in content
+    # The surviving duplicate is surfaced, not silent.
+    assert caplog.records
+
+
 # ---------------------------------------------------------------------------
 # _atomic_write_text
 # ---------------------------------------------------------------------------
@@ -442,15 +504,19 @@ def test_install_hooks_upgrades_bare_command(tmp_path, monkeypatch):
     assert cmds.count("/opt/bin/legis session-context") == 1
 
 
-def test_install_hooks_backs_up_malformed_settings(tmp_path):
+def test_install_hooks_backs_up_malformed_settings(tmp_path, caplog):
     claude = tmp_path / ".claude"
     claude.mkdir()
     (claude / "settings.json").write_text("{ this is not json")
-    ok, _ = install_claude_code_hooks(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, msg = install_claude_code_hooks(tmp_path)
     assert ok
     assert (claude / "settings.json.bak").is_file()
     settings = json.loads((claude / "settings.json").read_text())
     assert any(c.endswith("session-context") for c in _session_commands(settings))
+    # The reset is not silent: the user is told a backup was written.
+    assert ".bak" in msg
+    assert ".bak" in caplog.text
 
 
 def test_install_hooks_does_not_reuse_scoped_block(tmp_path):
@@ -608,7 +674,7 @@ def test_install_hooks_backs_up_nested_corrupt_structure(tmp_path):
     claude = tmp_path / ".claude"
     claude.mkdir()
     (claude / "settings.json").write_text(json.dumps({"hooks": "important user data", "keep": 1}))
-    ok, _ = install_claude_code_hooks(tmp_path)
+    ok, msg = install_claude_code_hooks(tmp_path)
     assert ok
     bak = claude / "settings.json.bak"
     assert bak.is_file()
@@ -616,6 +682,8 @@ def test_install_hooks_backs_up_nested_corrupt_structure(tmp_path):
     settings = json.loads((claude / "settings.json").read_text())
     assert settings.get("keep") == 1  # sibling key preserved
     assert any(c.endswith("session-context") for c in _session_commands(settings))
+    # The recovery of the corrupt nested structure is surfaced, not silent.
+    assert ".bak" in msg
 
 
 def test_install_skills_restores_original_on_genuine_swap_failure(tmp_path, monkeypatch):
