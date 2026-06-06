@@ -25,7 +25,7 @@ coverage.json
 AGENTS.md
 CLAUDE.md
 
-# --- Loom suite working folders & local config (regenerated/local; never commit) ---
+# --- Weft suite working folders & local config (regenerated/local; never commit) ---
 # Filigree — issue-tracker database + project config
 .filigree/
 .filigree.conf
