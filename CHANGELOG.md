@@ -83,6 +83,23 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   surface has not yet been lazily initialised. A PR's CI outcomes are now
   call-order-independent, so a governance agent can never be told a PR is clean
   when failing checks exist.
+- **Injector anchors on its own top-level fence, not a quoted marker** — the
+  instruction injector previously located its block with a bare substring search
+  for `<!-- legis:instructions`, so a legis marker *quoted inside* a co-resident
+  sibling block (a worked example, documentation) could anchor the rewrite there
+  and gut the sibling. `inject_instructions` now walks fences span-aware and
+  anchors only on legis's own *top-level* open fence (one not enclosed by an
+  unclosed foreign block); a file with no real legis block of its own appends
+  (deleting nothing). Completes the foreign-block-deletion fix (peer of
+  filigree-bcbd4d66fd) — the "never delete a co-resident sibling block" property
+  is now total. (legis-068e359d28.)
+- **Drift-refresh failures are no longer dropped silently** — `refresh_instructions`
+  (the SessionStart / MCP-boot drift path) discarded the result of a re-injection
+  or skill-reinstall and only reported success. Because `inject_instructions` /
+  `install_skills` return `(False, reason)` (rather than raising) on a recoverable
+  refusal such as a symlinked target, the upstream `except` never saw it and agents
+  could run on drifted instructions with zero signal. Both paths now log a
+  `WARNING` with the reason on failure (peer of the boot-log path closed earlier).
 
 ## [1.0.0rc3] — 2026-06-06
 

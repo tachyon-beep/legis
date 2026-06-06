@@ -45,7 +45,7 @@ _END_MARKER = "<!-- /legis:instructions -->"
 # case-insensitive: an uppercase-namespaced sibling must still register as a
 # boundary. The cross-tool multi-owner block contract lives in weft
 # conventions.md (C-4).
-_INSTR_FENCE_RE = re.compile(r"<!--\s*/?([A-Za-z0-9_-]+):instructions")
+_INSTR_FENCE_RE = re.compile(r"<!--\s*(?P<close>/?)(?P<ns>[A-Za-z0-9_-]+):instructions")
 
 
 def _first_foreign_fence_pos(content: str, search_from: int) -> int:
@@ -57,9 +57,36 @@ def _first_foreign_fence_pos(content: str, search_from: int) -> int:
     follows, returns ``len(content)`` (i.e. bound at EOF).
     """
     for m in _INSTR_FENCE_RE.finditer(content, search_from):
-        if m.group(1).lower() != "legis":
+        if m.group("ns").lower() != "legis":
             return m.start()
     return len(content)
+
+
+def _first_own_open_fence_pos(content: str) -> int:
+    """Index of legis's *own* open instruction fence, or -1 if none.
+
+    A legis open fence quoted *inside* a co-resident sibling block (a worked
+    example, documentation) is identical in text to a real one, so a bare
+    substring/regex anchor would splice there and gut the sibling. This walks
+    fences in document order, tracking the foreign block we are currently inside,
+    and only returns a legis open fence found at top level (not enclosed by an
+    unclosed foreign block). An unclosed foreign block therefore shields any
+    legis marker beyond it: we decline to claim content we cannot prove is ours,
+    and the caller falls back to an append (which deletes nothing).
+    """
+    inside_foreign: str | None = None
+    for m in _INSTR_FENCE_RE.finditer(content):
+        ns = m.group("ns").lower()
+        is_close = bool(m.group("close"))
+        if inside_foreign is not None:
+            if is_close and ns == inside_foreign:
+                inside_foreign = None
+            continue
+        if ns == "legis" and not is_close:
+            return m.start()
+        if ns != "legis" and not is_close:
+            inside_foreign = ns
+    return -1
 
 SKILL_NAME = "legis-workflow"
 """Name of the legis skill pack directory."""
@@ -229,7 +256,8 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
         return True, f"Created {file_path}"
 
     content = file_path.read_text(encoding="utf-8")
-    if INSTRUCTIONS_MARKER in content:
+    start = _first_own_open_fence_pos(content)
+    if start != -1:
         # Bound legis's writable region at the first of:
         #   (a) its own close marker, *if* that close precedes any foreign fence
         #       → normal in-place replace;
@@ -243,7 +271,8 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
         # preserving the orphan-tail idempotency invariant. Monotonic safety:
         # in every branch ``bound`` ≤ the old code's cut point, so this can only
         # *preserve* bytes the old code deleted, never delete bytes it kept.
-        start = content.index(INSTRUCTIONS_MARKER)
+        # ``start`` is legis's own top-level open fence (see
+        # _first_own_open_fence_pos), never a marker quoted inside a sibling block.
         own_end = content.find(_END_MARKER, start)
         foreign = _first_foreign_fence_pos(content, start + len(INSTRUCTIONS_MARKER))
         if own_end != -1 and own_end < foreign:
@@ -258,7 +287,7 @@ def inject_instructions(file_path: Path) -> tuple[bool, str]:
             bound = foreign
             tail = content[bound:]
             sep = "\n" if (bound < len(content) and not tail.startswith("\n")) else ""
-        if INSTRUCTIONS_MARKER in tail:
+        if _first_own_open_fence_pos(tail) != -1:
             # A second legis block survives beyond the boundary because
             # canonicalising it would mean reaching across a block we don't own.
             # It is STALE, conflicting guidance — not a harmless duplicate — so

@@ -248,6 +248,64 @@ def test_instructions_body_has_no_fence_token():
     assert ":instructions" not in _instructions_text()
 
 
+def test_inject_marker_text_inside_foreign_block_not_mistaken_for_own(tmp_path):
+    """A legis marker quoted *inside* a sibling block is not legis's own anchor.
+
+    The literal ``<!-- legis:instructions ... -->`` can legitimately appear inside
+    another tool's block (a quoted example, documentation). A bare substring anchor
+    would splice there and gut the sibling. The anchor must respect foreign block
+    spans, so this file has *no* legis block of its own → append, sibling untouched.
+    """
+    target = tmp_path / "CLAUDE.md"
+    foreign_block = (
+        "<!-- wardline:instructions:v1:zzz -->\n"
+        f"See example: {INSTRUCTIONS_MARKER}:v0:0000 -->\n"
+        "WARDLINE BODY MUST SURVIVE\n"
+        "<!-- /wardline:instructions -->\n"
+    )
+    target.write_text("HEAD\n" + foreign_block)
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # The sibling block is preserved verbatim — not gutted, not spliced into.
+    assert foreign_block in content
+    assert "WARDLINE BODY MUST SURVIVE" in content
+    # Exactly one well-formed legis block was appended, after the sibling close.
+    assert content.count("<!-- /legis:instructions -->") == 1
+    assert content.rindex(INSTRUCTIONS_MARKER) > content.index(
+        "<!-- /wardline:instructions -->"
+    )
+
+
+def test_inject_reinject_preserves_foreign_block_placed_before_legis(tmp_path):
+    """A sibling block *before* the legis block survives re-injection on drift.
+
+    The shared-file layout where wardline installs before legis is realistic; the
+    in-place replace must not reach backwards past ``start`` into a preceding block.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        + _WARDLINE_BLOCK
+        + f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "stale legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- wardline:instructions:v1:abcd1234 -->" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # The legis block was replaced in place (stale body gone), exactly one remains.
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert "stale legis body" not in content
+    # The sibling still precedes the legis block.
+    assert content.index("<!-- wardline:instructions:v1:abcd1234 -->") < content.index(
+        INSTRUCTIONS_MARKER
+    )
+
+
 def test_inject_bounded_recovery_is_idempotent(tmp_path):
     """Repairing a malformed block next to a foreign one is byte-stable on re-run (refinement 3)."""
     target = tmp_path / "CLAUDE.md"

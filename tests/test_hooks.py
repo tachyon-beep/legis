@@ -141,6 +141,45 @@ def test_refresh_auto_fire_preserves_coresident_foreign_block(tmp_path):
     assert "<!-- /wardline:instructions -->" in content
 
 
+def test_refresh_warns_when_drift_reinjection_fails(tmp_path, monkeypatch, caplog):
+    """A *detected-drift* re-injection that fails must not be dropped silently.
+
+    ``inject_instructions`` returns ``(False, reason)`` (it does not raise) for a
+    recoverable refusal such as a symlinked target, so the upstream ``except`` in
+    the session-context path never sees it. If the refresh swallows the ``False``,
+    agents run on drifted instructions with zero operator signal.
+    """
+    real = tmp_path / "real.md"
+    inject_instructions(real)
+    link = tmp_path / "CLAUDE.md"
+    link.symlink_to(real)
+    # Drift so the refresh attempts a re-injection (which then fails on the symlink).
+    monkeypatch.setattr(install, "_instructions_text", lambda: "DRIFTED BODY\n")
+
+    with caplog.at_level(logging.WARNING, logger="legis.hooks"):
+        messages = refresh_instructions(tmp_path)
+
+    assert not any("CLAUDE.md" in m for m in messages)  # no false success
+    assert "CLAUDE.md" in caplog.text
+    assert "symlink" in caplog.text.lower()
+
+
+def test_refresh_warns_when_skill_reinstall_fails(tmp_path, monkeypatch, caplog):
+    """A failed skill-pack re-install on drift must warn, not silently no-op."""
+    install.install_skills(tmp_path)
+    # Drift the installed pack so the refresh attempts a reinstall.
+    next(
+        (tmp_path / ".claude" / "skills" / install.SKILL_NAME).rglob("*.md")
+    ).write_text("DRIFTED\n")
+    monkeypatch.setattr(hooks, "install_skills", lambda _root: (False, "swap failed"))
+
+    with caplog.at_level(logging.WARNING, logger="legis.hooks"):
+        messages = refresh_instructions(tmp_path)
+
+    assert not any("skill" in m.lower() for m in messages)  # no false success
+    assert "swap failed" in caplog.text
+
+
 def test_generate_session_context_swallows_errors(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
 

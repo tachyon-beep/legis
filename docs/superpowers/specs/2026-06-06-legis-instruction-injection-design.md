@@ -90,10 +90,15 @@ Mirrors Filigree's injection core, right-sized (no dashboard, no server mode):
 - `INSTRUCTIONS_MARKER = "<!-- legis:instructions"`, `_END_MARKER`,
   `SKILL_NAME = "legis-workflow"`.
 - `_instructions_text()`, `_instructions_hash()`, `_instructions_version()`,
-  `_build_instructions_block()`, `INSTRUCTIONS = _build_instructions_block()`.
-- `inject_instructions(path) -> (bool, str)`: replace if marker present (handle
-  a missing end-marker by replacing start-marker→EOF), append if file exists
-  without marker, create if absent.
+  `_build_instructions_block()`. (The block is built per-call; the once-planned
+  `INSTRUCTIONS = _build_instructions_block()` module constant was not shipped.)
+- `inject_instructions(path) -> (bool, str)`: replace if legis owns a block,
+  append if file exists without one, create if absent. **Superseded:** the
+  original "missing end-marker → replace start-marker→EOF" recovery deleted
+  co-resident sibling blocks; the implementation now bounds the rewrite at the
+  first *foreign* fence and anchors only on legis's own *top-level* open fence
+  (peer of filigree-bcbd4d66fd, legis-068e359d28). See `_first_foreign_fence_pos`
+  / `_first_own_open_fence_pos` in the code for the live behavior.
 - `_atomic_write_text(path, content)`: temp + `os.replace`, preserve existing
   mode (else respect umask for new files), `reject_symlink`.
 - `reject_symlink` / safe-path helpers (port the minimal subset from Filigree's
