@@ -19,3 +19,5 @@ __pycache__/
 loomweave.yaml
 wardline.yaml
 .loomweave/loomweave.lock
+AGENTS.md
+CLAUDE.md
