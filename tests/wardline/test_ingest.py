@@ -223,3 +223,14 @@ def test_signed_dirty_artifact_verifies_normally():
     scan = _artifact(dirty=True, signed=True)
     prov = verify_wardline_artifact(scan, _KEY, allow_dirty=False)
     assert prov["artifact_status"] == "verified"
+
+
+def test_ci_posture_missing_provenance_field_is_red():
+    # Key configured, clean (not dirty), but a required provenance field is
+    # absent -> generic red BEFORE signature verification is even attempted. This
+    # is the non-dirty CI branch that demands signed scanner/rule-set/commit/tree
+    # provenance; a scan missing any of them is malformed, not an amber skip.
+    scan = _artifact()  # all four provenance fields present, unsigned
+    del scan["tree_sha"]
+    with pytest.raises(WardlinePayloadError, match="missing required field"):
+        verify_wardline_artifact(scan, _KEY)

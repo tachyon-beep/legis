@@ -607,6 +607,23 @@ def test_scan_results_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypat
     assert "artifact_signature" not in wardline
 
 
+def test_scan_results_devmode_optin_is_strict_and_fails_safe(tmp_path, monkeypatch):
+    # The dev-mode opt-in is `LEGIS_WARDLINE_ALLOW_DIRTY == "1"` exactly. A
+    # governing knob that gates UNSIGNED artifacts must fail safe: any value other
+    # than "1" (truthy-looking "true", "0", "yes") must NOT govern — it stays the
+    # typed amber skip. Pins the strict parse against a future drift to truthiness.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    for value in ("0", "true", "True", "yes", "2", ""):
+        monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", value)
+        c = _client(tmp_path)
+        resp = c.post("/wardline/scan-results",
+                      json={"cell": "surface_only", "agent_id": "a",
+                            "scan": _dirty_wardline_scan()})
+        assert resp.status_code == 200, value
+        assert resp.json()["outcome"] == "SKIPPED_DIRTY_TREE", value
+        assert resp.json()["routed"] == [], value
+
+
 def test_scan_results_single_cell_still_works(tmp_path):
     c = _client(tmp_path)
     body = {"cell": "surface_override", "agent_id": "agent-1", "scan": {"findings": [
