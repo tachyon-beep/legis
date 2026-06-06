@@ -1043,11 +1043,12 @@ def _tool_pull_request_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[st
         return _tool_error("NOT_FOUND", f"unknown PR: {number}")
     pull_payload = asdict(pull)
     pull_payload["state"] = pull.state.value
-    pull_checks = (
-        _checks(runtime).for_pr(number)
-        if runtime.check_surface is not None
-        else []
-    )
+    # Build the check surface unconditionally — `_checks()` lazily initialises it
+    # from LEGIS_CHECK_DB. Guarding on `runtime.check_surface is not None` made the
+    # result call-order-dependent: a fresh runtime (build_runtime sets it to None)
+    # reported no checks until some other tool happened to initialise the surface
+    # first, so an agent could be told a PR is clean when checks exist and fail.
+    pull_checks = _checks(runtime).for_pr(number)
     pull_payload["checks"] = [_check_to_dict(run) for run in pull_checks]
     return _tool_result(pull_payload)
 

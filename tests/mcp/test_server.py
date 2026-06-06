@@ -1250,6 +1250,62 @@ def test_read_tools_return_git_pull_checks_and_override_rate(tmp_path, git_repo)
     assert rate["note"] == "measures operator force-pasts; not movable by agent retries"
 
 
+def test_pull_request_get_returns_checks_on_a_fresh_runtime(tmp_path, monkeypatch):
+    # Regression: build_runtime yields check_surface=None, and the first tool
+    # call an agent makes may be pull_request_get (no prior check_list to lazily
+    # initialise the surface). The result must NOT be call-order-dependent — a PR
+    # with recorded checks must report them, or a governance agent is told a PR is
+    # clean when checks exist and may be failing.
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    checks.record(
+        CheckRun(
+            check_name="unit",
+            run_id="run-1",
+            commit_sha="abc123",
+            outcome=CheckOutcome.FAIL,
+            pr=7,
+            ran_against="abc123",
+        )
+    )
+    # The lazy _checks() builder resolves the DB from LEGIS_CHECK_DB, exactly as a
+    # deployed server does — so the surface is uninitialised but reachable.
+    monkeypatch.setenv("LEGIS_CHECK_DB", f"sqlite:///{tmp_path / 'checks.db'}")
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    pulls.record(
+        PullRequest(
+            number=7,
+            title="Feature",
+            base="main",
+            head="feature",
+            state=PullRequestState.OPEN,
+            url="https://example.test/pr/7",
+        )
+    )
+    # Fresh runtime: check_surface left at its build_runtime default (None).
+    runtime, _store = _runtime(tmp_path, check_surface=None)
+    runtime.pull_surface = pulls
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "pull_request_get",
+                    "arguments": {"number": "7"},
+                },
+            },
+        ),
+        runtime,
+    )
+
+    pr = responses[0]["result"]["structuredContent"]
+    assert pr["number"] == 7
+    assert pr["checks"][0]["check_name"] == "unit"
+    assert pr["checks"][0]["outcome"] == "fail"
+
+
 def test_check_list_reads_recorded_checks_by_commit_and_pr(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     checks.record(
