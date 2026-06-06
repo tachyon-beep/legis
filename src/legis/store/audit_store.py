@@ -270,6 +270,14 @@ class AuditStore:
         try:
             records = self.read_all()
         except (json.JSONDecodeError, TypeError, ValueError):
+            # No seq survives a decode failure of the whole read; name the
+            # failure mode so an investigator knows the trail is unreadable
+            # rather than merely mismatched.
+            logger.error(
+                "audit trail integrity check failed: a record payload did not "
+                "decode as JSON",
+                exc_info=True,
+            )
             return False
         for rec in records:
             # json.loads accepts Infinity/NaN, so a directly-tampered payload
@@ -279,12 +287,37 @@ class AuditStore:
             try:
                 computed = content_hash(rec.payload)
             except (ValueError, TypeError):
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: payload is "
+                    "not canonicalizable (tamper)",
+                    rec.seq,
+                    exc_info=True,
+                )
                 return False
             if computed != rec.content_hash:
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: content hash "
+                    "mismatch (recorded %s, recomputed %s)",
+                    rec.seq,
+                    rec.content_hash,
+                    computed,
+                )
                 return False
             if rec.prev_hash != prev_hash:
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: broken chain "
+                    "link (prev_hash %s != expected %s)",
+                    rec.seq,
+                    rec.prev_hash,
+                    prev_hash,
+                )
                 return False
             if rec.chain_hash != _chain(rec.prev_hash, rec.content_hash):
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: chain hash "
+                    "does not match prev+content",
+                    rec.seq,
+                )
                 return False
             prev_hash = rec.chain_hash
         return True

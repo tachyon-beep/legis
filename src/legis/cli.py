@@ -267,7 +267,16 @@ def _run_install(args) -> int:
     for selected, name, step in steps:
         if not selected:
             continue
-        ok, message = step()  # type: ignore[operator]
+        try:
+            ok, message = step()  # type: ignore[operator]
+        except Exception as exc:  # noqa: BLE001 — one bad step must not abort the rest
+            # Stay consistent with the per-step [OK]/[FAIL] model instead of
+            # aborting the whole install with a traceback and leaving it
+            # half-applied. Render the failure, count it, keep going.
+            logger.warning("install step %r raised", name, exc_info=True)
+            print(f"[FAIL] {name}: {exc}")
+            failures += 1
+            continue
         mark = "OK" if ok else "FAIL"
         print(f"[{mark}] {name}: {message}")
         if not ok:

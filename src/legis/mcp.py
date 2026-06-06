@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -86,6 +87,8 @@ _DEFAULT_PROTOCOL_VERSION = _SUPPORTED_PROTOCOL_VERSIONS[-1]
 # refusing a pathological one. Override with LEGIS_MCP_MAX_REQUEST_BYTES.
 _DEFAULT_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 
+logger = logging.getLogger(__name__)
+
 
 def _max_request_bytes() -> int:
     raw = os.environ.get("LEGIS_MCP_MAX_REQUEST_BYTES")
@@ -93,9 +96,24 @@ def _max_request_bytes() -> int:
         try:
             value = int(raw)
         except ValueError:
+            logger.warning(
+                "LEGIS_MCP_MAX_REQUEST_BYTES=%r is not an integer; ignoring it "
+                "and using the default %d-byte bound",
+                raw,
+                _DEFAULT_MAX_REQUEST_BYTES,
+            )
             return _DEFAULT_MAX_REQUEST_BYTES
         if value > 0:
             return value
+        # A non-positive bound (a fat-fingered 0 or negative) would otherwise
+        # fall through silently — the operator meant to lower the cap and it was
+        # ignored. Say so.
+        logger.warning(
+            "LEGIS_MCP_MAX_REQUEST_BYTES=%r is not positive; ignoring it and "
+            "using the default %d-byte bound",
+            raw,
+            _DEFAULT_MAX_REQUEST_BYTES,
+        )
     return _DEFAULT_MAX_REQUEST_BYTES
 
 

@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import sqlite3
 
 from legis.canonical import canonical_json, content_hash
@@ -1063,6 +1064,43 @@ def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch
     assert "artifact_signature" not in wardline
 
 
+def test_scan_route_malformed_finding_is_invalid_argument_red(tmp_path, monkeypatch):
+    # The other half of the dirty-vs-malformed contract (cf. the amber test
+    # above): a malformed finding — here an unknown severity — is a generic red
+    # INVALID_ARGUMENT, NOT the amber SKIPPED_DIRTY_TREE. WardlinePayloadError is
+    # deliberately not a WardlineDirtyTreeError, so the boundary keeps "broken or
+    # tampered scan" distinct from "commit first". Nothing is governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+    malformed = {
+        "findings": [
+            {
+                "rule_id": "PY-WL-101",
+                "message": "untrusted reaches trusted",
+                "severity": "NOT_A_SEVERITY",
+                "kind": "defect",
+                "fingerprint": "fp1",
+            }
+        ]
+    }
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": malformed}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert store.read_all() == []
+
+
 def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
     runtime, _store = _runtime(tmp_path)
@@ -1561,16 +1599,22 @@ def test_run_jsonrpc_rejects_oversized_line_and_stays_framed(tmp_path, monkeypat
     assert responses[2]["id"] == 2 and "result" in responses[2]
 
 
-def test_max_request_bytes_env_override_and_fallback(monkeypatch):
+def test_max_request_bytes_env_override_and_fallback(monkeypatch, caplog):
     from legis.mcp import _DEFAULT_MAX_REQUEST_BYTES, _max_request_bytes
 
     monkeypatch.delenv("LEGIS_MCP_MAX_REQUEST_BYTES", raising=False)
     assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
     monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", "4096")
     assert _max_request_bytes() == 4096
+    # Both the unparseable and the non-positive fat-finger fall back, but neither
+    # may do so silently — an operator lowering the bound must see why it was
+    # ignored.
     for bad in ("not-an-int", "0", "-5"):
+        caplog.clear()
         monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", bad)
-        assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+        with caplog.at_level(logging.WARNING, logger="legis.mcp"):
+            assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+        assert "LEGIS_MCP_MAX_REQUEST_BYTES" in caplog.text
 
 
 def test_read_bounded_line_enforces_bytes_not_chars():

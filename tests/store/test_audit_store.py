@@ -70,7 +70,7 @@ def test_verify_integrity_passes_on_clean_chain(tmp_path):
     assert s.verify_integrity() is True
 
 
-def test_verify_integrity_detects_out_of_band_tamper(tmp_path):
+def test_verify_integrity_detects_out_of_band_tamper(tmp_path, caplog):
     s = make_store(tmp_path)
     s.append({"k": "a"})
     s.append({"k": "b"})
@@ -85,10 +85,13 @@ def test_verify_integrity_detects_out_of_band_tamper(tmp_path):
         conn.commit()
     finally:
         conn.close()
-    assert s.verify_integrity() is False
+    with caplog.at_level(logging.ERROR, logger="legis.store.audit_store"):
+        assert s.verify_integrity() is False
+    # An investigator needs the offending seq, not a bare False.
+    assert "integrity check failed at seq=1" in caplog.text
 
 
-def test_verify_integrity_handles_malformed_json_as_integrity_failure(tmp_path):
+def test_verify_integrity_handles_malformed_json_as_integrity_failure(tmp_path, caplog):
     s = make_store(tmp_path)
     s.append({"k": "a"})
     conn = raw_conn(tmp_path)
@@ -102,7 +105,9 @@ def test_verify_integrity_handles_malformed_json_as_integrity_failure(tmp_path):
     finally:
         conn.close()
 
-    assert s.verify_integrity() is False
+    with caplog.at_level(logging.ERROR, logger="legis.store.audit_store"):
+        assert s.verify_integrity() is False
+    assert "integrity check failed" in caplog.text
 
 
 def test_audit_store_concurrent_writes(tmp_path):

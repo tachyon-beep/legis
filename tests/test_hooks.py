@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from legis import hooks, install
 from legis.hooks import (
     _extract_marker_token,
@@ -115,11 +117,15 @@ def test_generate_session_context_returns_messages_on_drift(tmp_path, monkeypatc
     assert "CLAUDE.md" in context
 
 
-def test_generate_session_context_swallows_errors(tmp_path, monkeypatch):
+def test_generate_session_context_swallows_errors(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
 
     def boom(_root):
         raise OSError("disk gone")
 
     monkeypatch.setattr(hooks, "refresh_instructions", boom)
-    assert generate_session_context() is None
+    with caplog.at_level(logging.WARNING, logger="legis.hooks"):
+        assert generate_session_context() is None
+    # Swallowing must not be silent — a regression dropping the warning would
+    # hide a broken freshness check.
+    assert "Instruction freshness check failed" in caplog.text

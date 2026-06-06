@@ -51,6 +51,23 @@ def test_install_reports_failure_rc1_on_symlink(tmp_path, monkeypatch, capsys):
     assert "FAIL" in capsys.readouterr().out
 
 
+def test_install_renders_fail_and_continues_when_a_step_raises(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def boom(_root):
+        raise RuntimeError("step blew up")
+
+    monkeypatch.setattr(install, "install_skills", boom)
+    rc = main(["install"])
+    out = capsys.readouterr().out
+    # A raising step is rendered as a [FAIL] line, not a traceback that aborts
+    # the run and leaves the install half-applied...
+    assert "[FAIL] Claude Code skill: step blew up" in out
+    # ...and the steps after it still run.
+    assert (tmp_path / ".gitignore").exists()
+    assert rc == 1
+
+
 def test_session_context_silent_when_fresh(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     install.inject_instructions(tmp_path / "CLAUDE.md")
