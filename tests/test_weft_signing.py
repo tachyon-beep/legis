@@ -10,8 +10,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-import pytest
-
 from legis.filigree.client import sign_filigree_request
 from legis.identity.loomweave_client import sign_loomweave_request
 from legis.weft_signing import (
