@@ -710,13 +710,15 @@ def _legis_mcp_entry(agent_id: str = _DEFAULT_AGENT_ID) -> dict[str, Any]:
 
 
 def register_mcp_json(
-    project_root: Path, agent_id: str = _DEFAULT_AGENT_ID
+    project_root: Path, agent_id: str | None = None
 ) -> tuple[bool, str]:
     """Register (or refresh) the legis server in <root>/.mcp.json.
 
     Creates the file if absent; merges into mcpServers without disturbing
-    sibling entries. Preserves an existing legis entry's agent-id if it already
-    carries one (operator choice), refreshing only the command/args shape.
+    sibling entries. An explicit *agent_id* always wins; when it is ``None``
+    (the default), an existing legis entry's agent-id is preserved (operator
+    choice), falling back to ``_DEFAULT_AGENT_ID`` for a fresh entry. Refreshes
+    only the command/args shape otherwise.
     """
     try:
         path = project_path(project_root, ".mcp.json")
@@ -727,10 +729,11 @@ def register_mcp_json(
     if path.exists():
         try:
             parsed = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(parsed, dict):
-                data = parsed
         except (json.JSONDecodeError, OSError):
             return False, ".mcp.json present but unreadable; fix or remove it by hand"
+        if not isinstance(parsed, dict):
+            return False, ".mcp.json present but not a JSON object; fix or remove it by hand"
+        data = parsed
 
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
@@ -738,13 +741,16 @@ def register_mcp_json(
         data["mcpServers"] = servers
 
     existing = servers.get("legis")
-    keep_agent = agent_id
-    if isinstance(existing, dict):
-        args = existing.get("args", [])
-        if isinstance(args, list) and "--agent-id" in args:
-            i = args.index("--agent-id")
-            if i + 1 < len(args) and isinstance(args[i + 1], str):
-                keep_agent = args[i + 1]
+    if agent_id is not None:
+        keep_agent = agent_id  # explicit caller wins
+    else:
+        keep_agent = _DEFAULT_AGENT_ID  # default...
+        if isinstance(existing, dict):  # ...but preserve an existing entry's id
+            args = existing.get("args", [])
+            if isinstance(args, list) and "--agent-id" in args:
+                i = args.index("--agent-id")
+                if i + 1 < len(args) and isinstance(args[i + 1], str):
+                    keep_agent = args[i + 1]
 
     desired = _legis_mcp_entry(keep_agent)
     if existing == desired:

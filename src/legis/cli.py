@@ -155,8 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--gitignore", action="store_true", help="Add legis config rules to .gitignore only")
     install.add_argument("--mcp", action="store_true", help="Register the legis MCP server in .mcp.json only")
     install.add_argument(
-        "--agent-id", default="claude-code",
-        help="Agent id stamped in the .mcp.json legis entry (default: claude-code)",
+        "--agent-id", default=None,
+        help="Agent id stamped in the .mcp.json legis entry "
+             "(default: claude-code, or preserve an existing entry's id)",
     )
 
     subparsers.add_parser(

@@ -624,6 +624,39 @@ def test_legis_mcp_entry_module_fallback_splits_command_and_args(monkeypatch):
     assert entry["args"] == ["-P", "-m", "legis", "mcp", "--agent-id", "claude-code"]
 
 
+def test_register_mcp_json_explicit_agent_id_wins_over_existing(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path, "claude-code")
+    register_mcp_json(tmp_path, "new-bot")
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    args = data["mcpServers"]["legis"]["args"]
+    i = args.index("--agent-id")
+    assert args[i + 1] == "new-bot"
+
+
+def test_register_mcp_json_default_preserves_existing_agent_id(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path, "operator-pick")
+    register_mcp_json(tmp_path)  # default (None) → preserve operator choice
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    args = data["mcpServers"]["legis"]["args"]
+    i = args.index("--agent-id")
+    assert args[i + 1] == "operator-pick"
+
+
+def test_register_mcp_json_non_dict_top_level_is_rejected_unchanged(tmp_path):
+    from legis.install import register_mcp_json
+
+    mcp = tmp_path / ".mcp.json"
+    mcp.write_text("[]")
+    ok, msg = register_mcp_json(tmp_path)
+    assert ok is False
+    assert "not a JSON object" in msg
+    assert mcp.read_text() == "[]"
+
+
 # ---------------------------------------------------------------------------
 # .gitignore
 # ---------------------------------------------------------------------------
