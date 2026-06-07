@@ -322,6 +322,11 @@ def test_db_override_empty_string_is_error(tmp_path, monkeypatch):
 
 def test_repair_makes_fresh_project_healthy(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    # Hermetic: an inherited sibling URL env var (valid or not) would otherwise
+    # leak into the repair → exit 0 assertion. Unset both so the check is "not
+    # configured" (ok), never a non-repairable error.
+    monkeypatch.delenv("LOOMWEAVE_API_URL", raising=False)
+    monkeypatch.delenv("FILIGREE_API_URL", raising=False)
     # First run: unhealthy (no install artifacts, no .mcp.json).
     assert run_doctor(tmp_path, repair=False, fmt="text") == 1
     # Repair run: install-wiring + .mcp.json get fixed; re-check is healthy.
@@ -347,4 +352,12 @@ def test_json_output_has_no_secret(tmp_path, monkeypatch):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         run_doctor(tmp_path, repair=False, fmt="json")
-    assert "TOP-SECRET" not in buf.getvalue()
+    out = buf.getvalue()
+    assert "TOP-SECRET" not in out
+    # Prove the secret-bearing path actually ran: with both the protected policy
+    # and the key set, check_hmac_key reads the key and reports ok. Asserting the
+    # check is present (and ok) keeps this guard from passing vacuously if the
+    # key-reading check were ever removed.
+    payload = json.loads(out)
+    hmac_checks = [c for c in payload["checks"] if c["id"] == "runtime.hmac_key"]
+    assert hmac_checks and hmac_checks[0]["status"] == "ok"
