@@ -866,6 +866,31 @@ def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path,
     }
 
 
+def test_scan_route_rejects_empty_severity_map(tmp_path, monkeypatch):
+    # Drift fix: the HTTP adapter already rejected an empty cell_by_severity, but
+    # MCP silently accepted an empty severity_map (routed nothing). Both transports
+    # now reject it up front via the shared resolver — no silent governance skip.
+    monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
+    runtime, store = _runtime(tmp_path)
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": _active_scan(), "severity_map": {}},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    assert store.read_all() == []
+
+
 def test_scan_route_rejects_request_routing_when_server_owned(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
     runtime, store = _runtime(tmp_path)

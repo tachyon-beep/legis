@@ -48,7 +48,12 @@ from legis.governance.binding_ledger import BindingError, BindingLedger
 from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
-from legis.service.errors import AuditIntegrityError, InvalidArgumentError, NotEnabledError
+from legis.service.errors import (
+    AuditIntegrityError,
+    InvalidArgumentError,
+    NotEnabledError,
+    WardlineRoutingError,
+)
 from legis.service.governance import compute_override_rate as _compute_override_rate
 from legis.service.governance import evaluate_policy as _evaluate_policy
 from legis.service.governance import request_signoff as _request_signoff
@@ -58,7 +63,10 @@ from legis.service.governance import submit_operator_override as _submit_operato
 from legis.service.governance import submit_override as _submit_override
 from legis.service.governance import submit_protected_override as _submit_protected_override
 from legis.service.governance import verified_records as _verified_records
-from legis.service.wardline import route_wardline_scan as _route_wardline_scan
+from legis.service.wardline import (
+    resolve_scan_routing,
+    route_wardline_scan as _route_wardline_scan,
+)
 from legis.policy.grammar import PolicyGrammar, default_grammar
 from legis.pulls.models import PullRequest, PullRequestState
 from legis.pulls.surface import PullSurface
@@ -67,7 +75,6 @@ from legis.wardline.ingest import (
     ScanOutcome,
     WardlineDirtyTreeError,
     WardlinePayloadError,
-    WardlineSeverity,
 )
 
 security = HTTPBearer(auto_error=False)
@@ -247,20 +254,13 @@ class CheckRunIn(BaseModel):
     finished_at: str | None = None
 
 
-def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
-    mapping: dict[WardlineSeverity, WardlineCellPolicy] = {}
-    for part in raw.split(","):
-        if not part.strip():
-            continue
-        severity_raw, sep, cell_raw = part.partition("=")
-        if not sep:
-            raise ValueError("cell map entries must be SEVERITY=cell")
-        mapping[WardlineSeverity[severity_raw.strip()]] = WardlineCellPolicy(
-            cell_raw.strip()
-        )
-    if not mapping:
-        raise ValueError("cell map must not be empty")
-    return mapping
+# Wardline scan-routing rejections (raised by service.resolve_scan_routing) map
+# to HTTP status by kind; the MCP adapter collapses the same kinds to one code.
+_WARDLINE_ROUTING_STATUS = {
+    WardlineRoutingError.SERVER_MISCONFIGURED: 500,
+    WardlineRoutingError.SERVER_OWNED: 403,
+    WardlineRoutingError.MALFORMED: 422,
+}
 
 
 def _check_to_dict(run: CheckRun) -> dict:
@@ -772,62 +772,27 @@ def create_app(
 
     @app.post("/wardline/scan-results")
     def wardline_scan_results(body: ScanResultsIn, actor: str = Depends(verify_writer)) -> dict:
-        server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
-        server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
-        if server_cell and server_cell_by_severity:
-            raise HTTPException(status_code=500, detail="server Wardline routing is misconfigured")
-        server_routing = server_cell is not None or server_cell_by_severity is not None
-        if server_routing and (
-            body.cell is not None or body.cell_by_severity is not None or body.fail_on is not None
-        ):
-            raise HTTPException(status_code=403, detail="Wardline routing is server-owned")
-        if not server_routing:
-            if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
-                raise HTTPException(
-                    status_code=403,
-                    detail="Wardline routing is server-owned; configure LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
-                )
-            if body.fail_on is not None:
-                if body.cell is None or body.cell_by_severity is not None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="fail_on routing requires cell and forbids cell_by_severity",
-                    )
-            elif (body.cell is None) == (body.cell_by_severity is None):
-                raise HTTPException(status_code=422,
-                                    detail="provide exactly one of cell or cell_by_severity")
-            if body.cell_by_severity is not None and not body.cell_by_severity:
-                raise HTTPException(status_code=422, detail="cell_by_severity must not be empty")
-
-        policy: WardlineCellPolicy | None = None
-        cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
-        fail_on: WardlineSeverity | None = None
         try:
-            if server_cell_by_severity is not None:
-                cell_map = _parse_wardline_cell_map(server_cell_by_severity)
-                cells = set(cell_map.values())
-            elif server_cell is not None:
-                policy = WardlineCellPolicy(server_cell)
-                cells = {policy}
-            elif body.cell_by_severity is not None:
-                cell_map = {WardlineSeverity[sev]: WardlineCellPolicy(cell)
-                            for sev, cell in body.cell_by_severity.items()}
-                cells = set(cell_map.values())
-            else:
-                policy = WardlineCellPolicy(body.cell)
-                if body.fail_on is not None:
-                    fail_on = WardlineSeverity[body.fail_on]
-                    cells = {policy, WardlineCellPolicy.SURFACE_ONLY}
-                else:
-                    cells = {policy}
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=f"unknown cell/severity: {exc}")
+            routing = resolve_scan_routing(
+                server_cell=os.environ.get("LEGIS_WARDLINE_CELL"),
+                server_cell_by_severity=os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY"),
+                request_cell=body.cell,
+                request_severity_map=body.cell_by_severity,
+                request_fail_on=body.fail_on,
+                allow_request_routing=(
+                    os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") == "1"
+                ),
+            )
+        except WardlineRoutingError as exc:
+            raise HTTPException(
+                status_code=_WARDLINE_ROUTING_STATUS[exc.kind], detail=str(exc)
+            ) from exc
 
         # Only provision the governance store when a surface cell can actually run:
         # engine() lazily creates .weft/legis/legis-governance.db, so a pure block_escalate scan
         # must not touch it. signoff_gate is an injected param (no side effect).
-        needs_engine = bool(cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
-                                     WardlineCellPolicy.SURFACE_ONLY})
+        needs_engine = bool(routing.cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
+                                             WardlineCellPolicy.SURFACE_ONLY})
         try:
             routed = _route_wardline_scan(
                 body.scan,
@@ -835,9 +800,9 @@ def create_app(
                 identity=identity,
                 engine=engine() if needs_engine else None,
                 signoff=signoff_gate,
-                policy=policy,
-                cell_map=cell_map,
-                fail_on=fail_on,
+                policy=routing.policy,
+                cell_map=routing.cell_map,
+                fail_on=routing.fail_on,
                 artifact_key=(
                     os.environ["LEGIS_WARDLINE_ARTIFACT_KEY"].encode("utf-8")
                     if os.environ.get("LEGIS_WARDLINE_ARTIFACT_KEY")

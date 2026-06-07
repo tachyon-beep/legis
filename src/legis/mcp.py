@@ -43,6 +43,7 @@ from legis.service.errors import (
     NotEnabledError,
     NotFoundError,
     ServiceError,
+    WardlineRoutingError,
 )
 from legis.service.explain import explain_policy
 from legis.service.governance import (
@@ -53,10 +54,9 @@ from legis.service.governance import (
     request_signoff,
     verified_records as service_verified_records,
 )
-from legis.service.wardline import route_wardline_scan
+from legis.service.wardline import resolve_scan_routing, route_wardline_scan
 from legis.store.audit_store import AuditStore
-from legis.wardline.governor import WardlineCellPolicy
-from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError, WardlineSeverity
+from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError
 
 
 _AGENT_TOOLS = frozenset(
@@ -414,6 +414,11 @@ def _service_error(exc: Exception) -> dict[str, Any]:
         return _tool_error("NOT_FOUND", str(exc))
     if isinstance(exc, InvalidArgumentError):
         return _tool_error("INVALID_ARGUMENT", str(exc))
+    if isinstance(exc, WardlineRoutingError):
+        # All three routing kinds (server-misconfigured / server-owned /
+        # malformed) collapse to one MCP code; the HTTP adapter splits them by
+        # status. Must precede the generic ServiceError case below.
+        return _tool_error("INVALID_CELL_SPEC", str(exc))
     if isinstance(exc, GitError):
         return _tool_error("GIT_ERROR", str(exc))
     if isinstance(exc, ServiceError):
@@ -517,22 +522,6 @@ def _registry(runtime: McpRuntime) -> PolicyCellRegistry:
     # Defensive fallback if a runtime was built without a registry: fail closed
     # rather than self-clear (Q-M7 / audit H6).
     return runtime.cell_registry or fail_closed_policy_cells()
-
-
-def _parse_wardline_cell_map(raw: str) -> dict[WardlineSeverity, WardlineCellPolicy]:
-    mapping: dict[WardlineSeverity, WardlineCellPolicy] = {}
-    for part in raw.split(","):
-        if not part.strip():
-            continue
-        severity_raw, sep, cell_raw = part.partition("=")
-        if not sep:
-            raise ValueError("cell map entries must be SEVERITY=cell")
-        mapping[WardlineSeverity[severity_raw.strip()]] = WardlineCellPolicy(
-            cell_raw.strip()
-        )
-    if not mapping:
-        raise ValueError("cell map must not be empty")
-    return mapping
 
 
 def _explanation_payload(explanation) -> dict[str, Any]:
@@ -925,59 +914,24 @@ def _tool_policy_evaluate(runtime: McpRuntime, args: dict[str, Any]) -> dict[str
 
 
 def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
-    server_cell = os.environ.get("LEGIS_WARDLINE_CELL")
-    server_cell_by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
-    if server_cell and server_cell_by_severity:
-        return _tool_error(
-            "INVALID_CELL_SPEC", "server Wardline routing is misconfigured"
-        )
-    has_cell = "cell" in args
-    has_map = "severity_map" in args
-    has_fail_on = "fail_on" in args
-    server_routing = server_cell is not None or server_cell_by_severity is not None
-    if server_routing and (has_cell or has_map or has_fail_on):
-        return _tool_error(
-            "INVALID_CELL_SPEC", "Wardline routing is server-owned"
-        )
-    if not server_routing:
-        if os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") != "1":
-            return _tool_error(
-                "INVALID_CELL_SPEC",
-                "Wardline routing is server-owned; configure "
-                "LEGIS_WARDLINE_CELL or LEGIS_WARDLINE_CELL_BY_SEVERITY",
-            )
-        if has_fail_on:
-            if not has_cell or has_map:
-                return _tool_error(
-                    "INVALID_CELL_SPEC",
-                    "fail_on routing requires cell and forbids severity_map",
-                )
-        elif has_cell == has_map:
-            return _tool_error(
-                "INVALID_CELL_SPEC",
-                "provide exactly one of cell or severity_map",
-            )
+    # "severity_map" must be an object if present (transport-type check); the
+    # governance decision — is request routing allowed, and is the spec
+    # well-formed? — lives in resolve_scan_routing, shared with the HTTP adapter.
+    # A WardlineRoutingError propagates to call_tool's translator → INVALID_CELL_SPEC.
+    request_severity_map = (
+        _require_object(args, "severity_map") if "severity_map" in args else None
+    )
+    routing = resolve_scan_routing(
+        server_cell=os.environ.get("LEGIS_WARDLINE_CELL"),
+        server_cell_by_severity=os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY"),
+        request_cell=args.get("cell"),
+        request_severity_map=request_severity_map,
+        request_fail_on=args.get("fail_on"),
+        allow_request_routing=(
+            os.environ.get("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING") == "1"
+        ),
+    )
     scan = _require_object(args, "scan")
-    scan_policy: WardlineCellPolicy | None = None
-    scan_cell_map: dict[WardlineSeverity, WardlineCellPolicy] | None = None
-    scan_fail_on: WardlineSeverity | None = None
-    try:
-        if server_cell_by_severity is not None:
-            scan_cell_map = _parse_wardline_cell_map(server_cell_by_severity)
-        elif server_cell is not None:
-            scan_policy = WardlineCellPolicy(server_cell)
-        elif has_cell:
-            scan_policy = WardlineCellPolicy(_require(args, "cell"))
-            if has_fail_on:
-                scan_fail_on = WardlineSeverity[_require(args, "fail_on")]
-        else:
-            raw_map = _require_object(args, "severity_map")
-            scan_cell_map = {
-                WardlineSeverity[severity]: WardlineCellPolicy(cell)
-                for severity, cell in raw_map.items()
-            }
-    except (KeyError, ValueError) as exc:
-        return _tool_error("INVALID_CELL_SPEC", str(exc))
     try:
         routed = route_wardline_scan(
             scan,
@@ -985,9 +939,9 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
             identity=runtime.identity,
             engine=_engine(runtime),
             signoff=runtime.signoff_gate,
-            policy=scan_policy,
-            cell_map=scan_cell_map,
-            fail_on=scan_fail_on,
+            policy=routing.policy,
+            cell_map=routing.cell_map,
+            fail_on=routing.fail_on,
             artifact_key=(
                 runtime.wardline_artifact_key
                 or (

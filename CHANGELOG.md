@@ -212,6 +212,19 @@ listed as not-yet-built.
   `canonical.canonical_json` (whose `ensure_ascii=False` would change the signed
   bytes). Behavior-preserving — existing per-channel golden vectors unchanged,
   plus a new cross-channel anti-drift test. No change to signatures on the wire.
+- **Wardline scan-routing validation centralised in the service layer** — "is
+  request-side routing allowed, and is the cell-spec well-formed?" is a
+  governance decision that was hand-copied into both the HTTP
+  (`/wardline/scan-results`) and MCP (`scan_route`) adapters, along with the
+  cell-spec parse and a `_parse_wardline_cell_map` helper. The copies had already
+  drifted: the HTTP adapter rejected an empty `cell_by_severity` (422) while MCP
+  silently accepted an empty `severity_map` and routed nothing. The decision now
+  lives in `service.resolve_scan_routing`, raising a `WardlineRoutingError` whose
+  `kind` each adapter maps to its own taxonomy (HTTP 500/403/422 by kind; MCP
+  collapses to `INVALID_CELL_SPEC`) — so a new routing rule is added once and
+  cannot reach one transport but not the other. Behavior-preserving for every
+  pinned case; the one intended change closes the drift (an empty per-severity
+  map is now rejected up front on both transports — no silent governance skip).
 
 ### Fixed
 - **Ingest accepts realistic scans** — the over-strict Wardline ingest validator

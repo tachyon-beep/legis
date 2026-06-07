@@ -28,6 +28,25 @@ class InvalidArgumentError(ServiceError):
     """Caller input is structurally valid for the transport but invalid for Legis."""
 
 
+class WardlineRoutingError(ServiceError):
+    """A Wardline scan-routing request is not permitted or is malformed.
+
+    Carries a ``kind`` discriminator so each adapter can preserve its own
+    taxonomy without re-implementing the decision: the HTTP adapter maps
+    ``server_misconfigured`` → 500, ``server_owned`` → 403, ``malformed`` → 422,
+    while the MCP adapter collapses all three to ``INVALID_CELL_SPEC``. Adapters
+    switch on the ``kind`` attribute, never on message text.
+    """
+
+    SERVER_MISCONFIGURED = "server_misconfigured"
+    SERVER_OWNED = "server_owned"
+    MALFORMED = "malformed"
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 class ProtectedKeyRequiredError(ServiceError):
     """A protected trail was read without the HMAC key needed to verify it.
 
