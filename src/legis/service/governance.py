@@ -114,14 +114,30 @@ def compute_override_rate(records: list):
 
 
 def _requires_protected_verification(payload: dict[str, Any], protected_policies) -> bool:
+    """Gate-local protected-detection for the KEYLESS branch of the override-rate
+    gate: would refusing to score this record be right because it genuinely needs
+    a signature we have no key to check?
+
+    The discriminator is *status-claim vs incidental metadata*. The markers kept
+    below — ``protected_cell`` and the signature keys — are a record purporting to
+    BE protected, so failing closed on them in a keyless deployment is correct
+    even if injected. ``file_fingerprint`` / ``ast_path`` carry no such claim:
+    they are ordinary metadata, and the simple-tier engine accepts an arbitrary
+    ``extensions`` dict, so they can ride on a never-signed chill/coached record —
+    flagging them would fail-close a non-protected deployment on a record that has
+    nothing to verify. That over-reach is why those two sniffs are dropped here.
+
+    Intentionally NARROWER than ``TrailVerifier._requires_verification`` (the
+    verify path, which must stay over-inclusive): the two answer different
+    questions — keyless "must I refuse to score this?" vs with-key "must this be
+    signed?" — so do NOT re-merge them.
+    """
     ext = payload.get("extensions", {}) or {}
     return (
         payload.get("policy") in protected_policies
         or ext.get("protected_cell") is True
         or "judge_metadata_signature" in ext
         or "signoff_signature" in ext
-        or "file_fingerprint" in ext
-        or "ast_path" in ext
     )
 
 

@@ -282,6 +282,27 @@ def test_evaluate_override_rate_gate_scores_with_key(tmp_path):
     assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
 
 
+def test_evaluate_override_rate_gate_ignores_soft_sniffs_on_simple_records(tmp_path):
+    # A chill/coached record can carry an arbitrary extra_extensions dict through
+    # the simple-tier engine. Such a record holding file_fingerprint/ast_path is
+    # NOT protected (the engine never writes protected_cell or a signature), so a
+    # keyless, non-protected deployment must score it rather than fail closed.
+    from legis.service.governance import evaluate_override_rate_gate
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    engine = EnforcementEngine(store, SystemClock())  # chill: no judge
+    engine.submit_override(
+        policy="some-policy",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="r",
+        agent_id="a",
+        extensions={"file_fingerprint": "fp", "ast_path": "ap"},
+    )
+    records = store.read_all()
+    res = evaluate_override_rate_gate(records, hmac_key=None, protected_policies=frozenset())
+    assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
+
+
 def test_sign_off_raises_not_enabled_when_gate_absent():
     from legis.service.errors import NotEnabledError
     from legis.service.governance import sign_off

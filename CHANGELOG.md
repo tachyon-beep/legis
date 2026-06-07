@@ -200,6 +200,14 @@ listed as not-yet-built.
   trust-grammar projection.
 - **CLI fails closed on protected override-rate trails** — a missing or
   unverifiable protected trail exits non-zero rather than reporting a clean rate.
+- **Override-rate gate no longer over-detects protected records** — the
+  keyless-branch protected-detector dropped its soft `file_fingerprint` /
+  `ast_path` extension sniffs, which a chill/coached record could carry via an
+  arbitrary `extra_extensions` dict and thereby fail-close a non-protected
+  deployment's `legis governance-gate`. It now keys off the policy set plus the
+  `protected_cell` / signature markers the simple-tier engine never writes;
+  `TrailVerifier`'s (deliberately over-inclusive) verify-path heuristic is
+  unchanged.
 - Hardened the governance audit boundaries with regression coverage.
 
 ## [1.0.0rc1] — 2026-06-03
