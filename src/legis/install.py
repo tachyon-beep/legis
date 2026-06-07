@@ -204,6 +204,21 @@ def _build_instructions_block() -> str:
     return f"{opening}\n{text}{_END_MARKER}"
 
 
+# Reader counterpart to the opening marker built in `_build_instructions_block`.
+# It lives next to the writer (and is derived from the same `INSTRUCTIONS_MARKER`
+# constant) so the freshness check cannot silently desync from the marker format:
+# the prefix is `re.escape`d from the constant, and the token is captured as an
+# opaque `\S+` rather than re-encoding its `v{version}:{hash}` shape — so a future
+# change to the token shape needs no edit here. The round-trip is pinned by a test.
+_MARKER_TOKEN_RE = re.compile(re.escape(INSTRUCTIONS_MARKER) + r":(\S+) -->")
+
+
+def _extract_marker_token(content: str) -> str | None:
+    """Return the token from the first legis instruction marker, or ``None``."""
+    m = _MARKER_TOKEN_RE.search(content)
+    return m.group(1) if m else None
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write *content* to *path* atomically (temp + rename), preserving mode."""
     # Refuse-to-empty guard (filigree-04bad2a2bf parity). Every caller of this

@@ -15,6 +15,7 @@ from legis.install import (
     SKILL_NAME,
     UnsafeInstallPathError,
     _build_instructions_block,
+    _extract_marker_token,
     _instructions_hash,
     _instructions_text,
     _instructions_version,
@@ -83,6 +84,21 @@ def test_build_block_has_open_and_close_markers():
     assert block.startswith(f"{INSTRUCTIONS_MARKER}:{_marker_token()} -->")
     assert block.rstrip().endswith("<!-- /legis:instructions -->")
     assert _instructions_text() in block
+
+
+def test_extract_marker_token_round_trips_the_writer():
+    # The freshness check's reader must parse the exact marker the writer emits.
+    # Driving it off the real `_build_instructions_block()` output (not a
+    # hand-written marker) is what keeps the reader from silently desyncing if
+    # the marker format ever changes — both live in install.py now.
+    assert _extract_marker_token(_build_instructions_block()) == _marker_token()
+
+
+def test_extract_marker_token_ignores_the_close_marker_and_absence():
+    # The close marker (`<!-- /legis:instructions -->`) carries no token and must
+    # not be mistaken for the open marker; absent any marker yields None.
+    assert _extract_marker_token("<!-- /legis:instructions -->") is None
+    assert _extract_marker_token("no marker here") is None
 
 
 # ---------------------------------------------------------------------------

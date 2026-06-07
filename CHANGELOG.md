@@ -225,6 +225,19 @@ listed as not-yet-built.
   cannot reach one transport but not the other. Behavior-preserving for every
   pinned case; the one intended change closes the drift (an empty per-severity
   map is now rejected up front on both transports — no silent governance skip).
+- **Instruction-marker reader colocated with its writer** — the SessionStart /
+  MCP-boot freshness check in `hooks.py` re-encoded the marker format
+  (`<!-- legis:instructions:v{version}:{hash} -->`) with its own regex,
+  independently of `install.py`, which builds the marker and owns
+  `INSTRUCTIONS_MARKER`. A change to the marker spacing or token shape in the
+  writer would silently desync the reader, and the drift check — the hook's whole
+  job — would stop matching. The token-extraction helper (`_extract_marker_token`)
+  now lives next to the writer in `install.py`; its regex is `re.escape`d from the
+  `INSTRUCTIONS_MARKER` constant and captures the token opaquely (`\S+`), so it
+  cannot desync from the prefix and needs no edit if the token shape changes. A
+  round-trip test (`_extract_marker_token(_build_instructions_block())` ==
+  `_marker_token()`) pins reader-to-writer, failing loudly on any future format
+  change.
 
 ### Fixed
 - **Ingest accepts realistic scans** — the over-strict Wardline ingest validator

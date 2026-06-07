@@ -15,12 +15,12 @@ produces no work, because the refresh only ever touches marker-bearing files.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from legis.install import (
     INSTRUCTIONS_MARKER,
     SKILL_NAME,
+    _extract_marker_token,
     _get_skills_source_dir,
     _marker_token,
     _skill_tree_fingerprint,
@@ -30,14 +30,6 @@ from legis.install import (
 )
 
 logger = logging.getLogger(__name__)
-
-_MARKER_TOKEN_RE = re.compile(r"<!-- legis:instructions:(v[^:]+:[0-9a-f]+) -->")
-
-
-def _extract_marker_token(content: str) -> str | None:
-    """Return the ``v{version}:{hash}`` token from a legis marker, or ``None``."""
-    m = _MARKER_TOKEN_RE.search(content)
-    return m.group(1) if m else None
 
 
 def refresh_instructions(root: Path) -> list[str]:

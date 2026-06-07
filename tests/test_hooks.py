@@ -6,27 +6,15 @@ import logging
 
 from legis import hooks, install
 from legis.hooks import (
-    _extract_marker_token,
     generate_session_context,
     refresh_instructions,
 )
 from legis.install import (
     SKILL_NAME,
-    _marker_token,
     inject_instructions,
     install_codex_skills,
     install_skills,
 )
-
-
-def test_extract_marker_token_roundtrip():
-    token = _marker_token()
-    content = f"x\n<!-- legis:instructions:{token} -->\nbody\n"
-    assert _extract_marker_token(content) == token
-
-
-def test_extract_marker_token_absent():
-    assert _extract_marker_token("no marker here") is None
 
 
 def test_refresh_noop_when_fresh(tmp_path):
