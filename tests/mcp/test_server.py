@@ -330,6 +330,34 @@ def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tm
     assert store.read_all()[0].payload["agent_id"] == "agent-launch"
 
 
+def test_n3_acceptance_chill_is_reachable_keyless_via_build_runtime(tmp_path, monkeypatch):
+    # N3 (weft-df8d2ef454) acceptance branch 1: a fresh stdio launch CAN reach a
+    # configured non-secret governance surface. Pins the claim our errors/docs
+    # assert as fact — chill/coached are reachable WITHOUT LEGIS_HMAC_KEY — end to
+    # end through the real launch path (build_runtime + the lazy keyless _engine),
+    # not via an injected engine. A future change making _engine need a key would
+    # fail HERE instead of silently falsifying the "reachable keyless" promise.
+    from legis.mcp import build_runtime, call_tool
+
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    monkeypatch.setenv("LEGIS_SOURCE_ROOT", str(tmp_path))  # no policy/cells.toml here
+    monkeypatch.setenv("LEGIS_DEV_DEFAULT_CELLS", "1")  # operator dev posture -> chill
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov.db'}")
+    runtime = build_runtime("agent-1")
+    assert runtime.protected_gate is None  # genuinely keyless launch
+
+    result = call_tool(
+        runtime,
+        "override_submit",
+        {"policy": "ordinary.policy", "entity": "src/x.py:f", "rationale": "n/a"},
+    )
+
+    assert result.get("isError") is not True
+    assert result["structuredContent"]["outcome"] == "ACCEPTED_SELF"
+    assert result["structuredContent"]["cell"] == "chill"
+
+
 def test_override_submit_idempotency_key_prevents_duplicate_records(tmp_path):
     runtime, store = _runtime(tmp_path, agent_id="agent-launch")
     runtime.cell_registry = PolicyCellRegistry(default_cell="chill")
