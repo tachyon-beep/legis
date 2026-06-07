@@ -53,43 +53,43 @@ def render_json(checks: list[DoctorCheck]) -> str:
 
 
 def render_text(checks: list[DoctorCheck]) -> str:
-    healthy = all(c.status == "ok" for c in checks)
-    if healthy:
-        return "legis doctor: ok"
-    lines = ["legis doctor:"]
-    for c in checks:
-        if c.status == "ok":
-            continue
+    has_error = any(c.status == "error" for c in checks)
+    has_warn = any(c.status == "warn" for c in checks)
+    problems = [c for c in checks if c.status != "ok"]
+    if not has_error:
+        # warn-only or all-ok: the project is healthy; surface any warns below
+        if has_warn:
+            warn_count = sum(1 for c in checks if c.status == "warn")
+            lines = [f"legis doctor: ok ({warn_count} warning(s))"]
+        else:
+            return "legis doctor: ok"
+    else:
+        lines = ["legis doctor:"]
+    for c in problems:
         lines.append(f"  {c.id}: {c.status} — {c.message}" if c.message else f"  {c.id}: {c.status}")
     return "\n".join(lines)
 
 
 def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
-    """Check that `.mcp.json` exists and has a `legis` server entry."""
+    """Check that `.mcp.json` has a current legis server entry.
+
+    'Current' means: a legis entry exists, its args invoke `mcp`, and its
+    command resolves to an existing executable. Byte-equality with the canonical
+    entry is deliberately NOT required — a valid but differently-resolved legis
+    binary (uv-tool vs venv path) must not read as drift.
+    """
     cid = "install.mcp_json"
-    path = root / ".mcp.json"
-    present = False
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            present = (
-                isinstance(data, dict)
-                and isinstance(data.get("mcpServers"), dict)
-                and "legis" in data["mcpServers"]
-            )
-        except (json.JSONDecodeError, OSError):
-            present = False
-    if present:
+    if _install.mcp_entry_is_current(root):
         return DoctorCheck(cid, "ok")
     if repair:
         from legis.install import register_mcp_json
 
         ok, msg = register_mcp_json(root)
-        if ok:
+        if ok and _install.mcp_entry_is_current(root):
             return DoctorCheck(cid, "ok", fixed=True)
         return DoctorCheck(cid, "error", message=msg)
     return DoctorCheck(
-        cid, "error", message="legis server not registered (run: legis install --mcp)"
+        cid, "error", message="legis server missing or stale (run: legis install --mcp)"
     )
 
 

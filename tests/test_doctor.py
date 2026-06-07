@@ -36,10 +36,18 @@ def test_render_json_shape():
 
 
 def test_render_text_lists_only_problems_when_healthy_says_ok():
-    assert "legis doctor: ok" in render_text([DoctorCheck("a", "ok")])
+    # all-ok: banner present, no problem lines
+    assert render_text([DoctorCheck("a", "ok")]) == "legis doctor: ok"
+
+    # error present: no "ok" in headline, error listed
     out = render_text([DoctorCheck("a", "ok"), DoctorCheck("b", "error", message="bad")])
     assert "b: error" in out
     assert "legis doctor: ok" not in out
+
+    # warn-only: banner present with warning count AND warn check is listed
+    out_warn = render_text([DoctorCheck("a", "ok"), DoctorCheck("b", "warn", message="heads up")])
+    assert "legis doctor: ok" in out_warn
+    assert "b: warn" in out_warn
 
 
 def test_run_doctor_healthy_after_repair(tmp_path, capsys):
@@ -101,6 +109,101 @@ def test_mcp_json_present_is_ok(tmp_path):
     c = check_mcp_json(tmp_path, repair=False)
     assert c.status == "ok"
     assert c.fixed is False
+
+
+def test_mcp_json_stale_command_is_error_then_repaired(tmp_path):
+    """An entry with a dead command path is stale and must trigger repair."""
+    stale_entry = {
+        "mcpServers": {
+            "legis": {
+                "type": "stdio",
+                "command": "/nonexistent/legis-xyz",
+                "args": ["mcp", "--agent-id", "claude-code"],
+                "env": {},
+            }
+        }
+    }
+    (tmp_path / ".mcp.json").write_text(json.dumps(stale_entry))
+    c = check_mcp_json(tmp_path, repair=False)
+    assert c.id == "install.mcp_json"
+    assert c.status == "error"
+
+    fixed = check_mcp_json(tmp_path, repair=True)
+    assert fixed.status == "ok"
+    assert fixed.fixed is True
+
+
+# ---------------------------------------------------------------------------
+# Direct unit tests for mcp_entry_is_current predicate
+# ---------------------------------------------------------------------------
+
+
+from legis.install import mcp_entry_is_current, register_mcp_json as _register_mcp_json
+
+
+def test_mcp_entry_is_current_absent_file(tmp_path):
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_malformed_json(tmp_path):
+    (tmp_path / ".mcp.json").write_text("{not valid json")
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_non_dict_top_level(tmp_path):
+    (tmp_path / ".mcp.json").write_text('["just", "an", "array"]')
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_missing_mcp_servers(tmp_path):
+    (tmp_path / ".mcp.json").write_text('{"other": {}}')
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_mcp_servers_not_dict(tmp_path):
+    (tmp_path / ".mcp.json").write_text('{"mcpServers": "not a dict"}')
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_no_legis_entry(tmp_path):
+    (tmp_path / ".mcp.json").write_text('{"mcpServers": {"other": {}}}')
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_legis_entry_not_dict(tmp_path):
+    (tmp_path / ".mcp.json").write_text('{"mcpServers": {"legis": "string"}}')
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_args_without_mcp(tmp_path):
+    entry = {"mcpServers": {"legis": {"command": "legis", "args": ["serve"]}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(entry))
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_empty_command(tmp_path):
+    entry = {"mcpServers": {"legis": {"command": "", "args": ["mcp"]}}}
+    (tmp_path / ".mcp.json").write_text(json.dumps(entry))
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_dead_command_path(tmp_path):
+    entry = {
+        "mcpServers": {
+            "legis": {
+                "command": "/nonexistent/legis-xyz",
+                "args": ["mcp", "--agent-id", "claude-code"],
+            }
+        }
+    }
+    (tmp_path / ".mcp.json").write_text(json.dumps(entry))
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_fresh_registered_entry(tmp_path):
+    """A freshly registered entry must read as current."""
+    _register_mcp_json(tmp_path)
+    assert mcp_entry_is_current(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------

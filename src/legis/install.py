@@ -673,6 +673,39 @@ def gitignore_rules_present(project_root: Path) -> bool:
     return all(rule in present for rule in _LEGIS_IGNORE_RULES)
 
 
+def mcp_entry_is_current(project_root: Path) -> bool:
+    """True iff .mcp.json has a usable legis stdio server entry: a dict whose
+    args invoke `mcp` and whose command resolves to an existing executable.
+    Deliberately NOT byte-equality with the canonical entry — a valid but
+    differently-resolved legis binary (uv-tool vs venv path) must not read as
+    drift. Only a missing entry, malformed args, or a dead command path is stale.
+    """
+    try:
+        path = project_path(project_root, ".mcp.json")
+    except UnsafeInstallPathError:
+        return False
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    servers = data.get("mcpServers")
+    entry = servers.get("legis") if isinstance(servers, dict) else None
+    if not isinstance(entry, dict):
+        return False
+    args = entry.get("args")
+    if not (isinstance(args, list) and "mcp" in args):
+        return False
+    command = entry.get("command")
+    if not isinstance(command, str) or not command:
+        return False
+    # command resolves: absolute/relative existing file OR found on PATH
+    return bool(shutil.which(command)) or Path(command).is_file()
+
+
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
     """Ensure legis's runtime-state subtree (``.weft/legis/``) is ignored."""
     try:

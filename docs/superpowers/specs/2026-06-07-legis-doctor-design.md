@@ -123,8 +123,12 @@ error.
 - `install.agents_skill` — `.agents` (Codex) skill pack present, fingerprint fresh.
 - `install.hook` — Claude Code `SessionStart` hook registered.
 - `install.gitignore` — legis `.gitignore` rules present.
-- `install.mcp_json` — `.mcp.json` has a `legis` server entry matching the
-  canonical local entry (`legis mcp --agent-id <id>` via the resolved binary).
+- `install.mcp_json` — `.mcp.json` has a usable `legis` server entry: present,
+  args invoke `mcp`, and `command` resolves to an existing executable. Deliberately
+  NOT byte-canonical — a valid but differently-resolved legis binary (uv-tool vs
+  venv path) must not read as drift; only a missing entry, malformed args, or a
+  dead `command` path is stale. `--repair` writes the canonical entry via
+  `register_mcp_json` (resolved binary at repair time).
 
 ### Config & stores
 - `config.weft_toml` — **report-only.** ABSENT → `ok` (defaults intentional);
