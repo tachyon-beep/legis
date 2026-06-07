@@ -358,10 +358,13 @@ def check_hmac_key(root: Path) -> DoctorCheck:  # noqa: ARG001
 def check_policy_cells(root: Path) -> DoctorCheck:
     """Report-only (N3 / C-10(c)): is the policy-cell registry discoverable?
 
-    Mirrors ``mcp._load_policy_cell_registry`` resolution. Never writes a file,
-    never auto-opens — when nothing resolves it reports the fail-closed
-    ``structured`` default is in effect and NAMES the enablement path. Cell
-    DEFINITIONS are non-secret; this check never touches a key (C-8)."""
+    Mirrors ``mcp._load_policy_cell_registry``'s precedence (LEGIS_POLICY_CELLS >
+    policy/cells.toml > LEGIS_DEV_DEFAULT_CELLS > fail-closed), but resolves the
+    root from the doctor target (``root``) where the server falls back to
+    ``os.getcwd()`` — these coincide when doctor runs from the server's launch
+    CWD. Never writes a file, never auto-opens — when nothing resolves it reports
+    the fail-closed ``structured`` default is in effect and NAMES the enablement
+    path. Cell DEFINITIONS are non-secret; this check never touches a key (C-8)."""
     cid = "runtime.policy_cells"
     configured = os.environ.get("LEGIS_POLICY_CELLS")
     if configured:
