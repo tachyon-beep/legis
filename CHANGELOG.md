@@ -8,6 +8,13 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 ## [1.0.0rc4] — 2026-06-06
 
 ### Added
+- **`legis doctor [--root] [--repair] [--format text|json]`** — operator health
+  view and safe repair for the install + config layer (instruction blocks, skills,
+  SessionStart hook, `.gitignore`, `.mcp.json` registration, store dir, audit
+  hash-chain integrity, key/sibling wiring). Report-only on `weft.toml` (C-9(b))
+  and on hash chains; key values are never rendered.
+- **`legis install --mcp`** — register the legis MCP server in `.mcp.json`
+  (also part of `legis install` with no flags).
 - **Self-install (`legis install`)** — legis now stands itself up like its
   siblings: it injects a lean, versioned agent-orientation block into CLAUDE.md /
   AGENTS.md, installs the `legis-workflow` skill pack (Claude + Codex), registers
