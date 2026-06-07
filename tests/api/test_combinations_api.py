@@ -587,6 +587,12 @@ def test_scan_results_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
     assert body["outcome"] == "SKIPPED_DIRTY_TREE"
     assert body["routed"] == []
     assert c.get("/overrides").json() == []
+    # N4: HTTP body carries the same structured, actionable fields as MCP
+    # (both single-sourced on WardlineDirtyTreeError.to_payload()).
+    assert body["reason"] == "SKIPPED_DIRTY_TREE"
+    assert body["posture"] == "ci_artifact_key_configured"
+    assert body["cause"] == "dirty_unsigned_artifact"
+    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in " ".join(body["remediation"])
 
 
 def test_scan_results_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):

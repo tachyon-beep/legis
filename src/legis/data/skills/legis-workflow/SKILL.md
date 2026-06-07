@@ -159,8 +159,8 @@ Branch on `error_code`, not message text.
 | `error_code` | Recoverable | `next_action` |
 |---|---|---|
 | `INVALID_ARGUMENT` | yes | Correct the tool arguments and retry. |
-| `INVALID_CELL_SPEC` | yes | Use server-owned routing or a valid cell configuration. |
-| `CELL_NOT_ENABLED` | yes | Ask the operator to enable the required governance cell. |
+| `INVALID_CELL_SPEC` | yes | scan_route routing is server-owned and unconfigured by default; the operator sets `LEGIS_WARDLINE_CELL` / `LEGIS_WARDLINE_CELL_BY_SEVERITY` out-of-band and relaunches (request-side routing needs the `LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING` opt-in). |
+| `CELL_NOT_ENABLED` | yes | Operator-enabled, out-of-band. Simple tier (chill/coached) is keyless — map the policy via `policy/cells.toml` or `LEGIS_POLICY_CELLS`; complex tier (structured/protected + binding ledger) additionally needs `LEGIS_HMAC_KEY`. |
 | `NO_SUCH_REQUEST` | yes | Poll a known sign-off sequence returned by `override_submit`. |
 | `NOT_FOUND` | yes | Refresh the target identifier and retry. |
 | `UNKNOWN_TOOL` | yes | Call `tools/list` and use one of the advertised tool names. |

@@ -373,13 +373,23 @@ def _recovery_for(code: str) -> dict[str, Any]:
     recoverable = code not in {"AUDIT_INTEGRITY_FAILURE", "INTERNAL_ERROR"}
     next_actions = {
         "INVALID_ARGUMENT": "Correct the tool arguments and retry.",
-        "INVALID_CELL_SPEC": "Use server-owned routing or a valid cell configuration.",
+        "INVALID_CELL_SPEC": (
+            "scan_route routing is server-owned and unconfigured by default. The "
+            "operator sets LEGIS_WARDLINE_CELL (e.g. =surface_only) or "
+            "LEGIS_WARDLINE_CELL_BY_SEVERITY out-of-band, then relaunches. "
+            "(Request-side routing requires the LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING "
+            "opt-in — discouraged.) The error message names which kind of cell "
+            "spec was rejected."
+        ),
         "CELL_NOT_ENABLED": (
-            "Enable the cell by wiring its backing store: set LEGIS_HMAC_KEY "
-            "(enables the binding ledger + protected/structured gates), and "
-            "configure the policy cells via LEGIS_POLICY_CELLS or policy/cells.toml "
-            "(LEGIS_DEV_DEFAULT_CELLS=1 for the dev posture). The error message "
-            "names which cell is unenabled."
+            "Two enablement tiers, by cell — both operator-enabled, out-of-band. "
+            "Simple tier (chill/coached) is reachable WITHOUT a key: the operator "
+            "maps the policy to a cell via policy/cells.toml or LEGIS_POLICY_CELLS "
+            "(LEGIS_DEV_DEFAULT_CELLS=1 selects the chill dev default), then "
+            "relaunches. Complex tier (structured/protected and the binding "
+            "ledger) additionally needs LEGIS_HMAC_KEY set by the operator "
+            "out-of-band, then a relaunch. The error message names which cell is "
+            "unenabled."
         ),
         "NO_SUCH_REQUEST": "Poll a known sign-off sequence returned by override_submit.",
         "NOT_FOUND": "Refresh the target identifier and retry.",
@@ -965,12 +975,11 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
         )
     except WardlineDirtyTreeError as exc:
         # Amber, not red (INVALID_ARGUMENT): a dirty dev tree is "environment
-        # not ready", not a broken/tampered scan. A typed outcome lets a harness
-        # tell "commit first" apart from a genuine legis/scan fault; nothing is
-        # governed.
-        return _tool_result(
-            {"outcome": exc.reason, "routed": [], "detail": str(exc)}
-        )
+        # not ready", not a broken/tampered scan. The typed, structured payload
+        # (single-sourced on the exception) lets a harness tell "commit first"
+        # apart from a genuine legis/scan fault and names what to do; nothing is
+        # governed (routed == []).
+        return _tool_result(exc.to_payload())
     return _tool_result({"outcome": ScanOutcome.ROUTED, "routed": routed})
 
 

@@ -355,6 +355,58 @@ def check_hmac_key(root: Path) -> DoctorCheck:  # noqa: ARG001
     )
 
 
+def check_policy_cells(root: Path) -> DoctorCheck:
+    """Report-only (N3 / C-10(c)): is the policy-cell registry discoverable?
+
+    Mirrors ``mcp._load_policy_cell_registry`` resolution. Never writes a file,
+    never auto-opens — when nothing resolves it reports the fail-closed
+    ``structured`` default is in effect and NAMES the enablement path. Cell
+    DEFINITIONS are non-secret; this check never touches a key (C-8)."""
+    cid = "runtime.policy_cells"
+    configured = os.environ.get("LEGIS_POLICY_CELLS")
+    if configured:
+        return DoctorCheck(cid, "ok", message=f"LEGIS_POLICY_CELLS={configured}")
+    source_root = Path(os.environ.get("LEGIS_SOURCE_ROOT") or root)
+    default_path = source_root / "policy" / "cells.toml"
+    if default_path.exists():
+        return DoctorCheck(cid, "ok", message=f"{default_path}")
+    if os.environ.get("LEGIS_DEV_DEFAULT_CELLS") == "1":
+        return DoctorCheck(cid, "ok", message="chill dev default (LEGIS_DEV_DEFAULT_CELLS=1)")
+    return DoctorCheck(
+        cid,
+        "warn",
+        message=(
+            "no policy cells configured — fail-closed (unlisted policies escalate "
+            "to structured). The operator maps policies via policy/cells.toml or "
+            "LEGIS_POLICY_CELLS (out-of-band, takes effect on relaunch; chill/coached "
+            "are reachable keyless); LEGIS_DEV_DEFAULT_CELLS=1 for the chill dev posture"
+        ),
+    )
+
+
+def check_wardline_routing(root: Path) -> DoctorCheck:  # noqa: ARG001
+    """Report-only (N3 / C-10(c)): is scan_route's server-owned cell wired?
+
+    Presence-only; never sets env or renders a value. When unset it reports that
+    scan_route is server-owned and inert until configured, and names the key."""
+    cid = "runtime.wardline_routing"
+    cell = os.environ.get("LEGIS_WARDLINE_CELL")
+    by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
+    if cell:
+        return DoctorCheck(cid, "ok", message=f"LEGIS_WARDLINE_CELL={cell}")
+    if by_severity:
+        return DoctorCheck(cid, "ok", message="LEGIS_WARDLINE_CELL_BY_SEVERITY set")
+    return DoctorCheck(
+        cid,
+        "warn",
+        message=(
+            "scan_route routing is server-owned and unconfigured — inert until set. "
+            "Set LEGIS_WARDLINE_CELL (e.g. =surface_only) or "
+            "LEGIS_WARDLINE_CELL_BY_SEVERITY"
+        ),
+    )
+
+
 def check_sibling_url(cid: str, env: str) -> DoctorCheck:
     url = os.environ.get(env)
     if not url:
@@ -383,6 +435,8 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_audit_chain("store.governance_chain", _store_url(root, "legis-governance.db", "LEGIS_GOVERNANCE_DB")))
     checks.append(check_audit_chain("store.binding_chain", _store_url(root, "legis-binding.db", "LEGIS_BINDING_DB")))
     checks.append(check_hmac_key(root))
+    checks.append(check_policy_cells(root))
+    checks.append(check_wardline_routing(root))
     checks.append(check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL"))
     checks.append(check_sibling_url("runtime.filigree_url", "FILIGREE_API_URL"))
     return checks

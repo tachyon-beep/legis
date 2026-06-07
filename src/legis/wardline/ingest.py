@@ -93,10 +93,57 @@ class WardlineDirtyTreeError(Exception):
     catch it and surface a typed ``SKIPPED_DIRTY_TREE`` outcome.
     """
 
-    # A ScanOutcome member (via the alias). Boundaries put it straight into the
-    # response as ``{"outcome": exc.reason}`` (app.py / mcp.py), so it is relied
-    # on to serialize as the bare ``"SKIPPED_DIRTY_TREE"`` string on the wire.
+    # A ScanOutcome member (via the alias). Boundaries serialize the whole
+    # ``to_payload()`` shape; ``reason`` resolves both as a class attribute
+    # (legacy ``WardlineDirtyTreeError.reason == "SKIPPED_DIRTY_TREE"`` checks)
+    # and on the instance, as the bare ``"SKIPPED_DIRTY_TREE"`` string.
     reason = SKIPPED_DIRTY_TREE
+
+    # Stable wire vocabulary (enum-like once published; do not casually rename).
+    DEFAULT_POSTURE = "ci_artifact_key_configured"
+    DEFAULT_CAUSE = "dirty_unsigned_artifact"
+    DEFAULT_REMEDIATION = (
+        "Commit your working tree for a signed Wardline artifact "
+        "(signing is clean-tree-only).",
+        "Or set LEGIS_WARDLINE_ALLOW_DIRTY=1 (operator, out-of-band) to govern "
+        "the unsigned dirty artifact in dev — recorded as 'dirty', never 'verified'.",
+    )
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        posture: str = DEFAULT_POSTURE,
+        cause: str = DEFAULT_CAUSE,
+        remediation: tuple[str, ...] | None = None,
+    ) -> None:
+        super().__init__(message)
+        # Shadow the class attribute on the instance so ``exc.reason`` holds even
+        # if a subclass forgets it; the value is identical.
+        self.reason = SKIPPED_DIRTY_TREE
+        self.posture = posture
+        self.cause = cause
+        self.remediation: list[str] = list(
+            remediation if remediation is not None else self.DEFAULT_REMEDIATION
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        """The single source of the SKIPPED_DIRTY_TREE response both transports
+        serialize (MCP structuredContent + HTTP body), so they cannot drift.
+
+        Honest + actionable (C-10(d)): names the posture, the cause, and what to
+        do — while governing nothing (``routed == []``). It is RESPONSE CONTENT
+        only; it adds no call argument and grants no authority.
+        """
+        return {
+            "outcome": self.reason,
+            "routed": [],
+            "reason": self.reason,
+            "posture": self.posture,
+            "cause": self.cause,
+            "remediation": list(self.remediation),
+            "detail": str(self),
+        }
 
 
 def wardline_artifact_fields(scan: Mapping[str, Any]) -> dict[str, Any]:

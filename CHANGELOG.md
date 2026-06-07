@@ -5,6 +5,45 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
+## [Unreleased]
+
+Dogfood-#2 governance honesty (convention C-10) — branch-local; merge/release
+gated on the filigree-first propagation. Capability confinement (proposed C-8) is
+preserved: operator signing keys stay out of agent reach, no key is auto-provisioned
+or relocated, and no MCP tool enables a cell or self-grants authority (pinned by
+`test_c8_no_agent_reachable_enablement_or_signing_surface`).
+
+### Changed
+- **Honest, actionable unconfigured-governance errors (N3, weft-df8d2ef454 — C-10(c)).**
+  legis no longer "ships dark and quiet": the two inert axes now name their concrete
+  enablement path. `INVALID_CELL_SPEC` (scan_route, server-owned routing unset) names
+  `LEGIS_WARDLINE_CELL` / `LEGIS_WARDLINE_CELL_BY_SEVERITY`; `CELL_NOT_ENABLED` is split
+  into the keyless simple tier (map the policy via `policy/cells.toml` /
+  `LEGIS_POLICY_CELLS`, `LEGIS_DEV_DEFAULT_CELLS=1` for the chill dev default) and the
+  complex tier (`LEGIS_HMAC_KEY`, operator-held, out-of-band + relaunch). Subsumes Le1.
+  Fail-closed is preserved — the errors become honest, nothing auto-opens.
+- **Honest `SKIPPED_DIRTY_TREE` skip payload (N4, weft-a7a92a40dd — C-10(d)).** The
+  dirty-tree skip is no longer a prose-only blob: `WardlineDirtyTreeError.to_payload()`
+  is the single source both transports (MCP `structuredContent` + HTTP body) serialize,
+  carrying machine-switchable `reason` / `posture` / `cause` / `remediation` (commit for
+  a signed artifact, or the `LEGIS_WARDLINE_ALLOW_DIRTY=1` operator opt-in) while still
+  governing nothing. The dirty-snapshot opt-in stays an env-only operator switch — no
+  `scan_route` call argument was added. (Compounds with sibling finding C1: loomweave's
+  tracked runtime DB perpetually dirties the tree; that fix is loomweave-side.)
+
+### Added
+- **Two report-only `legis doctor` checks (N3).** `runtime.policy_cells` and
+  `runtime.wardline_routing` report whether the governance surface is wired and, when
+  not, name the exact enablement keys (warn, never auto-fixed; presence-only — they
+  write nothing and never render a key value).
+
+### Docs
+- **Charter: self-asserted write actor (C3, weft-f506e5f845).** `legis-charter.md`'s
+  known-gaps note now also covers legis's *own* audit records — `agent_id` / `operator_id`
+  are self-asserted (launch-bound + HMAC-tamper-evident, but not authenticated); the
+  narrative `verified_author: null` maps to these stored fields. The governed subject's
+  SEI is still resolved; only the actor is unauthenticated.
+
 ## [1.0.0rc4] — 2026-06-08
 
 ### Added

@@ -59,14 +59,27 @@ def test_run_doctor_healthy_after_repair(tmp_path, capsys):
     assert "legis doctor: ok" in capsys.readouterr().out
 
 
-def test_run_doctor_json_format(tmp_path, capsys):
+def test_run_doctor_json_format(tmp_path, capsys, monkeypatch):
+    # Clear the governance-enablement env so the two report-only N3 checks
+    # deterministically warn (an unwired fresh project). They are NOT repairable
+    # (operator must set env / author cells.toml out-of-band) and are the honest
+    # C-10(c) signal — so a repaired-but-ungoverned project is ok-with-warns,
+    # not error, and its only next_actions are those two enablement hints.
+    for var in (
+        "LEGIS_POLICY_CELLS", "LEGIS_DEV_DEFAULT_CELLS", "LEGIS_SOURCE_ROOT",
+        "LEGIS_WARDLINE_CELL", "LEGIS_WARDLINE_CELL_BY_SEVERITY",
+    ):
+        monkeypatch.delenv(var, raising=False)
     run_doctor(tmp_path, repair=True, fmt="json")
     capsys.readouterr()  # discard repair output
     rc = run_doctor(tmp_path, repair=False, fmt="json")
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["next_actions"] == []
+    assert {a.split(":", 1)[0] for a in payload["next_actions"]} == {
+        "runtime.policy_cells",
+        "runtime.wardline_routing",
+    }
 
 
 def test_cli_doctor_runs_and_exits_zero(tmp_path, capsys, monkeypatch):
@@ -382,6 +395,75 @@ def test_sibling_url_invalid_is_error(tmp_path, monkeypatch):
     monkeypatch.setenv("LOOMWEAVE_API_URL", "localhost:9620")  # no scheme
     c = check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL")
     assert c.status == "error"
+
+
+# --- N3 (weft-df8d2ef454): report-only enablement checks (C-10(c)) ----------
+from legis.doctor import check_policy_cells, check_wardline_routing
+
+
+def test_policy_cells_warn_when_unconfigured_names_the_path(tmp_path, monkeypatch):
+    # Fresh launch, no cells.toml, dev opt-in off -> warn, fail-closed in effect,
+    # message names the concrete enablement keys.
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    monkeypatch.delenv("LEGIS_DEV_DEFAULT_CELLS", raising=False)
+    monkeypatch.delenv("LEGIS_SOURCE_ROOT", raising=False)
+    c = check_policy_cells(tmp_path)
+    assert c.status == "warn"
+    msg = c.message or ""
+    assert "LEGIS_POLICY_CELLS" in msg or "policy/cells.toml" in msg
+    assert "LEGIS_DEV_DEFAULT_CELLS" in msg
+
+
+def test_policy_cells_ok_when_cells_toml_resolves(tmp_path, monkeypatch):
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    monkeypatch.delenv("LEGIS_DEV_DEFAULT_CELLS", raising=False)
+    (tmp_path / "policy").mkdir()
+    (tmp_path / "policy" / "cells.toml").write_text('default_cell = "structured"\n')
+    c = check_policy_cells(tmp_path)
+    assert c.status == "ok"
+
+
+def test_policy_cells_ok_via_env_path(tmp_path, monkeypatch):
+    cells = tmp_path / "elsewhere.toml"
+    cells.write_text('default_cell = "structured"\n')
+    monkeypatch.setenv("LEGIS_POLICY_CELLS", str(cells))
+    c = check_policy_cells(tmp_path)
+    assert c.status == "ok"
+
+
+def test_wardline_routing_warn_when_unconfigured_names_the_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("LEGIS_WARDLINE_CELL", raising=False)
+    monkeypatch.delenv("LEGIS_WARDLINE_CELL_BY_SEVERITY", raising=False)
+    c = check_wardline_routing(tmp_path)
+    assert c.status == "warn"
+    assert "LEGIS_WARDLINE_CELL" in (c.message or "")
+
+
+def test_wardline_routing_ok_when_cell_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    monkeypatch.delenv("LEGIS_WARDLINE_CELL_BY_SEVERITY", raising=False)
+    c = check_wardline_routing(tmp_path)
+    assert c.status == "ok"
+
+
+def test_n3_checks_never_write_files_or_render_keys(tmp_path, monkeypatch):
+    # C-8 / C-9(b): report-only. They must not create any file (no scaffolding)
+    # and must never echo a secret value.
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    monkeypatch.delenv("LEGIS_DEV_DEFAULT_CELLS", raising=False)
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "super-secret-value")
+    before = set(tmp_path.rglob("*"))
+    msgs = [
+        check_policy_cells(tmp_path).message or "",
+        check_wardline_routing(tmp_path).message or "",
+    ]
+    assert set(tmp_path.rglob("*")) == before  # wrote nothing
+    # never render a secret value (the "render_keys" half of the contract)
+    assert all("super-secret-value" not in m for m in msgs)
+    # neither check signature takes a `repair` parameter (cannot be coerced to write)
+    import inspect
+    assert "repair" not in inspect.signature(check_policy_cells).parameters
+    assert "repair" not in inspect.signature(check_wardline_routing).parameters
 
 
 # ---------------------------------------------------------------------------

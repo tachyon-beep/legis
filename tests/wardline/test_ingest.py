@@ -215,6 +215,30 @@ def test_ci_dirty_without_devmode_is_typed_amber_skip_not_red():
     assert exc.value.reason == SKIPPED_DIRTY_TREE
 
 
+def test_dirty_skip_payload_is_structured_and_actionable():
+    # N4 (weft-a7a92a40dd) / C-10(d): the skip must not be a prose-only blob.
+    # to_payload() is the single source both transports serialize, so the MCP
+    # structuredContent and the HTTP body cannot drift.
+    with pytest.raises(WardlineDirtyTreeError) as exc:
+        verify_wardline_artifact(_artifact(dirty=True), _KEY, allow_dirty=False)
+    payload = exc.value.to_payload()
+    assert payload["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert payload["reason"] == "SKIPPED_DIRTY_TREE"
+    assert payload["routed"] == []
+    assert payload["posture"] == "ci_artifact_key_configured"
+    assert payload["cause"] == "dirty_unsigned_artifact"
+    remediation = payload["remediation"]
+    assert isinstance(remediation, list) and remediation
+    joined = " ".join(remediation)
+    # Names BOTH the clean-tree path and the operator opt-in (out-of-band).
+    assert "commit" in joined.lower()
+    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in joined
+    # The instance still resolves reason as the bare-string ScanOutcome, and the
+    # class attribute access used by existing tests/boundaries keeps working.
+    assert exc.value.reason == SKIPPED_DIRTY_TREE
+    assert WardlineDirtyTreeError.reason == SKIPPED_DIRTY_TREE
+
+
 def test_ci_dirty_with_devmode_governs_unsigned_as_dirty():
     # P0: key configured, dirty + unsigned, dev-mode ON -> govern unsigned,
     # recorded honestly as dirty (never "verified").

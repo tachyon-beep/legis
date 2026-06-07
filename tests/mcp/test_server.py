@@ -918,6 +918,9 @@ def test_scan_route_rejects_request_routing_when_server_owned(tmp_path, monkeypa
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
     assert "server-owned" in result["structuredContent"]["message"]
+    # N3 (weft-df8d2ef454) / C-10(c): the recovery hint names the concrete
+    # enablement key, not a generic "use a valid cell configuration".
+    assert "LEGIS_WARDLINE_CELL" in result["structuredContent"]["next_action"]
     assert store.read_all() == []
 
 
@@ -944,6 +947,9 @@ def test_scan_route_defaults_to_server_owned_routing(tmp_path, monkeypatch):
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
     assert "server-owned" in result["structuredContent"]["message"]
+    # N3 (weft-df8d2ef454) / C-10(c): the recovery hint names the concrete
+    # enablement key, not a generic "use a valid cell configuration".
+    assert "LEGIS_WARDLINE_CELL" in result["structuredContent"]["next_action"]
     assert store.read_all() == []
 
 
@@ -1067,6 +1073,12 @@ def test_scan_route_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
     assert structured["outcome"] == "SKIPPED_DIRTY_TREE"
     assert structured["routed"] == []
     assert store.read_all() == []
+    # N4 (weft-a7a92a40dd) / C-10(d): the skip is honest + actionable, not a
+    # prose-only blob — a harness can branch on it.
+    assert structured["reason"] == "SKIPPED_DIRTY_TREE"
+    assert structured["posture"] == "ci_artifact_key_configured"
+    assert structured["cause"] == "dirty_unsigned_artifact"
+    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in " ".join(structured["remediation"])
 
 
 def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
@@ -1545,6 +1557,29 @@ def test_tool_registries_are_in_sync():
     assert defined == set(_TOOL_HANDLERS) == set(_AGENT_TOOLS)
 
 
+def test_c8_no_agent_reachable_enablement_or_signing_surface():
+    # C-8 capability confinement (red-team guard for N3/N4): the MCP surface must
+    # never expose a tool that enables a cell, provisions/sets a key, or otherwise
+    # lets an agent self-grant signing/governance authority. Enablement is an
+    # operator-only, out-of-band action (env + relaunch / CLI doctor). This pins
+    # that no such tool was introduced.
+    from legis.mcp import _TOOL_HANDLERS, tool_definitions
+
+    forbidden = ("enable", "provision", "grant", "hmac", "sign_key", "set_key")
+    for name in _TOOL_HANDLERS:
+        low = name.lower()
+        assert not any(tok in low for tok in forbidden), f"C-8: suspicious tool {name!r}"
+
+    # scan_route must not have grown a dirty-govern / key / cell-override knob:
+    # the dirty-snapshot opt-in (LEGIS_WARDLINE_ALLOW_DIRTY) and the artifact key
+    # stay env-only operator switches, never call arguments (N4 guard).
+    scan_route = next(t for t in tool_definitions() if t["name"] == "scan_route")
+    props = set(scan_route["inputSchema"]["properties"])
+    assert props == {"scan", "cell", "severity_map", "fail_on"}
+    for forbidden_arg in ("allow_dirty", "artifact_key", "hmac_key", "agent_id"):
+        assert forbidden_arg not in props
+
+
 def test_git_rename_feed_get_is_listed():
     from legis.mcp import tool_definitions
 
@@ -1582,11 +1617,13 @@ def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):
     # NotEnabledError is mapped to an error envelope, not raised.
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
-    # Le1 (weft-f506e5f845): the recovery hint must name the concrete
-    # enablement path, not a vague "ask the operator". Every governance cell
-    # is wired behind LEGIS_HMAC_KEY in build_runtime.
+    # Le1 (weft-f506e5f845) + N3 (weft-df8d2ef454): the recovery hint names the
+    # concrete enablement path for BOTH axes — the simple tier (policy-cell
+    # definitions, keyless) and the complex tier (the operator-held key).
     next_action = result["structuredContent"]["next_action"]
-    assert "LEGIS_HMAC_KEY" in next_action
+    assert "LEGIS_HMAC_KEY" in next_action  # complex tier (Le1, preserved)
+    # simple tier: chill/coached are reachable keyless via the policy-cell config
+    assert "LEGIS_POLICY_CELLS" in next_action or "policy/cells.toml" in next_action
 
 
 def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_path):
