@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from legis.provenance import Provenance
+
 
 class CheckOutcome(str, Enum):
     PASS = "pass"
@@ -37,4 +39,4 @@ class CheckRun:
     # "unauthenticated" so a consumer is never misled into treating a
     # writer-asserted "pass" as authoritative. An authenticated path (a signed
     # forge webhook) would set a stronger value; none exists today.
-    provenance: str = "unauthenticated"
+    provenance: str = Provenance.UNAUTHENTICATED

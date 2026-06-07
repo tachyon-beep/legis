@@ -23,6 +23,7 @@ from sqlalchemy import (
 from sqlalchemy.pool import NullPool
 
 from legis.checks.models import CheckOutcome, CheckRun
+from legis.provenance import Provenance
 
 
 class CheckSurface:
@@ -111,7 +112,7 @@ class CheckSurface:
             finished_at=r.finished_at,
             recorded_by=r.recorded_by,
             # Rows written before this column existed are still writer-asserted.
-            provenance=r.provenance or "unauthenticated",
+            provenance=r.provenance or Provenance.UNAUTHENTICATED,
         )
 
     def for_commit(self, sha: str) -> list[CheckRun]:

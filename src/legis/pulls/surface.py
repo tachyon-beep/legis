@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import Column, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select
 from sqlalchemy.pool import NullPool
 
+from legis.provenance import Provenance
 from legis.pulls.models import PullRequest, PullRequestState
 
 
@@ -72,5 +73,5 @@ class PullSurface:
             state=PullRequestState(row.state),
             url=row.url,
             recorded_by=row.recorded_by,
-            provenance=row.provenance or "unauthenticated",
+            provenance=row.provenance or Provenance.UNAUTHENTICATED,
         )
