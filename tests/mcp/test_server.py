@@ -1582,6 +1582,11 @@ def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):
     # NotEnabledError is mapped to an error envelope, not raised.
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+    # Le1 (weft-f506e5f845): the recovery hint must name the concrete
+    # enablement path, not a vague "ask the operator". Every governance cell
+    # is wired behind LEGIS_HMAC_KEY in build_runtime.
+    next_action = result["structuredContent"]["next_action"]
+    assert "LEGIS_HMAC_KEY" in next_action
 
 
 def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_path):

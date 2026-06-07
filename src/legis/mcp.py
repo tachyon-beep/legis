@@ -374,7 +374,13 @@ def _recovery_for(code: str) -> dict[str, Any]:
     next_actions = {
         "INVALID_ARGUMENT": "Correct the tool arguments and retry.",
         "INVALID_CELL_SPEC": "Use server-owned routing or a valid cell configuration.",
-        "CELL_NOT_ENABLED": "Ask the operator to enable the required governance cell.",
+        "CELL_NOT_ENABLED": (
+            "Enable the cell by wiring its backing store: set LEGIS_HMAC_KEY "
+            "(enables the binding ledger + protected/structured gates), and "
+            "configure the policy cells via LEGIS_POLICY_CELLS or policy/cells.toml "
+            "(LEGIS_DEV_DEFAULT_CELLS=1 for the dev posture). The error message "
+            "names which cell is unenabled."
+        ),
         "NO_SUCH_REQUEST": "Poll a known sign-off sequence returned by override_submit.",
         "NOT_FOUND": "Refresh the target identifier and retry.",
         "UNKNOWN_TOOL": "Call tools/list and use one of the advertised tool names.",

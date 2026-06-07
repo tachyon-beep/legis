@@ -5,9 +5,12 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
-## [1.0.0rc4] — 2026-06-06
+## [1.0.0rc4] — 2026-06-08
 
 ### Added
+- **`legis --version`** — top-level version flag (LG-1, weft-9da517a67e); reports
+  the installed package version and exits. Closes the dogfood gap where the only
+  way to identify the running build was an indirect probe.
 - **`legis doctor [--root] [--repair] [--format text|json]`** — operator health
   view and safe repair for the install + config layer (instruction blocks, skills,
   SessionStart hook, `.gitignore`, `.mcp.json` registration, store dir, audit
@@ -66,6 +69,16 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 - **Table-driven MCP dispatch (Q-L8)** — `call_tool` now routes through a tool
   table instead of an if/elif ladder, and the stdio server bounds each stdin
   line so a malformed client cannot stream unbounded input. Behavior-preserving.
+- **`CELL_NOT_ENABLED` recovery hint names the enablement path (Le1,
+  weft-f506e5f845)** — the MCP error's `next_action` now tells the agent *how* to
+  enable a governance cell (set `LEGIS_HMAC_KEY`; configure policy cells via
+  `LEGIS_POLICY_CELLS` / `policy/cells.toml` / `LEGIS_DEV_DEFAULT_CELLS=1`) instead
+  of a generic "ask the operator". The per-cell message still names which cell is
+  unenabled.
+- **Charter documents the self-asserted-write-actor gap (C3, weft-f506e5f845)** —
+  `docs/design/legis-charter.md` now records `verified_author: null` (federation
+  write attribution is self-asserted, not cryptographically verified) as a known
+  governance gap, acceptable for trust-local use and deferred for multi-principal.
 - **Release CI gates** — the coverage floor is raised to 88% with a `ruff` lint
   gate added (Q-L7), live Loomweave conformance is now non-optional for releases
   (no silent skip when the oracle is down), and the Filigree client's transport /

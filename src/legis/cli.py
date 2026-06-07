@@ -6,6 +6,7 @@ from pathlib import Path
 
 import uvicorn
 
+from legis import __version__
 from legis.clock import SystemClock
 from legis.governance.sei_backfill import run_pre_sei_backfill
 from legis.identity.loomweave_client import HttpLoomweaveIdentity, loomweave_hmac_key_from_env
@@ -34,6 +35,12 @@ def _add_judge_flags(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="legis", description="Legis CLI")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"legis {__version__}",
+        help="Print the legis version and exit",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     serve = subparsers.add_parser("serve", help="Run the Legis API server")
