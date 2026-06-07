@@ -14,6 +14,18 @@ or relocated, and no MCP tool enables a cell or self-grants authority (pinned by
 `test_c8_no_agent_reachable_enablement_or_signing_surface`).
 
 ### Changed
+- **Adopt Wardline's `suppression_state` key (W3, weft-ef79348eb2).** Wardline
+  renamed the per-finding output key `suppressed` → `suppression_state` across all
+  surfaces, including the **signed** legis scan artifact — which changed the
+  canonical signed bytes and broke the Wardline→legis hop (`legis_e2e` red). legis
+  ingest (`WardlineFinding.from_wire` + `active_defects`) now reads the new key; the
+  values (active/waived/suppressed/baselined/judged) are unchanged. Clean break: a
+  finding carrying only the legacy `suppressed` key reads as `active` and **over**-gates
+  (fail-safe — never silently drops a defect). No signing/canonical change was needed
+  (legis's signer already reproduces Wardline's rekeyed golden byte-for-byte). Added the
+  **legis-side cross-impl golden mirror** legis was missing — `sign(_GOLDEN_FIELDS,
+  _GOLDEN_KEY) == hmac-sha256:v2:2b2cf09…` over `suppression_state` — so the signed hop
+  is self-verifying on both ends, not only in Wardline's opt-in oracle.
 - **Honest, actionable unconfigured-governance errors (N3, weft-df8d2ef454 — C-10(c)).**
   legis no longer "ships dark and quiet": the two inert axes now name their concrete
   enablement path. `INVALID_CELL_SPEC` (scan_route, server-owned routing unset) names

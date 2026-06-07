@@ -82,7 +82,7 @@ def _active_scan():
                 "fingerprint": "fp1",
                 "qualname": "m.f",
                 "properties": {"actual_return": "UNKNOWN_RAW"},
-                "suppressed": "active",
+                "suppression_state": "active",
             }
         ]
     }
@@ -1186,7 +1186,7 @@ def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch)
                 "fingerprint": "fp-error",
                 "qualname": "m.error",
                 "properties": {},
-                "suppressed": "active",
+                "suppression_state": "active",
             },
             {
                 "rule_id": "PY-WL-W",
@@ -1196,7 +1196,7 @@ def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch)
                 "fingerprint": "fp-warn",
                 "qualname": "m.warn",
                 "properties": {},
-                "suppressed": "active",
+                "suppression_state": "active",
             },
         ]
     }
