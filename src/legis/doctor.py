@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from legis import install as _install
+
 
 @dataclass(frozen=True, slots=True)
 class DoctorCheck:
@@ -85,10 +87,127 @@ def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
     )
 
 
+# ---------------------------------------------------------------------------
+# Install-wiring checks (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def _block_fresh(root: Path, filename: str) -> bool:
+    """True iff <root>/<filename> has the legis block at the current token."""
+    path = root / filename
+    if not path.exists():
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if _install.INSTRUCTIONS_MARKER not in content:
+        return False
+    return _install._extract_marker_token(content) == _install._marker_token()
+
+
+def check_instruction_block(root: Path, filename: str, *, repair: bool) -> DoctorCheck:
+    """Check that <root>/<filename> has the legis instruction block at the current token."""
+    cid = "install.claude_md" if filename == "CLAUDE.md" else "install.agents_md"
+    if _block_fresh(root, filename):
+        return DoctorCheck(cid, "ok")
+    if repair:
+        ok, msg = _install.inject_instructions(root / filename)
+        if ok and _block_fresh(root, filename):
+            return DoctorCheck(cid, "ok", fixed=True)
+        return DoctorCheck(cid, "error", message=msg)
+    missing = "missing" if not (root / filename).exists() else "block missing or drifted"
+    return DoctorCheck(cid, "error", message=f"{filename} {missing} (run: legis install)")
+
+
+def _skill_fresh(root: Path, base: str) -> bool:
+    """True iff the skill pack under <root>/<base>/skills/ matches the source fingerprint."""
+    source = _install._get_skills_source_dir() / _install.SKILL_NAME
+    target = root / base / "skills" / _install.SKILL_NAME
+    if not source.is_dir() or not target.is_dir():
+        return False
+    return _install._skill_tree_fingerprint(target) == _install._skill_tree_fingerprint(source)
+
+
+def check_skill_pack(root: Path, base: str, *, repair: bool) -> DoctorCheck:
+    """Check that the legis skill pack under <root>/<base>/skills/ is present and fresh."""
+    cid = "install.claude_skill" if base == ".claude" else "install.agents_skill"
+    installer = _install.install_skills if base == ".claude" else _install.install_codex_skills
+    if _skill_fresh(root, base):
+        return DoctorCheck(cid, "ok")
+    if repair:
+        ok, msg = installer(root)
+        if ok and _skill_fresh(root, base):
+            return DoctorCheck(cid, "ok", fixed=True)
+        return DoctorCheck(cid, "error", message=msg)
+    return DoctorCheck(
+        cid,
+        "error",
+        message=f"{base}/skills/{_install.SKILL_NAME} missing or drifted (run: legis install)",
+    )
+
+
+def _hook_present(root: Path) -> bool:
+    """True iff the SessionStart hook is registered in .claude/settings.json."""
+    settings_path = root / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return False
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return _install._has_unscoped_session_start_hook(settings, _install.SESSION_CONTEXT_COMMAND)
+
+
+def check_hook(root: Path, *, repair: bool) -> DoctorCheck:
+    """Check that the legis SessionStart hook is registered."""
+    cid = "install.hook"
+    if _hook_present(root):
+        return DoctorCheck(cid, "ok")
+    if repair:
+        ok, msg = _install.install_claude_code_hooks(root)
+        if ok and _hook_present(root):
+            return DoctorCheck(cid, "ok", fixed=True)
+        return DoctorCheck(cid, "error", message=msg)
+    return DoctorCheck(cid, "error", message="SessionStart hook not registered (run: legis install)")
+
+
+def _gitignore_present(root: Path) -> bool:
+    """True iff all legis ignore rules are present in .gitignore."""
+    path = root / ".gitignore"
+    if not path.exists():
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    present = {ln.strip() for ln in content.splitlines() if ln.strip() and not ln.lstrip().startswith("#")}
+    return all(rule in present for rule in _install._LEGIS_IGNORE_RULES)
+
+
+def check_gitignore(root: Path, *, repair: bool) -> DoctorCheck:
+    """Check that legis .gitignore rules are present."""
+    cid = "install.gitignore"
+    if _gitignore_present(root):
+        return DoctorCheck(cid, "ok")
+    if repair:
+        ok, msg = _install.ensure_gitignore(root)
+        if ok and _gitignore_present(root):
+            return DoctorCheck(cid, "ok", fixed=True)
+        return DoctorCheck(cid, "error", message=msg)
+    return DoctorCheck(cid, "error", message=".weft/legis/ not in .gitignore (run: legis install)")
+
+
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     """Run every check against *root*. Repairs run inside individual checks
     when *repair* is True; each returned check reflects post-repair state."""
     checks: list[DoctorCheck] = []
+    checks.append(check_instruction_block(root, "CLAUDE.md", repair=repair))
+    checks.append(check_instruction_block(root, "AGENTS.md", repair=repair))
+    checks.append(check_skill_pack(root, ".claude", repair=repair))
+    checks.append(check_skill_pack(root, ".agents", repair=repair))
+    checks.append(check_hook(root, repair=repair))
+    checks.append(check_gitignore(root, repair=repair))
     checks.append(check_mcp_json(root, repair=repair))
     return checks
 
