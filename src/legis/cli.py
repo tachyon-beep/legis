@@ -153,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--codex-skills", action="store_true", help="Install the Codex skill pack only")
     install.add_argument("--hooks", action="store_true", help="Register the Claude Code SessionStart hook only")
     install.add_argument("--gitignore", action="store_true", help="Add legis config rules to .gitignore only")
+    install.add_argument("--mcp", action="store_true", help="Register the legis MCP server in .mcp.json only")
+    install.add_argument(
+        "--agent-id", default="claude-code",
+        help="Agent id stamped in the .mcp.json legis entry (default: claude-code)",
+    )
 
     subparsers.add_parser(
         "session-context",
@@ -261,11 +266,12 @@ def _run_install(args) -> int:
         install_claude_code_hooks,
         install_codex_skills,
         install_skills,
+        register_mcp_json,
     )
 
     project_root = Path.cwd()
     install_all = not any(
-        [args.claude_md, args.agents_md, args.skills, args.codex_skills, args.hooks, args.gitignore]
+        [args.claude_md, args.agents_md, args.skills, args.codex_skills, args.hooks, args.gitignore, args.mcp]
     )
 
     steps: list[tuple[bool, str, object]] = [
@@ -275,6 +281,7 @@ def _run_install(args) -> int:
         (install_all or args.codex_skills, "Codex skill", lambda: install_codex_skills(project_root)),
         (install_all or args.hooks, "Claude Code hook", lambda: install_claude_code_hooks(project_root)),
         (install_all or args.gitignore, ".gitignore", lambda: ensure_gitignore(project_root)),
+        (install_all or args.mcp, ".mcp.json", lambda: register_mcp_json(project_root, args.agent_id)),
     ]
 
     failures = 0

@@ -579,6 +579,45 @@ def test_hook_cmd_matches(command, expected):
 
 
 # ---------------------------------------------------------------------------
+# register_mcp_json
+# ---------------------------------------------------------------------------
+
+
+def test_register_mcp_json_creates_file_with_legis_entry(tmp_path):
+    from legis.install import register_mcp_json, _legis_mcp_entry
+
+    ok, msg = register_mcp_json(tmp_path)
+    assert ok, msg
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    entry = data["mcpServers"]["legis"]
+    assert entry["type"] == "stdio"
+    assert entry["args"][0] == "mcp"
+    assert "--agent-id" in entry["args"]
+
+
+def test_register_mcp_json_preserves_sibling_entries(tmp_path):
+    from legis.install import register_mcp_json
+
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"filigree": {"command": "x", "type": "stdio"}}})
+    )
+    ok, _ = register_mcp_json(tmp_path)
+    assert ok
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "filigree" in data["mcpServers"]
+    assert "legis" in data["mcpServers"]
+
+
+def test_register_mcp_json_idempotent(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path)
+    first = (tmp_path / ".mcp.json").read_text()
+    register_mcp_json(tmp_path)
+    assert (tmp_path / ".mcp.json").read_text() == first
+
+
+# ---------------------------------------------------------------------------
 # .gitignore
 # ---------------------------------------------------------------------------
 

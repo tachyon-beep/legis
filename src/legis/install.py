@@ -683,3 +683,67 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
 
     _atomic_write_text(gitignore, _LEGIS_IGNORE_BLOCK.lstrip("\n"))
     return True, "Created .gitignore with legis config rules"
+
+
+# ---------------------------------------------------------------------------
+# .mcp.json (agent MCP server registration)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_AGENT_ID = "claude-code"
+
+
+def _legis_mcp_entry(agent_id: str = _DEFAULT_AGENT_ID) -> dict[str, Any]:
+    """The canonical legis stdio server entry for .mcp.json."""
+    cmd_parts = _find_legis_command()
+    command = cmd_parts[0] if len(cmd_parts) == 1 else shlex.join(cmd_parts)
+    return {
+        "args": ["mcp", "--agent-id", agent_id],
+        "command": command,
+        "env": {},
+        "type": "stdio",
+    }
+
+
+def register_mcp_json(
+    project_root: Path, agent_id: str = _DEFAULT_AGENT_ID
+) -> tuple[bool, str]:
+    """Register (or refresh) the legis server in <root>/.mcp.json.
+
+    Creates the file if absent; merges into mcpServers without disturbing
+    sibling entries. Preserves an existing legis entry's agent-id if it already
+    carries one (operator choice), refreshing only the command/args shape.
+    """
+    try:
+        path = project_path(project_root, ".mcp.json")
+    except UnsafeInstallPathError as exc:
+        return False, str(exc)
+
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                data = parsed
+        except (json.JSONDecodeError, OSError):
+            return False, ".mcp.json present but unreadable; fix or remove it by hand"
+
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+
+    existing = servers.get("legis")
+    keep_agent = agent_id
+    if isinstance(existing, dict):
+        args = existing.get("args", [])
+        if isinstance(args, list) and "--agent-id" in args:
+            i = args.index("--agent-id")
+            if i + 1 < len(args) and isinstance(args[i + 1], str):
+                keep_agent = args[i + 1]
+
+    desired = _legis_mcp_entry(keep_agent)
+    if existing == desired:
+        return True, "legis already registered in .mcp.json"
+    servers["legis"] = desired
+    _atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return True, "Registered legis server in .mcp.json"
