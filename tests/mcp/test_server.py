@@ -209,7 +209,10 @@ def test_tools_reject_before_initialize(tmp_path):
     assert responses[0]["error"]["code"] == -32002
 
 
-def test_initialize_rejects_unsupported_protocol_version(tmp_path):
+def test_initialize_negotiates_unsupported_protocol_version(tmp_path):
+    # MCP spec: an unsupported (or newer) requested version must not hard-error;
+    # the server replies with a version it does support and lets the client
+    # decide. This is what lets newer clients (e.g. 2025-06-18) connect.
     runtime, _store = _runtime(tmp_path)
     runtime.initialized = False
 
@@ -219,14 +222,15 @@ def test_initialize_rejects_unsupported_protocol_version(tmp_path):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "initialize",
-                "params": {"protocolVersion": "1999-01-01"},
+                "params": {"protocolVersion": "2025-06-18"},
             }
         ),
         runtime,
     )
 
-    assert responses[0]["error"]["code"] == -32602
-    assert "2025-03-26" in responses[0]["error"]["data"]["supported"]
+    assert "error" not in responses[0]
+    assert responses[0]["result"]["protocolVersion"] == "2025-03-26"
+    assert responses[0]["result"]["serverInfo"]["name"] == "legis"
 
 
 def test_build_runtime_initialize_does_not_create_local_state(tmp_path, monkeypatch):

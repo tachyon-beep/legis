@@ -1122,17 +1122,15 @@ def handle_request(request: dict[str, Any], runtime: McpRuntime) -> dict[str, An
                 "error": {"code": -32602, "message": "initialize params must be an object"},
             }
         requested = params.get("protocolVersion")
-        if requested is not None and requested not in _SUPPORTED_PROTOCOL_VERSIONS:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32602,
-                    "message": f"unsupported protocolVersion: {requested}",
-                    "data": {"supported": list(_SUPPORTED_PROTOCOL_VERSIONS)},
-                },
-            }
-        runtime.protocol_version = requested or _DEFAULT_PROTOCOL_VERSION
+        if requested in _SUPPORTED_PROTOCOL_VERSIONS:
+            runtime.protocol_version = requested
+        else:
+            # MCP spec: when the client requests a protocolVersion the server
+            # does not support (or omits it), the server responds with a version
+            # it does support and lets the client decide whether to proceed —
+            # it must not hard-error. Hard-erroring here made newer clients
+            # (e.g. those negotiating 2025-06-18) fail to connect entirely.
+            runtime.protocol_version = _DEFAULT_PROTOCOL_VERSION
         runtime.initialized = True
         result = {
             "protocolVersion": runtime.protocol_version,
