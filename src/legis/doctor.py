@@ -56,11 +56,40 @@ def render_text(checks: list[DoctorCheck]) -> str:
     return "\n".join(lines)
 
 
+def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
+    """Check that `.mcp.json` exists and has a `legis` server entry."""
+    cid = "install.mcp_json"
+    path = root / ".mcp.json"
+    present = False
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            present = (
+                isinstance(data, dict)
+                and isinstance(data.get("mcpServers"), dict)
+                and "legis" in data["mcpServers"]
+            )
+        except (json.JSONDecodeError, OSError):
+            present = False
+    if present:
+        return DoctorCheck(cid, "ok")
+    if repair:
+        from legis.install import register_mcp_json
+
+        ok, msg = register_mcp_json(root)
+        if ok:
+            return DoctorCheck(cid, "ok", fixed=True)
+        return DoctorCheck(cid, "error", message=msg)
+    return DoctorCheck(
+        cid, "error", message="legis server not registered (run: legis install --mcp)"
+    )
+
+
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     """Run every check against *root*. Repairs run inside individual checks
     when *repair* is True; each returned check reflects post-repair state."""
     checks: list[DoctorCheck] = []
-    # Check functions are appended here in later tasks.
+    checks.append(check_mcp_json(root, repair=repair))
     return checks
 
 

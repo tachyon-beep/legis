@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from legis.cli import main as cli_main
-from legis.doctor import DoctorCheck, render_json, render_text, run_doctor
+from legis.doctor import DoctorCheck, check_mcp_json, render_json, render_text, run_doctor
 
 
 def test_doctorcheck_to_dict_omits_empty_message():
@@ -31,29 +31,64 @@ def test_render_text_lists_only_problems_when_healthy_says_ok():
     assert "legis doctor: ok" not in out
 
 
-def test_run_doctor_empty_is_healthy(tmp_path, capsys):
-    # With no checks registered yet, an empty list renders healthy, exit 0.
+def test_run_doctor_healthy_when_mcp_present(tmp_path, capsys):
+    # A project with .mcp.json registered renders healthy, exit 0.
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path)
     rc = run_doctor(tmp_path, repair=False, fmt="text")
     assert rc == 0
     assert "legis doctor: ok" in capsys.readouterr().out
 
 
 def test_run_doctor_json_format(tmp_path, capsys):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path)
     rc = run_doctor(tmp_path, repair=False, fmt="json")
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload == {"ok": True, "checks": [], "next_actions": []}
+    assert payload["ok"] is True
+    assert payload["next_actions"] == []
 
 
 def test_cli_doctor_runs_and_exits_zero(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    rc = cli_main(["doctor"])
+    rc = cli_main(["doctor", "--repair"])
     assert rc == 0
     assert "legis doctor: ok" in capsys.readouterr().out
 
 
 def test_cli_doctor_json(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    rc = cli_main(["doctor", "--format", "json"])
+    rc = cli_main(["doctor", "--repair", "--format", "json"])
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# check_mcp_json
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_json_absent_is_error(tmp_path):
+    c = check_mcp_json(tmp_path, repair=False)
+    assert c.id == "install.mcp_json"
+    assert c.status == "error"
+    assert c.fixed is False
+
+
+def test_mcp_json_repair_fixes_it(tmp_path):
+    c = check_mcp_json(tmp_path, repair=True)
+    assert c.status == "ok"
+    assert c.fixed is True
+    assert (tmp_path / ".mcp.json").exists()
+
+
+def test_mcp_json_present_is_ok(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path)
+    c = check_mcp_json(tmp_path, repair=False)
+    assert c.status == "ok"
+    assert c.fixed is False
