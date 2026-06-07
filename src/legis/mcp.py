@@ -636,6 +636,11 @@ def _override_idempotency_request_hash(
 def _existing_idempotent_record(
     runtime: McpRuntime, key: str, request_hash: str
 ) -> Any | None:
+    # The O(N) hash + HMAC cost of the scan below is `_verified_records`' whole-
+    # trail tamper check, paid deliberately on this interactive path — NOT a
+    # keyed single-row lookup, which would skip verification (the optimization
+    # operator-confirmed declined in rc4 review #7; see service.verified_records'
+    # cost note). The scan itself is over the already-verified list.
     for rec in _verified_records(runtime):
         ext = rec.payload.get("extensions", {})
         if ext.get("mcp_idempotency_key") != key:
