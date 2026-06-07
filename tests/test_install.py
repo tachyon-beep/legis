@@ -617,6 +617,13 @@ def test_register_mcp_json_idempotent(tmp_path):
     assert (tmp_path / ".mcp.json").read_text() == first
 
 
+def test_legis_mcp_entry_module_fallback_splits_command_and_args(monkeypatch):
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/usr/bin/python3", "-P", "-m", "legis"])
+    entry = install._legis_mcp_entry("claude-code")
+    assert entry["command"] == "/usr/bin/python3"
+    assert entry["args"] == ["-P", "-m", "legis", "mcp", "--agent-id", "claude-code"]
+
+
 # ---------------------------------------------------------------------------
 # .gitignore
 # ---------------------------------------------------------------------------

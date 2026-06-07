@@ -693,12 +693,17 @@ _DEFAULT_AGENT_ID = "claude-code"
 
 
 def _legis_mcp_entry(agent_id: str = _DEFAULT_AGENT_ID) -> dict[str, Any]:
-    """The canonical legis stdio server entry for .mcp.json."""
-    cmd_parts = _find_legis_command()
-    command = cmd_parts[0] if len(cmd_parts) == 1 else shlex.join(cmd_parts)
+    """The canonical legis stdio server entry for .mcp.json.
+
+    Splits the resolved invocation into a bare ``command`` (the executable an
+    MCP client execs directly) plus ``args`` so the module-fallback form
+    (``<python> -P -m legis ...``) launches correctly — a single joined string
+    in ``command`` would not be exec'd as separate argv tokens.
+    """
+    cmd = _find_legis_command()
     return {
-        "args": ["mcp", "--agent-id", agent_id],
-        "command": command,
+        "args": cmd[1:] + ["mcp", "--agent-id", agent_id],
+        "command": cmd[0],
         "env": {},
         "type": "stdio",
     }
