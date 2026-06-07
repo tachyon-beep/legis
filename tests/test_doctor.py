@@ -135,3 +135,58 @@ def test_skill_pack_absent_is_error(tmp_path):
 def test_skill_pack_repair_installs(tmp_path):
     c = check_skill_pack(tmp_path, ".claude", repair=True)
     assert c.status == "ok" and c.fixed is True
+
+
+# ---------------------------------------------------------------------------
+# Task 6 (drift): stale block / stale skill pack are the headline behavior
+# ---------------------------------------------------------------------------
+
+
+def test_instruction_block_stale_token_is_error_then_repaired(tmp_path):
+    # A real block with a mutated marker token: marker present, token mismatch.
+    legis_install.inject_instructions(tmp_path / "CLAUDE.md")
+    path = tmp_path / "CLAUDE.md"
+    content = path.read_text()
+    fresh_token = legis_install._marker_token()
+    stale = content.replace(f":{fresh_token} -->", ":v0:deadbeef -->", 1)
+    assert stale != content  # the token really was rewritten
+    path.write_text(stale)
+    assert legis_install._extract_marker_token(stale) != fresh_token
+
+    c = check_instruction_block(tmp_path, "CLAUDE.md", repair=False)
+    assert c.status == "error"
+
+    fixed = check_instruction_block(tmp_path, "CLAUDE.md", repair=True)
+    assert fixed.status == "ok"
+    assert fixed.fixed is True
+    assert legis_install._extract_marker_token((tmp_path / "CLAUDE.md").read_text()) == fresh_token
+
+
+def test_skill_pack_stale_fingerprint_is_error_then_repaired(tmp_path):
+    legis_install.install_skills(tmp_path)
+    pack = tmp_path / ".claude" / "skills" / legis_install.SKILL_NAME
+    # Mutate a file under the installed pack so its fingerprint diverges from source.
+    skill_md = pack / "SKILL.md"
+    skill_md.write_text(skill_md.read_text() + "\n<!-- drift -->\n")
+
+    c = check_skill_pack(tmp_path, ".claude", repair=False)
+    assert c.status == "error"
+
+    fixed = check_skill_pack(tmp_path, ".claude", repair=True)
+    assert fixed.status == "ok"
+    assert fixed.fixed is True
+
+
+# ---------------------------------------------------------------------------
+# Task 6: hook check
+# ---------------------------------------------------------------------------
+
+
+def test_hook_absent_is_error_then_repaired(tmp_path):
+    c = check_hook(tmp_path, repair=False)
+    assert c.id == "install.hook"
+    assert c.status == "error"
+
+    fixed = check_hook(tmp_path, repair=True)
+    assert fixed.status == "ok"
+    assert fixed.fixed is True

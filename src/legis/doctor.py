@@ -172,27 +172,14 @@ def check_hook(root: Path, *, repair: bool) -> DoctorCheck:
     return DoctorCheck(cid, "error", message="SessionStart hook not registered (run: legis install)")
 
 
-def _gitignore_present(root: Path) -> bool:
-    """True iff all legis ignore rules are present in .gitignore."""
-    path = root / ".gitignore"
-    if not path.exists():
-        return False
-    try:
-        content = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-    present = {ln.strip() for ln in content.splitlines() if ln.strip() and not ln.lstrip().startswith("#")}
-    return all(rule in present for rule in _install._LEGIS_IGNORE_RULES)
-
-
 def check_gitignore(root: Path, *, repair: bool) -> DoctorCheck:
     """Check that legis .gitignore rules are present."""
     cid = "install.gitignore"
-    if _gitignore_present(root):
+    if _install.gitignore_rules_present(root):
         return DoctorCheck(cid, "ok")
     if repair:
         ok, msg = _install.ensure_gitignore(root)
-        if ok and _gitignore_present(root):
+        if ok and _install.gitignore_rules_present(root):
             return DoctorCheck(cid, "ok", fixed=True)
         return DoctorCheck(cid, "error", message=msg)
     return DoctorCheck(cid, "error", message=".weft/legis/ not in .gitignore (run: legis install)")

@@ -657,6 +657,22 @@ _LEGIS_IGNORE_BLOCK = (
 )
 
 
+def gitignore_rules_present(project_root: Path) -> bool:
+    """True iff every legis ignore rule is already a non-comment line in .gitignore."""
+    try:
+        gitignore = project_path(project_root, ".gitignore")
+    except UnsafeInstallPathError:
+        return False
+    if not gitignore.exists():
+        return False
+    try:
+        content = gitignore.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    present = {ln.strip() for ln in content.splitlines() if ln.strip() and not ln.lstrip().startswith("#")}
+    return all(rule in present for rule in _LEGIS_IGNORE_RULES)
+
+
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
     """Ensure legis's runtime-state subtree (``.weft/legis/``) is ignored."""
     try:
@@ -665,13 +681,13 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
         return False, str(exc)
 
     if gitignore.exists():
+        if gitignore_rules_present(project_root):
+            return True, "legis config already in .gitignore"
         content = gitignore.read_text(encoding="utf-8")
         present = {
             line.strip() for line in content.splitlines() if line.strip() and not line.lstrip().startswith("#")
         }
         missing = [rule for rule in _LEGIS_IGNORE_RULES if rule not in present]
-        if not missing:
-            return True, "legis config already in .gitignore"
         if not content.endswith("\n"):
             content += "\n"
         # Append only the rules that are actually absent — writing the whole
