@@ -188,6 +188,7 @@ def _apply_judge_env(args) -> None:
 
 def _check_override_rate(db_url: str) -> int:
     import os
+    from legis.config import protected_policies
     from legis.enforcement.lifecycle import GateStatus
     from legis.service.errors import AuditIntegrityError, ProtectedKeyRequiredError
     from legis.service.governance import evaluate_override_rate_gate
@@ -217,10 +218,6 @@ def _check_override_rate(db_url: str) -> int:
         return 1
 
     records = store.read_all()
-    protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-    protected_policies = frozenset(
-        p.strip() for p in protected_policies_str.split(",") if p.strip()
-    )
 
     # The detect -> require-key -> verify -> score decision lives in the service
     # layer (Q-H2), so the cli, the api, and any future consumer all measure the
@@ -229,7 +226,7 @@ def _check_override_rate(db_url: str) -> int:
         res = evaluate_override_rate_gate(
             records,
             hmac_key=os.environ.get("LEGIS_HMAC_KEY"),
-            protected_policies=protected_policies,
+            protected_policies=protected_policies(),
         )
     except (ProtectedKeyRequiredError, AuditIntegrityError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

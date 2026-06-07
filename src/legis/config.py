@@ -61,6 +61,11 @@ _GOVERNANCE_DB_ENV = "LEGIS_GOVERNANCE_DB"
 _BINDING_DB_ENV = "LEGIS_BINDING_DB"
 _PULL_DB_ENV = "LEGIS_PULL_DB"
 
+# Protected-policy set: the policy names whose judge-ACCEPTED verdicts are
+# downgraded to operator sign-off (Q-H3). Composition-root config like the DB
+# URLs above, so resolved here.
+_PROTECTED_POLICIES_ENV = "LEGIS_PROTECTED_POLICIES"
+
 
 def project_root() -> Path:
     """The directory the federation treats as project root (the cwd)."""
@@ -147,6 +152,22 @@ def binding_db_url() -> str:
 
 def pull_db_url() -> str:
     return _resolve_db_url(_PULL_DB_ENV, _PULL_DB_NAME)
+
+
+def protected_policies() -> frozenset[str]:
+    """Resolve the protected-policy set from ``LEGIS_PROTECTED_POLICIES``.
+
+    THE single parse point for the env var: the API factory, the MCP runtime,
+    and the CLI override-rate gate all call this rather than re-implementing the
+    ``frozenset(split(","))`` idiom, so the delimiter/trim rule cannot diverge
+    between composition roots (it decides whether a judge ACCEPTED is downgraded
+    to sign-off, so a divergence would be a real authority split). Read at call
+    time — like the ``*_db_url()`` resolvers — because ``cli.py`` writes the env
+    var from ``--protected-policies`` before the downstream root reads it. Empty,
+    whitespace-only, and absent all yield the empty set.
+    """
+    raw = os.environ.get(_PROTECTED_POLICIES_ENV, "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
 
 
 def ensure_sqlite_parent(url: str) -> None:

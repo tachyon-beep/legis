@@ -158,7 +158,7 @@ def _load_policy_cell_registry() -> PolicyCellRegistry:
 
 
 def build_runtime(agent_id: str) -> McpRuntime:
-    from legis.config import binding_db_url, governance_db_url
+    from legis.config import binding_db_url, governance_db_url, protected_policies
 
     clock = SystemClock()
     engine = None
@@ -180,18 +180,15 @@ def build_runtime(agent_id: str) -> McpRuntime:
     if hmac_key:
         key = hmac_key.encode("utf-8")
         store = AuditStore(governance_db_url())
-        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-        protected_policies = frozenset(
-            p.strip() for p in protected_policies_str.split(",") if p.strip()
-        )
-        trail_verifier = TrailVerifier(key, protected_policies)
+        protected = protected_policies()
+        trail_verifier = TrailVerifier(key, protected)
 
         # Protected policies: the LLM judge is advisory only (Q-H3). With no
         # deterministic validator wired, a judge ACCEPTED is downgraded and the
         # agent must escalate to operator sign-off.
         protected_gate = ProtectedGate(
             store, clock, build_judge_from_env("MCP"), key,
-            protected_policies=protected_policies,
+            protected_policies=protected,
         )
         signoff_gate = SignoffGate(store, clock, signer=True, key=key)
 

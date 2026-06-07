@@ -32,6 +32,7 @@ from legis.config import (
     binding_db_url,
     check_db_url,
     governance_db_url,
+    protected_policies,
     pull_db_url,
 )
 from legis.checks.models import CheckOutcome, CheckRun
@@ -344,14 +345,11 @@ def create_app(
         gov_store = AuditStore(gov_db_url)
         clock = SystemClock()
 
-        protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
-        protected_policies = frozenset(
-            p.strip() for p in protected_policies_str.split(",") if p.strip()
-        )
+        protected = protected_policies()
 
         if trail_verifier is None:
             from legis.enforcement.protected import TrailVerifier
-            trail_verifier = TrailVerifier(hmac_key, protected_policies)
+            trail_verifier = TrailVerifier(hmac_key, protected)
 
         if protected_gate is None:
             from legis.enforcement.judge_factory import build_judge_from_env
@@ -362,7 +360,7 @@ def create_app(
             # downgraded and the agent must obtain operator sign-off.
             protected_gate = ProtectedGate(
                 gov_store, clock, build_judge_from_env("API"), hmac_key,
-                protected_policies=protected_policies,
+                protected_policies=protected,
             )
 
         if signoff_gate is None:
