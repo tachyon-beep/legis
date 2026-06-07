@@ -47,3 +47,20 @@ def test_run_doctor_json_format(tmp_path, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"ok": True, "checks": [], "next_actions": []}
+
+
+from legis.cli import main as cli_main
+
+
+def test_cli_doctor_runs_and_exits_zero(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = cli_main(["doctor"])
+    assert rc == 0
+    assert "legis doctor: ok" in capsys.readouterr().out
+
+
+def test_cli_doctor_json(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = cli_main(["doctor", "--format", "json"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True

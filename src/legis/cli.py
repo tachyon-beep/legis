@@ -159,6 +159,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="SessionStart hook: refresh drifted legis instructions/skills in the cwd",
     )
 
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="View and repair legis install/config health",
+    )
+    doctor.add_argument("--root", default=".", help="Project root to inspect (default: cwd)")
+    doctor.add_argument("--repair", action="store_true", help="Apply safe repairs, then re-check")
+    doctor.add_argument(
+        "--format", choices=("text", "json"), default="text",
+        help="Output format: human text (default) or machine-readable json",
+    )
+
     return parser
 
 
@@ -235,6 +246,14 @@ def _check_override_rate(db_url: str) -> int:
     print(f"override-rate gate: {res.status.value} "
           f"(rate={res.rate:.3f}, sample={res.sample_size})")
     return 1 if res.status is GateStatus.FAIL else 0
+
+
+def _run_doctor(args) -> int:
+    from pathlib import Path
+
+    from legis.doctor import run_doctor
+
+    return run_doctor(Path(args.root), repair=args.repair, fmt=args.format)
 
 
 def _run_install(args) -> int:
@@ -379,6 +398,9 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
         else:
             print("policy-boundary-check: PASS")
         return 1 if findings else 0
+
+    if args.command == "doctor":
+        return _run_doctor(args)
 
     parser.print_help(sys.stderr)
     return 2
