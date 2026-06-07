@@ -7,9 +7,7 @@ from legis.enforcement.protected import (
     ProtectedGate,
     TamperError,
     TrailVerifier,
-    legacy_signing_fields,
 )
-from legis.enforcement.signing import sign
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
 from legis.store.audit_store import GENESIS, AuditStore, _chain
@@ -52,19 +50,6 @@ def _submit(g):
 def test_clean_protected_trail_verifies(tmp_path):
     g, store = _gate(tmp_path / "gov.db")
     _submit(g)
-    TrailVerifier(KEY, PROTECTED).verify(store.read_all())  # no raise
-
-
-def test_legacy_v1_protected_signature_still_verifies(tmp_path):
-    g, store = _gate(tmp_path / "gov.db")
-    _submit(g)
-
-    def replace_with_legacy_signature(p):
-        p["extensions"]["judge_metadata_signature"] = sign(
-            legacy_signing_fields(p), KEY, version="v1"
-        )
-
-    _edit_payload_and_rechain(tmp_path / "gov.db", replace_with_legacy_signature)
     TrailVerifier(KEY, PROTECTED).verify(store.read_all())  # no raise
 
 

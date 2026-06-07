@@ -183,7 +183,14 @@ listed as not-yet-built.
 
 ### Changed
 - **Rebrand Clarion→Loomweave and Loom→Weft** across legis (identifiers, docs,
-  and config references).
+  and config references). The protected-cell signing field set follows the
+  rename (`clarion_content_hash` → `loomweave_content_hash`, `ext["clarion"]` →
+  `ext["loomweave"]`). This is a deliberate **clean break**, not a migration:
+  legis is unreleased, so no signed governance records predate the rename. The
+  now-impossible legacy fallback (`legacy_signing_fields` and the
+  `hmac-sha256:v1` acceptance path in `TrailVerifier` / `signing`) is removed
+  accordingly; the version-tag mechanism (`v2`) is retained so a future
+  field-set change can still be introduced as a new tag without ambiguity.
 - **MCP idempotency replays scoped** so a replayed call resolves against its own
   prior result, not a sibling's.
 

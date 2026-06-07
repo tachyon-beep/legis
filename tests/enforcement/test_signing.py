@@ -1,4 +1,6 @@
-from legis.enforcement.signing import SIG_PREFIX, SIG_PREFIX_V1, sign, verify
+import pytest
+
+from legis.enforcement.signing import SIG_PREFIX, sign, verify
 
 
 def test_sign_is_prefixed_and_deterministic():
@@ -19,8 +21,13 @@ def test_verify_round_trips_and_rejects_wrong_key_or_tamper():
     assert verify(fields, "", b"key-1") is False
 
 
-def test_verify_accepts_explicit_legacy_v1_signature():
+def test_verify_rejects_unknown_prefix():
     fields = {"verdict": "ACCEPTED", "policy": "p"}
-    sig = sign(fields, b"key-1", version="v1")
-    assert sig.startswith(SIG_PREFIX_V1)
-    assert verify(fields, sig, b"key-1") is True
+    sig = sign(fields, b"key-1")
+    forged = sig.replace("v2", "v1", 1)  # a tag verify no longer recognises
+    assert verify(fields, forged, b"key-1") is False
+
+
+def test_sign_rejects_unknown_version():
+    with pytest.raises(ValueError, match="unsupported signature version"):
+        sign({"verdict": "ACCEPTED"}, b"key-1", version="v1")
