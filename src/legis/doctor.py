@@ -8,9 +8,13 @@ layer, and per hub doctrine C-9(b) it NEVER writes weft.toml.
 from __future__ import annotations
 
 import json
+import os
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from sqlalchemy.engine import make_url
 
 from legis import install as _install
 
@@ -185,6 +189,95 @@ def check_gitignore(root: Path, *, repair: bool) -> DoctorCheck:
     return DoctorCheck(cid, "error", message=".weft/legis/ not in .gitignore (run: legis install)")
 
 
+# ---------------------------------------------------------------------------
+# Task 7: config & store checks
+# ---------------------------------------------------------------------------
+
+_DB_OVERRIDE_ENVS = ("LEGIS_CHECK_DB", "LEGIS_GOVERNANCE_DB", "LEGIS_BINDING_DB", "LEGIS_PULL_DB")
+_LEGACY_DB_NAMES = ("legis-checks.db", "legis-governance.db", "legis-binding.db", "legis-pulls.db")
+
+
+def check_weft_toml(root: Path) -> DoctorCheck:
+    """Report-only (C-9(b)): NEVER writes weft.toml. Distinguishes ABSENT (ok —
+    defaults intentional) from PRESENT-BUT-BROKEN (error — config silently not
+    applying), restoring the operator signal that C-9(c) silences at runtime."""
+    cid = "config.weft_toml"
+    path = root / "weft.toml"
+    if not path.exists():
+        return DoctorCheck(cid, "ok", message="absent (built-in defaults)")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as exc:
+        return DoctorCheck(
+            cid,
+            "error",
+            message=f"present but unparseable; [legis] silently not applying ({exc})",
+        )
+    table = data.get("legis")
+    if table is not None and not isinstance(table, dict):
+        return DoctorCheck(cid, "error", message="[legis] in weft.toml must be a table")
+    return DoctorCheck(cid, "ok")
+
+
+def _nearest_existing(path: Path) -> Path:
+    p = path
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
+
+
+def check_store_dir(root: Path, *, repair: bool = False) -> DoctorCheck:
+    """An absent .weft/legis/ is ok (created lazily). A present-but-unwritable
+    dir is an error. --repair ensures the dir exists (explicit operator action)."""
+    cid = "store.dir"
+    from legis import config
+
+    store_dir_rel = config._store_dir()
+    store_dir = store_dir_rel if store_dir_rel.is_absolute() else (root / store_dir_rel)
+    if store_dir.exists():
+        if not os.access(store_dir, os.W_OK):
+            return DoctorCheck(cid, "error", message=f"{store_dir} not writable")
+        return DoctorCheck(cid, "ok")
+    if repair:
+        try:
+            store_dir.mkdir(parents=True, exist_ok=True)
+            return DoctorCheck(cid, "ok", fixed=True)
+        except OSError as exc:
+            return DoctorCheck(cid, "error", message=f"cannot create {store_dir}: {exc}")
+    anchor = _nearest_existing(store_dir)
+    if not os.access(anchor, os.W_OK):
+        return DoctorCheck(cid, "error", message=f"{store_dir} not creatable ({anchor} not writable)")
+    return DoctorCheck(cid, "ok", message="absent (created on first store open)")
+
+
+def check_db_overrides(root: Path) -> DoctorCheck:  # noqa: ARG001
+    cid = "store.db_overrides"
+    bad = []
+    for env in _DB_OVERRIDE_ENVS:
+        val = os.environ.get(env)
+        if not val:
+            continue
+        try:
+            make_url(val)
+        except Exception:  # noqa: BLE001 — any parse failure is a bad override
+            bad.append(env)
+    if bad:
+        return DoctorCheck(cid, "error", message="invalid URL in: " + ", ".join(bad))
+    return DoctorCheck(cid, "ok")
+
+
+def check_legacy_stray_db(root: Path) -> DoctorCheck:
+    cid = "store.legacy_stray"
+    stray = [n for n in _LEGACY_DB_NAMES if (root / n).is_file()]
+    if stray:
+        return DoctorCheck(
+            cid,
+            "warn",
+            message="legacy DB at repo root (move to .weft/legis/): " + ", ".join(stray),
+        )
+    return DoctorCheck(cid, "ok")
+
+
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     """Run every check against *root*. Repairs run inside individual checks
     when *repair* is True; each returned check reflects post-repair state."""
@@ -196,6 +289,10 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_hook(root, repair=repair))
     checks.append(check_gitignore(root, repair=repair))
     checks.append(check_mcp_json(root, repair=repair))
+    checks.append(check_weft_toml(root))
+    checks.append(check_store_dir(root, repair=repair))
+    checks.append(check_db_overrides(root))
+    checks.append(check_legacy_stray_db(root))
     return checks
 
 

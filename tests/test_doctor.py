@@ -190,3 +190,48 @@ def test_hook_absent_is_error_then_repaired(tmp_path):
     fixed = check_hook(tmp_path, repair=True)
     assert fixed.status == "ok"
     assert fixed.fixed is True
+
+
+# ---------------------------------------------------------------------------
+# Task 7: config & store checks (weft.toml report-only, store dir, db overrides, legacy)
+# ---------------------------------------------------------------------------
+
+
+from legis.doctor import check_weft_toml, check_store_dir, check_db_overrides, check_legacy_stray_db
+
+
+def test_weft_toml_absent_is_ok(tmp_path):
+    assert check_weft_toml(tmp_path).status == "ok"
+
+
+def test_weft_toml_valid_legis_table_is_ok(tmp_path):
+    (tmp_path / "weft.toml").write_text('[legis]\nstore_dir = ".weft/legis"\n')
+    assert check_weft_toml(tmp_path).status == "ok"
+
+
+def test_weft_toml_malformed_is_error_and_unchanged(tmp_path):
+    wt = tmp_path / "weft.toml"
+    wt.write_text("[legis]\nstore_dir = \n")  # malformed TOML
+    before = wt.read_text()
+    c = check_weft_toml(tmp_path)
+    assert c.status == "error"
+    assert wt.read_text() == before  # C-9(b): never written
+
+
+def test_weft_toml_legis_not_a_table_is_error(tmp_path):
+    (tmp_path / "weft.toml").write_text('legis = "oops"\n')
+    assert check_weft_toml(tmp_path).status == "error"
+
+
+def test_store_dir_writable_parent_is_ok(tmp_path):
+    assert check_store_dir(tmp_path).status == "ok"
+
+
+def test_db_override_bad_url_is_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", "::not a url::")
+    assert check_db_overrides(tmp_path).status == "error"
+
+
+def test_legacy_stray_db_is_warn(tmp_path):
+    (tmp_path / "legis-governance.db").write_text("x")
+    assert check_legacy_stray_db(tmp_path).status == "warn"
