@@ -270,6 +270,11 @@ class AuditStore:
         )
 
     def verify_integrity(self) -> bool:
+        # O(N) by design: a full chain re-hash is the only way to detect
+        # out-of-band tampering of an arbitrary record (the hash chain gives O(1)
+        # verification of *appends*, never of a mutated prefix). Callers on
+        # interactive read paths (service.verified_records) pay this deliberately;
+        # see that function's cost note (rc4 review #7) for why it is not narrowed.
         self._assert_no_batch_in_progress("verify_integrity")
         prev_hash = GENESIS
         try:

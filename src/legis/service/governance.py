@@ -84,6 +84,23 @@ def verified_records(
     owner exposing ``records()`` / ``verify_integrity()`` and a verifier
     exposing ``verify()``) so the service layer is not coupled to the
     enforcement concrete types.
+
+    Cost note (rc4 review #7): this verifies the *whole* trail on every call —
+    ``verify_integrity()`` re-hashes the chain (O(N)) and ``trail_verifier.verify``
+    re-checks signatures (O(N)) — including on interactive paths (the keyed
+    override-submit idempotency check and every override-rate read). That cost is
+    the tamper-evidence property, not an oversight: there is no load-time or
+    open-time verification anywhere (``AuditStore.__init__`` only creates the
+    schema), so this path is the only thing standing between a tampered record and
+    an interactive read. Two tempting optimizations are deliberately NOT taken:
+    reserving full verification for the explicit governance-gate would leave every
+    interactive read unverified (a silent tamper window); and incremental
+    verification (trusting a cached last-verified prefix and re-hashing only the
+    new tail) cannot detect out-of-band tampering of an already-verified record —
+    exactly what the hash chain exists to catch — and still would not reach O(1),
+    because the signature pass is O(N) regardless. If trail size ever makes this
+    latency-bound, the honest lever is trail retention/compaction, not narrowing
+    what each read verifies.
     """
     if trail_owner is not None:
         records = trail_owner.records()
