@@ -80,9 +80,12 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
   write attribution is self-asserted, not cryptographically verified) as a known
   governance gap, acceptable for trust-local use and deferred for multi-principal.
 - **Release CI gates** — the coverage floor is raised to 88% with a `ruff` lint
-  gate added (Q-L7), live Loomweave conformance is now non-optional for releases
-  (no silent skip when the oracle is down), and the Filigree client's transport /
-  error branches are covered.
+  gate added (Q-L7), and the Filigree client's transport / error branches are
+  covered. (The live Loomweave conformance step is opt-in via the per-PR oracle
+  in `ci.yml`, skipped when `LOOMWEAVE_URL` is unset; it does **not** hard-gate
+  PyPI publish — the fail-closed release gate was removed because no
+  CI-reachable Loomweave oracle is provisioned, which would otherwise make every
+  release fail before publish.)
 
 ### Fixed
 - **Fingerprint reconciliation + RFC-8785 deferral (Q-L5 / Q-L4)** — the policy

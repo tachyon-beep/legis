@@ -54,17 +54,9 @@ jobs:
           name: dist
           path: dist/
 
-  conformance:
-    # Live cross-repo Loomweave SEI conformance, required before publish. The
-    # reusable workflow is fail-closed: a missing LOOMWEAVE_URL / locator / HMAC
-    # credential fails the release rather than silently skipping (roadmap 12).
-    name: Live Loomweave conformance
-    uses: ./.github/workflows/loomweave-conformance.yml
-    secrets: inherit
-
   publish:
     name: Publish to PyPI
-    needs: [build, conformance]
+    needs: [build]
     runs-on: ubuntu-latest
     environment:
       name: pypi
