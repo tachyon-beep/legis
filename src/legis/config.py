@@ -61,6 +61,17 @@ _GOVERNANCE_DB_ENV = "LEGIS_GOVERNANCE_DB"
 _BINDING_DB_ENV = "LEGIS_BINDING_DB"
 _PULL_DB_ENV = "LEGIS_PULL_DB"
 
+# Public, stably-ordered (override env var, default filename) for every store.
+# THE single source of store identity so consumers (e.g. ``legis doctor``) never
+# re-list the env vars / filenames: adding a 5th store here automatically extends
+# their coverage instead of silently dropping it.
+STORE_DB_SPECS: tuple[tuple[str, str], ...] = (
+    (_CHECK_DB_ENV, _CHECK_DB_NAME),
+    (_GOVERNANCE_DB_ENV, _GOVERNANCE_DB_NAME),
+    (_BINDING_DB_ENV, _BINDING_DB_NAME),
+    (_PULL_DB_ENV, _PULL_DB_NAME),
+)
+
 # Protected-policy set: the policy names whose judge-ACCEPTED verdicts are
 # downgraded to operator sign-off (Q-H3). Composition-root config like the DB
 # URLs above, so resolved here.

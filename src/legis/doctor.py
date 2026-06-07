@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy.engine import make_url
 
+from legis import config
 from legis import install as _install
 
 
@@ -194,8 +195,31 @@ def check_gitignore(root: Path, *, repair: bool) -> DoctorCheck:
 # Task 7: config & store checks
 # ---------------------------------------------------------------------------
 
-_DB_OVERRIDE_ENVS = ("LEGIS_CHECK_DB", "LEGIS_GOVERNANCE_DB", "LEGIS_BINDING_DB", "LEGIS_PULL_DB")
-_LEGACY_DB_NAMES = ("legis-checks.db", "legis-governance.db", "legis-binding.db", "legis-pulls.db")
+# Sourced from config's single store-identity registry so adding a store there
+# can't silently drop doctor coverage (review #2).
+_DB_OVERRIDE_ENVS = tuple(env for env, _ in config.STORE_DB_SPECS)
+_LEGACY_DB_NAMES = tuple(name for _, name in config.STORE_DB_SPECS)
+
+
+def _store_dir_for(root: Path) -> Path:
+    """legis's store dir resolved from root/weft.toml (root-anchored, never cwd).
+    Returns an absolute path: an operator-set absolute store_dir is honored as-is;
+    otherwise the (relative) store_dir / default is joined to root. Malformed
+    weft.toml falls back to the default (check_weft_toml reports the malformed file)."""
+    configured: Path | None = None
+    wt = root / "weft.toml"
+    if wt.exists():
+        try:
+            data = tomllib.loads(wt.read_text(encoding="utf-8"))
+        except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+            data = {}
+        legis = data.get("legis")
+        if isinstance(legis, dict):
+            sd = legis.get("store_dir")
+            if isinstance(sd, str) and sd:
+                configured = Path(sd)
+    store_dir = configured if configured is not None else Path(".weft") / "legis"
+    return store_dir if store_dir.is_absolute() else (root / store_dir)
 
 
 def check_weft_toml(root: Path) -> DoctorCheck:
@@ -231,10 +255,7 @@ def check_store_dir(root: Path, *, repair: bool = False) -> DoctorCheck:
     """An absent .weft/legis/ is ok (created lazily). A present-but-unwritable
     dir is an error. --repair ensures the dir exists (explicit operator action)."""
     cid = "store.dir"
-    from legis import config
-
-    store_dir_rel = config._store_dir()
-    store_dir = store_dir_rel if store_dir_rel.is_absolute() else (root / store_dir_rel)
+    store_dir = _store_dir_for(root)
     if store_dir.exists():
         if not os.access(store_dir, os.W_OK):
             return DoctorCheck(cid, "error", message=f"{store_dir} not writable")
@@ -255,11 +276,12 @@ def check_db_overrides(root: Path) -> DoctorCheck:  # noqa: ARG001
     cid = "store.db_overrides"
     bad = []
     for env in _DB_OVERRIDE_ENVS:
-        val = os.environ.get(env)
-        if not val:
+        # Match config's precedence: a present-but-empty override is a verbatim
+        # (broken) override, not "unset" — so validate membership, not truthiness.
+        if env not in os.environ:
             continue
         try:
-            make_url(val)
+            make_url(os.environ[env])
         except Exception:  # noqa: BLE001 — any parse failure is a bad override
             bad.append(env)
     if bad:
@@ -285,17 +307,13 @@ def check_legacy_stray_db(root: Path) -> DoctorCheck:
 
 
 def _store_url(root: Path, db_name: str, env: str) -> str:
-    """Resolve a store URL relative to *root* (not cwd). Respects the LEGIS_*_DB
-    env-var override first; otherwise constructs a file URL under the configured
-    store_dir joined to root so tests using a tmp_path don't touch the real repo."""
-    val = os.environ.get(env)
-    if val:
-        return val
-    from legis import config
-
-    store_dir = config._store_dir()
-    base = store_dir if store_dir.is_absolute() else (root / store_dir)
-    return "sqlite:///" + (base / db_name).as_posix()
+    """Resolve a store URL anchored at *root* via ``root/weft.toml`` (never cwd).
+    The LEGIS_*_DB override wins when set (present-but-empty included, matching
+    config's verbatim-override precedence); otherwise a file URL is built under
+    the root-anchored store_dir."""
+    if env in os.environ:
+        return os.environ[env]
+    return "sqlite:///" + (_store_dir_for(root) / db_name).as_posix()
 
 
 def check_audit_chain(cid: str, url: str) -> DoctorCheck:
@@ -306,7 +324,7 @@ def check_audit_chain(cid: str, url: str) -> DoctorCheck:
     except Exception:  # noqa: BLE001
         return DoctorCheck(cid, "ok", message="store URL not a file store")
     db = parsed.database
-    if not str(parsed.drivername).startswith("sqlite") or not db or db == ":memory:":
+    if parsed.get_backend_name() != "sqlite" or not db or db == ":memory:":
         return DoctorCheck(cid, "ok", message="not a file store")
     if not Path(db).exists():
         return DoctorCheck(cid, "ok", message="no store yet")
@@ -326,8 +344,6 @@ def check_audit_chain(cid: str, url: str) -> DoctorCheck:
 def check_hmac_key(root: Path) -> DoctorCheck:  # noqa: ARG001
     """Presence-only; NEVER renders the key value."""
     cid = "runtime.hmac_key"
-    from legis import config
-
     if not config.protected_policies():
         return DoctorCheck(cid, "ok", message="no protected policies configured")
     if os.environ.get("LEGIS_HMAC_KEY"):

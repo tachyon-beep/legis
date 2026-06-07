@@ -279,3 +279,37 @@ def test_sibling_url_invalid_is_error(tmp_path, monkeypatch):
     monkeypatch.setenv("LOOMWEAVE_API_URL", "localhost:9620")  # no scheme
     c = check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL")
     assert c.status == "error"
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: root-anchored store_dir + empty-override precedence
+# ---------------------------------------------------------------------------
+
+
+from legis.doctor import _store_url
+
+
+def test_store_dir_root_anchored_via_weft_toml(tmp_path, monkeypatch):
+    # --root != cwd, with a weft.toml that relocates the store. Resolution must
+    # honor root/weft.toml, not cwd's, and stay under root (review #1).
+    monkeypatch.chdir(tmp_path)  # cwd has no weft.toml
+    # Clear the conftest store override so weft.toml resolution is exercised.
+    monkeypatch.delenv("LEGIS_GOVERNANCE_DB", raising=False)
+    root = tmp_path / "proj"
+    (root / "custom_store").mkdir(parents=True)
+    (root / "weft.toml").write_text('[legis]\nstore_dir = "custom_store"\n')
+
+    c = check_store_dir(root)
+    assert c.status == "ok"
+
+    # The audit-chain URL must point under root/custom_store, not cwd/.weft.
+    url = _store_url(root, "legis-governance.db", "LEGIS_GOVERNANCE_DB")
+    assert (root / "custom_store" / "legis-governance.db").as_posix() in url
+    assert ".weft" not in url
+
+
+def test_db_override_empty_string_is_error(tmp_path, monkeypatch):
+    # Present-but-empty override is a verbatim broken override, not "unset"
+    # (matches config precedence; review #3).
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", "")
+    assert check_db_overrides(tmp_path).status == "error"
