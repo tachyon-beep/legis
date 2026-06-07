@@ -13,6 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy.engine import make_url
 
@@ -278,6 +279,76 @@ def check_legacy_stray_db(root: Path) -> DoctorCheck:
     return DoctorCheck(cid, "ok")
 
 
+# ---------------------------------------------------------------------------
+# Task 8: governance integrity + runtime/sibling checks
+# ---------------------------------------------------------------------------
+
+
+def _store_url(root: Path, db_name: str, env: str) -> str:
+    """Resolve a store URL relative to *root* (not cwd). Respects the LEGIS_*_DB
+    env-var override first; otherwise constructs a file URL under the configured
+    store_dir joined to root so tests using a tmp_path don't touch the real repo."""
+    val = os.environ.get(env)
+    if val:
+        return val
+    from legis import config
+
+    store_dir = config._store_dir()
+    base = store_dir if store_dir.is_absolute() else (root / store_dir)
+    return "sqlite:///" + (base / db_name).as_posix()
+
+
+def check_audit_chain(cid: str, url: str) -> DoctorCheck:
+    """Report-only. Absent file store => ok (nothing to verify; must NOT create
+    the DB). A tampered chain => error (cannot/must not be auto-repaired)."""
+    try:
+        parsed = make_url(url)
+    except Exception:  # noqa: BLE001
+        return DoctorCheck(cid, "ok", message="store URL not a file store")
+    db = parsed.database
+    if not str(parsed.drivername).startswith("sqlite") or not db or db == ":memory:":
+        return DoctorCheck(cid, "ok", message="not a file store")
+    if not Path(db).exists():
+        return DoctorCheck(cid, "ok", message="no store yet")
+    from legis.store.audit_store import AuditStore
+
+    try:
+        intact = AuditStore(url).verify_integrity()
+    except Exception as exc:  # noqa: BLE001 — surface any verify failure, never raise from doctor
+        return DoctorCheck(cid, "error", message=f"integrity check failed: {exc}")
+    if intact:
+        return DoctorCheck(cid, "ok")
+    return DoctorCheck(
+        cid, "error", message="hash chain verification FAILED (report-only; cannot repair)"
+    )
+
+
+def check_hmac_key(root: Path) -> DoctorCheck:  # noqa: ARG001
+    """Presence-only; NEVER renders the key value."""
+    cid = "runtime.hmac_key"
+    from legis import config
+
+    if not config.protected_policies():
+        return DoctorCheck(cid, "ok", message="no protected policies configured")
+    if os.environ.get("LEGIS_HMAC_KEY"):
+        return DoctorCheck(cid, "ok")
+    return DoctorCheck(
+        cid,
+        "warn",
+        message="protected policies configured but LEGIS_HMAC_KEY not set; protected submissions will fail",
+    )
+
+
+def check_sibling_url(cid: str, env: str) -> DoctorCheck:
+    url = os.environ.get(env)
+    if not url:
+        return DoctorCheck(cid, "ok", message="not configured")
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+        return DoctorCheck(cid, "ok")
+    return DoctorCheck(cid, "error", message=f"{env} invalid URL: {url!r}")
+
+
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     """Run every check against *root*. Repairs run inside individual checks
     when *repair* is True; each returned check reflects post-repair state."""
@@ -293,6 +364,11 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_store_dir(root, repair=repair))
     checks.append(check_db_overrides(root))
     checks.append(check_legacy_stray_db(root))
+    checks.append(check_audit_chain("store.governance_chain", _store_url(root, "legis-governance.db", "LEGIS_GOVERNANCE_DB")))
+    checks.append(check_audit_chain("store.binding_chain", _store_url(root, "legis-binding.db", "LEGIS_BINDING_DB")))
+    checks.append(check_hmac_key(root))
+    checks.append(check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL"))
+    checks.append(check_sibling_url("runtime.filigree_url", "FILIGREE_API_URL"))
     return checks
 
 

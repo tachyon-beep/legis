@@ -235,3 +235,47 @@ def test_db_override_bad_url_is_error(tmp_path, monkeypatch):
 def test_legacy_stray_db_is_warn(tmp_path):
     (tmp_path / "legis-governance.db").write_text("x")
     assert check_legacy_stray_db(tmp_path).status == "warn"
+
+
+# ---------------------------------------------------------------------------
+# Task 8: governance integrity + runtime/sibling checks
+# ---------------------------------------------------------------------------
+
+
+from legis.doctor import check_audit_chain, check_hmac_key, check_sibling_url
+
+
+def test_audit_chain_absent_db_is_ok(tmp_path):
+    c = check_audit_chain("store.governance_chain", "sqlite:///" + str(tmp_path / "nope.db"))
+    assert c.status == "ok"
+    # No-leak invariant: must NOT create the file
+    assert not (tmp_path / "nope.db").exists()
+
+
+def test_audit_chain_intact_db_is_ok(tmp_path):
+    from legis.store.audit_store import AuditStore
+
+    url = "sqlite:///" + str(tmp_path / "gov.db")
+    AuditStore(url)  # creates schema
+    assert check_audit_chain("store.governance_chain", url).status == "ok"
+
+
+def test_hmac_key_warn_when_protected_set_without_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "secrets.read")
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    c = check_hmac_key(tmp_path)
+    assert c.status == "warn"
+
+
+def test_hmac_key_never_prints_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "secrets.read")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "super-secret-value")
+    c = check_hmac_key(tmp_path)
+    assert c.status == "ok"
+    assert "super-secret-value" not in (c.message or "")
+
+
+def test_sibling_url_invalid_is_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOOMWEAVE_API_URL", "localhost:9620")  # no scheme
+    c = check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL")
+    assert c.status == "error"
