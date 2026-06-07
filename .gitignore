@@ -42,3 +42,6 @@ wardline.yaml
 *.db-wal
 # Federated runtime-state subtree (legis is the sole writer; never .weft/ wholesale)
 .weft/legis/
+
+# Filigree issue tracker
+.weft/
