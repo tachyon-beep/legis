@@ -18,8 +18,10 @@ keeps them in agreement. The default URLs are therefore cwd-relative
 ``weft.toml`` may carry a ``[legis]`` table; we read it but never write it.
 The single enrichment knob is ``store_dir`` (relocate the subtree; relative to
 the project root, or absolute). Per-DB overrides remain the ``LEGIS_*_DB`` env
-vars, which take precedence over weft.toml. An absent file, an absent
-``[legis]`` section, or even a malformed weft.toml must still boot on the
+vars, which take precedence over weft.toml — a precedence the ``*_db_url()``
+resolvers below implement directly (via ``_resolve_db_url``), so every consumer
+gets it by calling the resolver, not by re-wrapping it. An absent file, an
+absent ``[legis]`` section, or even a malformed weft.toml must still boot on the
 built-in defaults — legis never *depends* on weft.toml (Doctrine §5 deletion
 test).
 
@@ -36,6 +38,7 @@ storage.
 from __future__ import annotations
 
 import logging
+import os
 import tomllib
 from pathlib import Path
 
@@ -51,6 +54,12 @@ _CHECK_DB_NAME = "legis-checks.db"
 _GOVERNANCE_DB_NAME = "legis-governance.db"
 _BINDING_DB_NAME = "legis-binding.db"
 _PULL_DB_NAME = "legis-pulls.db"
+
+# Per-DB override env vars. Highest precedence (see ``_resolve_db_url``).
+_CHECK_DB_ENV = "LEGIS_CHECK_DB"
+_GOVERNANCE_DB_ENV = "LEGIS_GOVERNANCE_DB"
+_BINDING_DB_ENV = "LEGIS_BINDING_DB"
+_PULL_DB_ENV = "LEGIS_PULL_DB"
 
 
 def project_root() -> Path:
@@ -107,20 +116,37 @@ def _sqlite_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def _resolve_db_url(env_var: str, db_name: str) -> str:
+    """Resolve a store URL with the documented precedence (module docstring):
+    the per-DB ``LEGIS_*_DB`` override wins; otherwise the URL is composed from
+    the weft.toml ``store_dir`` (or the built-in ``.weft/legis`` default) under
+    the canonical filename.
+
+    This is THE single resolution point — callers invoke the ``*_db_url()``
+    function directly and never re-implement the env layering, so changing
+    precedence or adding an alias is a one-line edit here, not ~11 call sites.
+    ``env_var in os.environ`` (not ``.get(...) or``) so a present-but-empty
+    override is returned verbatim rather than silently falling through.
+    """
+    if env_var in os.environ:
+        return os.environ[env_var]
+    return _sqlite_url(_store_dir() / db_name)
+
+
 def check_db_url() -> str:
-    return _sqlite_url(_store_dir() / _CHECK_DB_NAME)
+    return _resolve_db_url(_CHECK_DB_ENV, _CHECK_DB_NAME)
 
 
 def governance_db_url() -> str:
-    return _sqlite_url(_store_dir() / _GOVERNANCE_DB_NAME)
+    return _resolve_db_url(_GOVERNANCE_DB_ENV, _GOVERNANCE_DB_NAME)
 
 
 def binding_db_url() -> str:
-    return _sqlite_url(_store_dir() / _BINDING_DB_NAME)
+    return _resolve_db_url(_BINDING_DB_ENV, _BINDING_DB_NAME)
 
 
 def pull_db_url() -> str:
-    return _sqlite_url(_store_dir() / _PULL_DB_NAME)
+    return _resolve_db_url(_PULL_DB_ENV, _PULL_DB_NAME)
 
 
 def ensure_sqlite_parent(url: str) -> None:

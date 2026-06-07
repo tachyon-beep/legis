@@ -193,6 +193,14 @@ listed as not-yet-built.
   field-set change can still be introduced as a new tag without ambiguity.
 - **MCP idempotency replays scoped** so a replayed call resolves against its own
   prior result, not a sibling's.
+- **Store-URL resolution centralised in `config.py`** — the `LEGIS_*_DB` env
+  override precedence the module documents is now implemented inside the
+  `*_db_url()` resolvers themselves (via `_resolve_db_url`), instead of being
+  re-wrapped as `os.environ.get("LEGIS_*_DB", *_db_url())` at ~11 call sites
+  across `api/app.py`, `mcp.py`, and `cli.py`. Consumers call the resolver
+  directly; precedence/alias changes are a one-line edit in one place, and a
+  direct resolver call can no longer silently ignore its override. No change to
+  the resolved URLs for existing deployments.
 
 ### Fixed
 - **Ingest accepts realistic scans** — the over-strict Wardline ingest validator

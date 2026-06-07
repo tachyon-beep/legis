@@ -89,10 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_judge_flags(mcp)
 
-    import os
-
     from legis.config import governance_db_url
-    gov_db_default = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
+    gov_db_default = governance_db_url()
     rate = subparsers.add_parser(
         "check-override-rate",
         help="Fail (exit 1) if the override-rate gate is FAIL — for CI",

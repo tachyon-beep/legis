@@ -179,7 +179,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
     hmac_key = os.environ.get("LEGIS_HMAC_KEY")
     if hmac_key:
         key = hmac_key.encode("utf-8")
-        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url()))
+        store = AuditStore(governance_db_url())
         protected_policies_str = os.environ.get("LEGIS_PROTECTED_POLICIES", "")
         protected_policies = frozenset(
             p.strip() for p in protected_policies_str.split(",") if p.strip()
@@ -198,7 +198,7 @@ def build_runtime(agent_id: str) -> McpRuntime:
         from legis.governance.binding_ledger import BindingLedger
 
         binding_ledger = BindingLedger(
-            AuditStore(os.environ.get("LEGIS_BINDING_DB", binding_db_url())),
+            AuditStore(binding_db_url()),
             clock,
             key,
         )
@@ -561,7 +561,7 @@ def _engine(runtime: McpRuntime) -> EnforcementEngine:
     if runtime.engine is None:
         from legis.config import governance_db_url
 
-        store = AuditStore(os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url()))
+        store = AuditStore(governance_db_url())
         runtime.engine = EnforcementEngine(store, SystemClock())
     return runtime.engine
 
@@ -570,9 +570,7 @@ def _checks(runtime: McpRuntime) -> CheckSurface:
     if runtime.check_surface is None:
         from legis.config import check_db_url
 
-        runtime.check_surface = CheckSurface(
-            os.environ.get("LEGIS_CHECK_DB", check_db_url())
-        )
+        runtime.check_surface = CheckSurface(check_db_url())
     return runtime.check_surface
 
 
@@ -580,9 +578,7 @@ def _pulls(runtime: McpRuntime) -> PullSurface:
     if runtime.pull_surface is None:
         from legis.config import pull_db_url
 
-        runtime.pull_surface = PullSurface(
-            os.environ.get("LEGIS_PULL_DB", pull_db_url())
-        )
+        runtime.pull_surface = PullSurface(pull_db_url())
     return runtime.pull_surface
 
 

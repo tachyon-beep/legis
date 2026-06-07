@@ -12,10 +12,29 @@ These pin the contract from the weft config/store consolidation:
 
 from __future__ import annotations
 
+import pytest
+
 from legis import config
 
 
-def test_all_four_db_urls_default_under_weft_legis(tmp_path, monkeypatch):
+@pytest.fixture
+def _clear_db_env(monkeypatch):
+    """Clear the per-DB ``LEGIS_*_DB`` overrides so a test can probe the lower
+    weft.toml / built-in-default precedence layers. The autouse suite fixture
+    (tests/conftest.py) sets these to isolate stores, and the resolvers now honour
+    them (highest precedence), so a default-layer assertion must drop them first.
+    A test's own monkeypatch runs after the autouse fixture, so this wins.
+    """
+    for var in (
+        "LEGIS_CHECK_DB",
+        "LEGIS_GOVERNANCE_DB",
+        "LEGIS_BINDING_DB",
+        "LEGIS_PULL_DB",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_all_four_db_urls_default_under_weft_legis(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert config.check_db_url() == "sqlite:///.weft/legis/legis-checks.db"
     assert config.governance_db_url() == "sqlite:///.weft/legis/legis-governance.db"
@@ -23,13 +42,30 @@ def test_all_four_db_urls_default_under_weft_legis(tmp_path, monkeypatch):
     assert config.pull_db_url() == "sqlite:///.weft/legis/legis-pulls.db"
 
 
-def test_db_urls_use_builtin_defaults_with_no_weft_toml(tmp_path, monkeypatch):
+def test_legis_db_env_var_takes_precedence_over_weft_toml_and_default(tmp_path, monkeypatch):
+    # The documented precedence (module docstring): a per-DB LEGIS_*_DB override
+    # wins over both the weft.toml store_dir and the built-in default. The
+    # resolvers must implement this themselves, so a bare call honours the env.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "weft.toml").write_text(
+        '[legis]\nstore_dir = "var/legis-state"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", "sqlite:///explicit-gov.db")
+    monkeypatch.setenv("LEGIS_CHECK_DB", "sqlite:///explicit-check.db")
+    assert config.governance_db_url() == "sqlite:///explicit-gov.db"
+    assert config.check_db_url() == "sqlite:///explicit-check.db"
+    # An unset var still falls through to weft.toml store_dir for that DB.
+    monkeypatch.delenv("LEGIS_BINDING_DB", raising=False)
+    assert config.binding_db_url() == "sqlite:///var/legis-state/legis-binding.db"
+
+
+def test_db_urls_use_builtin_defaults_with_no_weft_toml(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert not (tmp_path / "weft.toml").exists()
     assert config.governance_db_url() == "sqlite:///.weft/legis/legis-governance.db"
 
 
-def test_weft_toml_store_dir_relocates_the_subtree(tmp_path, monkeypatch):
+def test_weft_toml_store_dir_relocates_the_subtree(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "weft.toml").write_text(
         '[legis]\nstore_dir = "var/legis-state"\n', encoding="utf-8"
@@ -38,7 +74,7 @@ def test_weft_toml_store_dir_relocates_the_subtree(tmp_path, monkeypatch):
     assert config.check_db_url() == "sqlite:///var/legis-state/legis-checks.db"
 
 
-def test_weft_toml_absolute_store_dir_yields_absolute_url(tmp_path, monkeypatch):
+def test_weft_toml_absolute_store_dir_yields_absolute_url(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     abs_dir = tmp_path / "srv" / "legis"
     (tmp_path / "weft.toml").write_text(
@@ -47,19 +83,19 @@ def test_weft_toml_absolute_store_dir_yields_absolute_url(tmp_path, monkeypatch)
     assert config.governance_db_url() == f"sqlite:///{abs_dir.as_posix()}/legis-governance.db"
 
 
-def test_weft_toml_without_legis_section_uses_defaults(tmp_path, monkeypatch):
+def test_weft_toml_without_legis_section_uses_defaults(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "weft.toml").write_text('[filigree]\ndb = "x"\n', encoding="utf-8")
     assert config.governance_db_url() == "sqlite:///.weft/legis/legis-governance.db"
 
 
-def test_malformed_weft_toml_is_not_load_bearing(tmp_path, monkeypatch):
+def test_malformed_weft_toml_is_not_load_bearing(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "weft.toml").write_text("this is = = not valid toml [[[", encoding="utf-8")
     assert config.governance_db_url() == "sqlite:///.weft/legis/legis-governance.db"
 
 
-def test_computing_db_url_creates_no_directories(tmp_path, monkeypatch):
+def test_computing_db_url_creates_no_directories(_clear_db_env, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _ = config.governance_db_url()
     _ = config.check_db_url()

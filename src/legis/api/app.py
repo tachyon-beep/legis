@@ -340,7 +340,7 @@ def create_app(
         from legis.clock import SystemClock
         from legis.store.audit_store import AuditStore
 
-        gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
+        gov_db_url = governance_db_url()
         gov_store = AuditStore(gov_db_url)
         clock = SystemClock()
 
@@ -371,7 +371,7 @@ def create_app(
 
         if binding_ledger is None:
             from legis.governance.binding_ledger import BindingLedger
-            bind_db_url = os.environ.get("LEGIS_BINDING_DB", binding_db_url())
+            bind_db_url = binding_db_url()
             binding_ledger = BindingLedger(AuditStore(bind_db_url), clock, hmac_key)
     state: dict[str, Any] = {
         "checks": check_surface,
@@ -385,13 +385,13 @@ def create_app(
 
     def checks() -> CheckSurface:
         if state["checks"] is None:
-            check_db = os.environ.get("LEGIS_CHECK_DB", check_db_url())
+            check_db = check_db_url()
             state["checks"] = CheckSurface(check_db)
         return state["checks"]
 
     def pulls() -> PullSurface:
         if state["pulls"] is None:
-            pull_db = os.environ.get("LEGIS_PULL_DB", pull_db_url())
+            pull_db = pull_db_url()
             state["pulls"] = PullSurface(pull_db)
         return state["pulls"]
 
@@ -400,7 +400,7 @@ def create_app(
             from legis.clock import SystemClock
             from legis.store.audit_store import AuditStore
 
-            gov_db_url = os.environ.get("LEGIS_GOVERNANCE_DB", governance_db_url())
+            gov_db_url = governance_db_url()
             state["enforcement"] = EnforcementEngine(
                 AuditStore(gov_db_url), SystemClock()
             )
