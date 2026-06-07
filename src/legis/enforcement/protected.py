@@ -16,7 +16,7 @@ from typing import Any
 
 from legis.clock import Clock
 from legis.enforcement.judge import Judge
-from legis.enforcement.signing import SIG_PREFIX_V1, sign, verify
+from legis.enforcement.signing import sign, verify
 from legis.enforcement.signoff import signoff_signing_fields
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
@@ -76,21 +76,6 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return fields
-
-
-def legacy_signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Protected override fields signed by legacy ``hmac-sha256:v1`` records."""
-    ext = payload.get("extensions") or {}
-    return {
-        "policy": payload.get("policy"),
-        "entity": payload.get("entity_key"),
-        "verdict": ext.get("judge_verdict"),
-        "model": ext.get("judge_model"),
-        "recorded_at": payload.get("recorded_at"),
-        "rationale": payload.get("rationale"),
-        "file_fingerprint": ext.get("file_fingerprint"),
-        "ast_path": ext.get("ast_path"),
-    }
 
 
 class TrailVerifier:
@@ -153,11 +138,7 @@ class TrailVerifier:
                     raise TamperError(
                         f"protected record seq={rec.seq} is structurally malformed: {exc}"
                     ) from exc
-                if not verify(fields, sig, self._key) and not (
-                    isinstance(sig, str)
-                    and sig.startswith(SIG_PREFIX_V1)
-                    and verify(legacy_signing_fields(rec.payload), sig, self._key)
-                ):
+                if not verify(fields, sig, self._key):
                     raise TamperError(
                         f"protected record seq={rec.seq} signature does not verify"
                     )

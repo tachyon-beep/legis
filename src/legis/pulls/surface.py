@@ -5,11 +5,15 @@ from __future__ import annotations
 from sqlalchemy import Column, Integer, MetaData, String, Table, Text, create_engine, delete, insert, select
 from sqlalchemy.pool import NullPool
 
+from legis.provenance import Provenance
 from legis.pulls.models import PullRequest, PullRequestState
 
 
 class PullSurface:
     def __init__(self, db_url: str) -> None:
+        from legis.config import ensure_sqlite_parent
+
+        ensure_sqlite_parent(db_url)
         self._engine = create_engine(db_url, future=True, poolclass=NullPool)
         self._md = MetaData()
         self._pulls = Table(
@@ -69,5 +73,5 @@ class PullSurface:
             state=PullRequestState(row.state),
             url=row.url,
             recorded_by=row.recorded_by,
-            provenance=row.provenance or "unauthenticated",
+            provenance=row.provenance or Provenance.UNAUTHENTICATED,
         )

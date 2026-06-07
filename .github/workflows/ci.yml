@@ -15,8 +15,12 @@ jobs:
           enable-cache: true
       - name: Install dependencies
         run: uv sync --dev
+      - name: Run lint
+        run: uv run ruff check src
       - name: Run test suite
-        run: uv run pytest --cov=legis --cov-report=term-missing --cov-fail-under=70
+        run: uv run pytest --cov=legis --cov-report=term-missing --cov-report=json --cov-fail-under=88
+      - name: Enforce per-package coverage floors
+        run: uv run python scripts/check_coverage_floors.py
       - name: Run SEI conformance oracle
         run: uv run pytest tests/conformance/test_sei_oracle.py
       - name: Run live Loomweave oracle
@@ -46,4 +50,6 @@ jobs:
         # Remove this once a real governance DB is wired into CI.
         env:
           LEGIS_ALLOW_MISSING_GOVERNANCE_DB: "1"
-        run: uv run legis governance-gate --db sqlite:///legis-governance.db
+        # No --db: use the resolved default store (.weft/legis/legis-governance.db),
+        # the same location the server/MCP write to.
+        run: uv run legis governance-gate

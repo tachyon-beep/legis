@@ -15,6 +15,30 @@ _ENV_IDENTITY = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_legis_store_locations(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redirect every legis store to a per-test tmp dir.
+
+    Store URLs default to the cwd-relative ``.weft/legis/`` subtree (see
+    ``legis.config``); a test that builds a default-path store without pinning a
+    location would otherwise drop that subtree into the repo working tree.
+    Pointing the four ``LEGIS_*_DB`` env vars at a unique tmp directory isolates
+    them centrally for the whole suite (legis-3d295a6f7f). A test that sets — or
+    deletes — its own ``LEGIS_*_DB`` still overrides this, since its monkeypatch
+    runs after the fixture.
+    """
+    store = tmp_path_factory.mktemp("legis-store")
+    for var, name in (
+        ("LEGIS_CHECK_DB", "legis-checks.db"),
+        ("LEGIS_GOVERNANCE_DB", "legis-governance.db"),
+        ("LEGIS_BINDING_DB", "legis-binding.db"),
+        ("LEGIS_PULL_DB", "legis-pulls.db"),
+    ):
+        monkeypatch.setenv(var, f"sqlite:///{(store / name).as_posix()}")
+
+
 @pytest.fixture
 def unsafe_dev_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEGIS_UNSAFE_DEV_AUTH", "1")

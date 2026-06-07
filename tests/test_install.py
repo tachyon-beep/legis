@@ -1,0 +1,823 @@
+"""Tests for legis.install — instruction injection, skills, hooks, gitignore."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import stat
+
+import pytest
+
+from legis import install
+from legis.install import (
+    INSTRUCTIONS_MARKER,
+    SKILL_NAME,
+    UnsafeInstallPathError,
+    _build_instructions_block,
+    _extract_marker_token,
+    _instructions_hash,
+    _instructions_text,
+    _instructions_version,
+    _marker_token,
+    _skill_tree_fingerprint,
+    ensure_gitignore,
+    inject_instructions,
+    install_claude_code_hooks,
+    install_codex_skills,
+    install_skills,
+    reject_symlink,
+)
+
+
+# ---------------------------------------------------------------------------
+# Instructions block primitives
+# ---------------------------------------------------------------------------
+
+
+def test_instructions_text_is_nonempty_and_marker_free():
+    text = _instructions_text()
+    assert text.strip()
+    # The body must not contain markers; they are added programmatically.
+    assert INSTRUCTIONS_MARKER not in text
+    assert "/legis:instructions" not in text
+
+
+def test_instructions_hash_is_stable_8_hex():
+    h = _instructions_hash()
+    assert len(h) == 8
+    assert all(c in "0123456789abcdef" for c in h)
+    assert h == _instructions_hash()
+
+
+def test_instructions_version_prefers_dist_metadata():
+    import importlib.metadata
+
+    # Prefers installed distribution metadata; falls back to legis.__version__.
+    # (In a dev venv the editable dist metadata can lag the source __version__;
+    # in a real release they agree. Assert the documented preference, not a
+    # hardcoded string.)
+    try:
+        expected = importlib.metadata.version("legis")
+    except importlib.metadata.PackageNotFoundError:
+        from legis import __version__
+
+        expected = __version__
+    assert _instructions_version() == expected
+    assert _instructions_version()  # non-empty
+
+
+def test_instructions_version_falls_back_to_dunder(monkeypatch):
+    import importlib.metadata
+
+    def _raise(_name):
+        raise importlib.metadata.PackageNotFoundError("legis")
+
+    monkeypatch.setattr(install.importlib.metadata, "version", _raise)
+    from legis import __version__
+
+    assert _instructions_version() == __version__
+
+
+def test_build_block_has_open_and_close_markers():
+    block = _build_instructions_block()
+    assert block.startswith(f"{INSTRUCTIONS_MARKER}:{_marker_token()} -->")
+    assert block.rstrip().endswith("<!-- /legis:instructions -->")
+    assert _instructions_text() in block
+
+
+def test_extract_marker_token_round_trips_the_writer():
+    # The freshness check's reader must parse the exact marker the writer emits.
+    # Driving it off the real `_build_instructions_block()` output (not a
+    # hand-written marker) is what keeps the reader from silently desyncing if
+    # the marker format ever changes — both live in install.py now.
+    assert _extract_marker_token(_build_instructions_block()) == _marker_token()
+
+
+def test_extract_marker_token_ignores_the_close_marker_and_absence():
+    # The close marker (`<!-- /legis:instructions -->`) carries no token and must
+    # not be mistaken for the open marker; absent any marker yields None.
+    assert _extract_marker_token("<!-- /legis:instructions -->") is None
+    assert _extract_marker_token("no marker here") is None
+
+
+# ---------------------------------------------------------------------------
+# inject_instructions
+# ---------------------------------------------------------------------------
+
+
+def test_inject_creates_missing_file(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    ok, msg = inject_instructions(target)
+    assert ok
+    assert "Created" in msg
+    content = target.read_text()
+    assert INSTRUCTIONS_MARKER in content
+    assert "<!-- /legis:instructions -->" in content
+
+
+def test_inject_appends_to_existing_file_without_marker(tmp_path):
+    target = tmp_path / "AGENTS.md"
+    target.write_text("# My project\n\nExisting guidance.\n")
+    ok, msg = inject_instructions(target)
+    assert ok
+    assert "Appended" in msg
+    content = target.read_text()
+    assert "Existing guidance." in content
+    assert content.index("Existing guidance.") < content.index(INSTRUCTIONS_MARKER)
+
+
+def test_inject_replaces_existing_block_preserving_surrounding_text(tmp_path, monkeypatch):
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("TOP\n\n")
+    inject_instructions(target)
+    # Append trailing user content after the block.
+    target.write_text(target.read_text() + "\nBOTTOM\n")
+
+    monkeypatch.setattr(install, "_instructions_text", lambda: "NEW BODY CONTENT\n")
+    ok, msg = inject_instructions(target)
+    assert ok
+    assert "Updated" in msg
+    content = target.read_text()
+    assert "TOP" in content
+    assert "BOTTOM" in content
+    assert "NEW BODY CONTENT" in content
+    # Exactly one block remains.
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert content.count("<!-- /legis:instructions -->") == 1
+
+
+def test_inject_idempotent_when_content_unchanged(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    inject_instructions(target)
+    first = target.read_text()
+    inject_instructions(target)
+    assert target.read_text() == first
+
+
+def test_inject_repairs_block_with_missing_end_marker(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    # Open marker but no close marker, plus trailing junk.
+    target.write_text(f"HEAD\n{INSTRUCTIONS_MARKER}:vX:dead -->\norphan body no close\n")
+    ok, msg = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "HEAD" in content
+    assert "orphan body no close" not in content
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert "<!-- /legis:instructions -->" in content
+
+
+def test_inject_rejects_symlink_target(tmp_path):
+    real = tmp_path / "real.md"
+    real.write_text("x")
+    link = tmp_path / "CLAUDE.md"
+    link.symlink_to(real)
+    ok, msg = inject_instructions(link)
+    assert ok is False
+    assert "symlink" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# inject_instructions — foreign-block safety (peer of filigree-bcbd4d66fd)
+# ---------------------------------------------------------------------------
+
+_WARDLINE_BLOCK = (
+    "<!-- wardline:instructions:v1:abcd1234 -->\n"
+    "wardline body\n"
+    "<!-- /wardline:instructions -->\n"
+)
+
+
+def test_inject_malformed_block_preserves_coresident_foreign_block(tmp_path):
+    """An unclosed legis block must NOT truncate a sibling block that follows it."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body, block NOT closed\n"
+        + _WARDLINE_BLOCK
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # The foreign block survives intact.
+    assert "wardline body" in content
+    assert "<!-- wardline:instructions:v1:abcd1234 -->" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # Exactly one well-formed legis block remains; the orphan body is gone.
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert "block NOT closed" not in content
+    assert content.count("<!-- /legis:instructions -->") == 1
+
+
+def test_inject_shape2_sandwich_preserves_foreign_block(tmp_path, caplog):
+    """Unclosed-first / closed-later legis must not splice over a sandwiched sibling.
+
+    The stale second legis block surviving beyond the foreign fence must also be
+    surfaced as a warning (refinement 4), not silently shipped as a split brain.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "first legis body (unclosed)\n"
+        + _WARDLINE_BLOCK
+        + f"{INSTRUCTIONS_MARKER}:vY:beef -->\n"
+        "second legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # Stale duplicate beyond the foreign fence is surfaced, not silent.
+    assert "duplicate that could not be canonicalised" in caplog.text
+
+
+def test_inject_uppercase_namespace_sibling_survives(tmp_path):
+    """A sibling block with an upper-cased namespace is still a boundary (refinement 1)."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body no close\n"
+        "<!-- Wardline:instructions:v1:abcd1234 -->\n"
+        "wardline body\n"
+        "<!-- /Wardline:instructions -->\n"
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /Wardline:instructions -->" in content
+
+
+def test_instructions_body_has_no_fence_token():
+    """Pin: the shipped body must not contain a ``:instructions`` fence (refinement 2).
+
+    The bounded scan runs across legis's own body; a fence token there would
+    misroute the common well-formed path into bounded recovery.
+    """
+    assert ":instructions" not in _instructions_text()
+
+
+def test_inject_marker_text_inside_foreign_block_not_mistaken_for_own(tmp_path):
+    """A legis marker quoted *inside* a sibling block is not legis's own anchor.
+
+    The literal ``<!-- legis:instructions ... -->`` can legitimately appear inside
+    another tool's block (a quoted example, documentation). A bare substring anchor
+    would splice there and gut the sibling. The anchor must respect foreign block
+    spans, so this file has *no* legis block of its own → append, sibling untouched.
+    """
+    target = tmp_path / "CLAUDE.md"
+    foreign_block = (
+        "<!-- wardline:instructions:v1:zzz -->\n"
+        f"See example: {INSTRUCTIONS_MARKER}:v0:0000 -->\n"
+        "WARDLINE BODY MUST SURVIVE\n"
+        "<!-- /wardline:instructions -->\n"
+    )
+    target.write_text("HEAD\n" + foreign_block)
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # The sibling block is preserved verbatim — not gutted, not spliced into.
+    assert foreign_block in content
+    assert "WARDLINE BODY MUST SURVIVE" in content
+    # Exactly one well-formed legis block was appended, after the sibling close.
+    assert content.count("<!-- /legis:instructions -->") == 1
+    assert content.rindex(INSTRUCTIONS_MARKER) > content.index(
+        "<!-- /wardline:instructions -->"
+    )
+
+
+def test_inject_reinject_preserves_foreign_block_placed_before_legis(tmp_path):
+    """A sibling block *before* the legis block survives re-injection on drift.
+
+    The shared-file layout where wardline installs before legis is realistic; the
+    in-place replace must not reach backwards past ``start`` into a preceding block.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        + _WARDLINE_BLOCK
+        + f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "stale legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- wardline:instructions:v1:abcd1234 -->" in content
+    assert "<!-- /wardline:instructions -->" in content
+    # The legis block was replaced in place (stale body gone), exactly one remains.
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    assert "stale legis body" not in content
+    # The sibling still precedes the legis block.
+    assert content.index("<!-- wardline:instructions:v1:abcd1234 -->") < content.index(
+        INSTRUCTIONS_MARKER
+    )
+
+
+def test_inject_bounded_recovery_is_idempotent(tmp_path):
+    """Repairing a malformed block next to a foreign one is byte-stable on re-run (refinement 3)."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "legis body no close\n"
+        + _WARDLINE_BLOCK
+    )
+    inject_instructions(target)
+    first = target.read_text()
+    inject_instructions(target)
+    second = target.read_text()
+    assert first == second
+    assert "wardline body" in second
+
+
+def test_inject_into_empty_file_produces_clean_single_block(tmp_path):
+    """An existing zero-byte file gets a clean block, not leading blank lines."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("")
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+    # No leading blank-line artifact: the block starts at byte 0.
+    assert content.startswith(INSTRUCTIONS_MARKER)
+
+
+def test_inject_crlf_file_preserves_foreign_block(tmp_path):
+    """A CRLF-terminated shared file: the sibling block still survives recovery."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_bytes(
+        (
+            "HEAD\r\n"
+            f"{INSTRUCTIONS_MARKER}:vX:dead -->\r\n"
+            "legis body, block NOT closed\r\n"
+            "<!-- wardline:instructions:v1:abcd1234 -->\r\n"
+            "wardline body\r\n"
+            "<!-- /wardline:instructions -->\r\n"
+        ).encode("utf-8")
+    )
+    ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    assert "wardline body" in content
+    assert "<!-- /wardline:instructions -->" in content
+    assert content.count(INSTRUCTIONS_MARKER) == 1
+
+
+def test_inject_two_clean_legis_blocks_canonicalises_first_keeps_second(tmp_path, caplog):
+    """Two well-formed legis blocks: the first is canonicalised, the second is kept.
+
+    Bounding at the first own close (not EOF) is deliberate — it preserves any
+    trailing content legis does not own, so a second block in the tail is surfaced
+    via a warning rather than silently deleted. Collapsing would require a deletion
+    window over the bytes between the two blocks, which may be user content.
+    """
+    target = tmp_path / "CLAUDE.md"
+    target.write_text(
+        "HEAD\n"
+        f"{INSTRUCTIONS_MARKER}:vX:dead -->\n"
+        "first legis body\n"
+        "<!-- /legis:instructions -->\n"
+        f"{INSTRUCTIONS_MARKER}:vY:beef -->\n"
+        "second legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, _ = inject_instructions(target)
+    assert ok
+    content = target.read_text()
+    # First block canonicalised (stale body gone); second block NOT deleted.
+    assert "first legis body" not in content
+    assert "second legis body" in content
+    # The surviving duplicate is surfaced, not silent.
+    assert caplog.records
+
+
+# ---------------------------------------------------------------------------
+# _atomic_write_text
+# ---------------------------------------------------------------------------
+
+
+def test_atomic_write_preserves_existing_mode(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("seed")
+    os.chmod(target, 0o640)
+    inject_instructions(target)
+    mode = stat.S_IMODE(target.stat().st_mode)
+    assert mode == 0o640
+
+
+def test_reject_symlink_raises_on_symlink(tmp_path):
+    real = tmp_path / "r"
+    real.write_text("x")
+    link = tmp_path / "l"
+    link.symlink_to(real)
+    with pytest.raises(UnsafeInstallPathError):
+        reject_symlink(link)
+
+
+@pytest.mark.parametrize("payload", ["", "   \n\t  \n"])
+def test_atomic_write_refuses_empty_content(tmp_path, payload):
+    """Refuse-to-empty guard (filigree-04bad2a2bf parity): never truncate a file to nothing."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("populated content\n")
+    with pytest.raises(ValueError, match="empty"):
+        install._atomic_write_text(target, payload)
+    # The populated file is left untouched.
+    assert target.read_text() == "populated content\n"
+
+
+# ---------------------------------------------------------------------------
+# Skill pack
+# ---------------------------------------------------------------------------
+
+
+def test_install_skills_copies_pack(tmp_path):
+    ok, msg = install_skills(tmp_path)
+    assert ok
+    skill = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+    assert skill.is_file()
+    assert "legis-workflow" in skill.read_text()
+
+
+def test_install_codex_skills_targets_agents_dir(tmp_path):
+    ok, _ = install_codex_skills(tmp_path)
+    assert ok
+    assert (tmp_path / ".agents" / "skills" / SKILL_NAME / "SKILL.md").is_file()
+
+
+def test_install_skills_idempotent(tmp_path):
+    install_skills(tmp_path)
+    skill = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+    first = skill.read_text()
+    ok, _ = install_skills(tmp_path)
+    assert ok
+    assert skill.read_text() == first
+
+
+def test_skill_tree_fingerprint_changes_with_content(tmp_path):
+    root = tmp_path / "pack"
+    root.mkdir()
+    (root / "a.md").write_text("one")
+    fp1 = _skill_tree_fingerprint(root)
+    (root / "a.md").write_text("two")
+    fp2 = _skill_tree_fingerprint(root)
+    assert fp1 != fp2
+
+
+# ---------------------------------------------------------------------------
+# Hook registration
+# ---------------------------------------------------------------------------
+
+
+def _session_commands(settings: dict) -> list[str]:
+    cmds: list[str] = []
+    for block in settings.get("hooks", {}).get("SessionStart", []):
+        for hook in block.get("hooks", []):
+            cmds.append(hook.get("command", ""))
+    return cmds
+
+
+def test_install_hooks_fresh(tmp_path):
+    ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    cmds = _session_commands(settings)
+    assert any(c.endswith("session-context") for c in cmds)
+
+
+def test_install_hooks_idempotent_no_duplicate(tmp_path):
+    install_claude_code_hooks(tmp_path)
+    install_claude_code_hooks(tmp_path)
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    cmds = [c for c in _session_commands(settings) if c.endswith("session-context")]
+    assert len(cmds) == 1
+
+
+def test_install_hooks_upgrades_bare_command(tmp_path, monkeypatch):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "legis session-context"}]}]}}
+        )
+    )
+    # Force a resolved binary path so the bare command must be upgraded.
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok
+    settings = json.loads((claude / "settings.json").read_text())
+    cmds = _session_commands(settings)
+    assert "/opt/bin/legis session-context" in cmds
+    assert cmds.count("/opt/bin/legis session-context") == 1
+
+
+def test_install_hooks_backs_up_malformed_settings(tmp_path, caplog):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{ this is not json")
+    with caplog.at_level(logging.WARNING, logger="legis.install"):
+        ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok
+    assert (claude / "settings.json.bak").is_file()
+    settings = json.loads((claude / "settings.json").read_text())
+    assert any(c.endswith("session-context") for c in _session_commands(settings))
+    # The reset is not silent: the user is told a backup was written.
+    assert ".bak" in msg
+    assert ".bak" in caplog.text
+
+
+def test_install_hooks_does_not_reuse_scoped_block(tmp_path):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "resume", "hooks": [{"type": "command", "command": "legis session-context"}]}
+                    ]
+                }
+            }
+        )
+    )
+    install_claude_code_hooks(tmp_path)
+    settings = json.loads((claude / "settings.json").read_text())
+    # A new unscoped block must be added — the scoped one does not cover cold start.
+    blocks = settings["hooks"]["SessionStart"]
+    unscoped = [b for b in blocks if "matcher" not in b or b.get("matcher") in (None, "*")]
+    assert unscoped
+    assert any(h["command"].endswith("session-context") for b in unscoped for h in b["hooks"])
+
+
+# ---------------------------------------------------------------------------
+# _hook_cmd_matches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("legis session-context", True),
+        ("/usr/local/bin/legis session-context", True),
+        ("/path/python -P -m legis session-context", True),
+        ("/path/python -m legis session-context", True),
+        ("echo legis session-context", False),
+        ("legis serve", False),
+    ],
+)
+def test_hook_cmd_matches(command, expected):
+    assert install._hook_cmd_matches(command, "legis session-context") is expected
+
+
+# ---------------------------------------------------------------------------
+# register_mcp_json
+# ---------------------------------------------------------------------------
+
+
+def test_register_mcp_json_creates_file_with_legis_entry(tmp_path):
+    from legis.install import register_mcp_json, _legis_mcp_entry
+
+    ok, msg = register_mcp_json(tmp_path)
+    assert ok, msg
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    entry = data["mcpServers"]["legis"]
+    assert entry["type"] == "stdio"
+    assert entry["args"][0] == "mcp"
+    assert "--agent-id" in entry["args"]
+
+
+def test_register_mcp_json_preserves_sibling_entries(tmp_path):
+    from legis.install import register_mcp_json
+
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"filigree": {"command": "x", "type": "stdio"}}})
+    )
+    ok, _ = register_mcp_json(tmp_path)
+    assert ok
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    assert "filigree" in data["mcpServers"]
+    assert "legis" in data["mcpServers"]
+
+
+def test_register_mcp_json_idempotent(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path)
+    first = (tmp_path / ".mcp.json").read_text()
+    register_mcp_json(tmp_path)
+    assert (tmp_path / ".mcp.json").read_text() == first
+
+
+def test_legis_mcp_entry_module_fallback_splits_command_and_args(monkeypatch):
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/usr/bin/python3", "-P", "-m", "legis"])
+    entry = install._legis_mcp_entry("claude-code")
+    assert entry["command"] == "/usr/bin/python3"
+    assert entry["args"] == ["-P", "-m", "legis", "mcp", "--agent-id", "claude-code"]
+
+
+def test_register_mcp_json_explicit_agent_id_wins_over_existing(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path, "claude-code")
+    register_mcp_json(tmp_path, "new-bot")
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    args = data["mcpServers"]["legis"]["args"]
+    i = args.index("--agent-id")
+    assert args[i + 1] == "new-bot"
+
+
+def test_register_mcp_json_default_preserves_existing_agent_id(tmp_path):
+    from legis.install import register_mcp_json
+
+    register_mcp_json(tmp_path, "operator-pick")
+    register_mcp_json(tmp_path)  # default (None) → preserve operator choice
+    data = json.loads((tmp_path / ".mcp.json").read_text())
+    args = data["mcpServers"]["legis"]["args"]
+    i = args.index("--agent-id")
+    assert args[i + 1] == "operator-pick"
+
+
+def test_register_mcp_json_non_dict_top_level_is_rejected_unchanged(tmp_path):
+    from legis.install import register_mcp_json
+
+    mcp = tmp_path / ".mcp.json"
+    mcp.write_text("[]")
+    ok, msg = register_mcp_json(tmp_path)
+    assert ok is False
+    assert "not a JSON object" in msg
+    assert mcp.read_text() == "[]"
+
+
+# ---------------------------------------------------------------------------
+# .gitignore
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_gitignore_creates_file(tmp_path):
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    content = (tmp_path / ".gitignore").read_text()
+    assert ".weft/legis/" in content
+
+
+def test_ensure_gitignore_appends_missing_rules(tmp_path):
+    (tmp_path / ".gitignore").write_text("*.db\n")
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    content = (tmp_path / ".gitignore").read_text()
+    assert "*.db" in content
+    assert ".weft/legis/" in content
+
+
+def test_ensure_gitignore_idempotent(tmp_path):
+    ensure_gitignore(tmp_path)
+    first = (tmp_path / ".gitignore").read_text()
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    assert "already" in msg
+    assert (tmp_path / ".gitignore").read_text() == first
+
+
+# ---------------------------------------------------------------------------
+# Command resolution and safe-path edges
+# ---------------------------------------------------------------------------
+
+
+def test_find_legis_command_prefers_binary_on_path(monkeypatch):
+    monkeypatch.setattr(install.shutil, "which", lambda _name: "/opt/bin/legis")
+    assert install._find_legis_command() == ["/opt/bin/legis"]
+
+
+def test_find_legis_command_module_fallback(monkeypatch):
+    monkeypatch.setattr(install.shutil, "which", lambda _name: None)
+    cmd = install._find_legis_command()
+    assert cmd[-3:] == ["-P", "-m", "legis"]
+
+
+def test_project_path_rejects_symlinked_component(tmp_path):
+    real_dir = tmp_path / "real_dir"
+    real_dir.mkdir()
+    link_dir = tmp_path / ".claude"
+    link_dir.symlink_to(real_dir, target_is_directory=True)
+    with pytest.raises(UnsafeInstallPathError):
+        install.project_path(tmp_path, ".claude", "settings.json")
+
+
+def test_ensure_project_dir_creates_and_returns_dir(tmp_path):
+    created = install.ensure_project_dir(tmp_path, ".claude", "skills")
+    assert created.is_dir()
+    assert created == tmp_path / ".claude" / "skills"
+
+
+def test_install_skills_reports_missing_source(tmp_path, monkeypatch):
+    empty = tmp_path / "no_skills_here"
+    empty.mkdir()
+    monkeypatch.setattr(install, "_get_skills_source_dir", lambda: empty)
+    ok, msg = install_skills(tmp_path)
+    assert ok is False
+    assert "not found" in msg
+
+
+def test_upgrade_hook_commands_tolerates_non_dict_settings():
+    assert install._upgrade_hook_commands({"hooks": []}, "legis session-context", "x") is False
+    assert install._upgrade_hook_commands({}, "legis session-context", "x") is False
+
+
+def test_has_unscoped_session_start_hook_tolerates_non_dict():
+    assert install._has_unscoped_session_start_hook({"hooks": "nope"}, "legis session-context") is False
+    assert install._has_unscoped_session_start_hook({}, "legis session-context") is False
+
+
+def test_install_hooks_leaves_user_scoped_block_command_untouched(tmp_path, monkeypatch):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "resume", "hooks": [{"type": "command", "command": "legis session-context"}]}
+                    ]
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    install_claude_code_hooks(tmp_path)
+    blocks = json.loads((claude / "settings.json").read_text())["hooks"]["SessionStart"]
+
+    scoped = [b for b in blocks if b.get("matcher") == "resume"][0]
+    # The user's portable bare command must NOT be pinned to a venv path.
+    assert scoped["hooks"][0]["command"] == "legis session-context"
+    # legis still adds its own unscoped block with the resolved command.
+    unscoped = [b for b in blocks if "matcher" not in b or b.get("matcher") in (None, "*")]
+    assert any(h["command"] == "/opt/bin/legis session-context" for b in unscoped for h in b["hooks"])
+
+
+def test_install_hooks_backs_up_nested_corrupt_structure(tmp_path):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"hooks": "important user data", "keep": 1}))
+    ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok
+    bak = claude / "settings.json.bak"
+    assert bak.is_file()
+    assert "important user data" in bak.read_text()
+    settings = json.loads((claude / "settings.json").read_text())
+    assert settings.get("keep") == 1  # sibling key preserved
+    assert any(c.endswith("session-context") for c in _session_commands(settings))
+    # The recovery of the corrupt nested structure is surfaced, not silent.
+    assert ".bak" in msg
+
+
+def test_install_skills_restores_original_on_genuine_swap_failure(tmp_path, monkeypatch):
+    install_skills(tmp_path)
+    skill = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+    original = skill.read_text()
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def flaky_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the staging -> target swap
+            raise OSError("simulated swap failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(install.os, "rename", flaky_rename)
+    ok, msg = install_skills(tmp_path)
+
+    assert ok is False
+    assert "swap failed" in msg
+    # The previously installed pack must survive a genuine swap failure.
+    assert skill.is_file()
+    assert skill.read_text() == original
+
+
+def test_inject_append_keeps_marker_off_users_last_line(tmp_path):
+    target = tmp_path / "CLAUDE.md"
+    target.write_text("# Project\nlast line no newline")  # no trailing newline
+    inject_instructions(target)
+    content = target.read_text()
+    assert "last line no newline\n" in content
+    idx = content.index(INSTRUCTIONS_MARKER)
+    assert content[idx - 1] == "\n"
+
+
+def test_ensure_gitignore_present_among_other_rules_not_duplicated(tmp_path):
+    # legis's rule already present alongside unrelated rules → nothing to add.
+    (tmp_path / ".gitignore").write_text("*.db\n.weft/legis/\n")
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    assert "already" in msg  # detected as present, not re-appended
+    content = (tmp_path / ".gitignore").read_text()
+    assert content.count(".weft/legis/") == 1  # not duplicated

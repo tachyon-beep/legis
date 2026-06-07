@@ -386,7 +386,7 @@ def test_scan_results_rejects_both_or_neither_cell_form(tmp_path):
 
 def test_scan_results_block_escalate_only_needs_no_engine(tmp_path):
     # A pure block_escalate scan must route with only a signoff gate wired — no
-    # enforcement engine, so engine()'s lazy legis-governance.db is never created.
+    # enforcement engine, so engine()'s lazy .weft/legis/legis-governance.db is never created.
     sg = SignoffGate(AuditStore(f"sqlite:///{tmp_path / 's.db'}"),
                      FixedClock("2026-06-02T12:00:00+00:00"))
     c = TestClient(create_app(signoff_gate=sg))  # NOT _client: no enforcement injected
@@ -554,6 +554,74 @@ def test_scan_results_records_verified_artifact_provenance(tmp_path, monkeypatch
     assert wardline["commit_sha"] == "a" * 40
     assert wardline["tree_sha"] == "b" * 40
     assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
+
+
+def _dirty_wardline_scan():
+    return {
+        "scanner_identity": "wardline@1.0.0rc1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "dirty": True,
+        "findings": [
+            {"rule_id": "R", "message": "m", "severity": "INFO", "kind": "defect",
+             "fingerprint": "fp", "qualname": "m.f", "properties": {}, "suppressed": "active"}
+        ],
+    }
+
+
+def test_scan_results_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
+    # P1: key configured, dirty + unsigned, no dev-mode -> HTTP 200 typed amber
+    # SKIPPED_DIRTY_TREE (distinguishable from the 422 generic red); nothing
+    # governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
+    c = _client(tmp_path)
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a",
+                        "scan": _dirty_wardline_scan()})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert body["routed"] == []
+    assert c.get("/overrides").json() == []
+
+
+def test_scan_results_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
+    # P0: the explicit dev-mode opt-in governs the unsigned dirty artifact,
+    # recorded honestly as artifact_status="dirty".
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", "1")
+    c = _client(tmp_path)
+
+    resp = c.post("/wardline/scan-results",
+                  json={"cell": "surface_only", "agent_id": "a",
+                        "scan": _dirty_wardline_scan()})
+
+    assert resp.status_code == 200
+    assert resp.json()["outcome"] == "ROUTED"
+    wardline = c.get("/overrides").json()[0]["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "dirty"
+    assert "artifact_signature" not in wardline
+
+
+def test_scan_results_devmode_optin_is_strict_and_fails_safe(tmp_path, monkeypatch):
+    # The dev-mode opt-in is `LEGIS_WARDLINE_ALLOW_DIRTY == "1"` exactly. A
+    # governing knob that gates UNSIGNED artifacts must fail safe: any value other
+    # than "1" (truthy-looking "true", "0", "yes") must NOT govern — it stays the
+    # typed amber skip. Pins the strict parse against a future drift to truthiness.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    for value in ("0", "true", "True", "yes", "2", ""):
+        monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", value)
+        c = _client(tmp_path)
+        resp = c.post("/wardline/scan-results",
+                      json={"cell": "surface_only", "agent_id": "a",
+                            "scan": _dirty_wardline_scan()})
+        assert resp.status_code == 200, value
+        assert resp.json()["outcome"] == "SKIPPED_DIRTY_TREE", value
+        assert resp.json()["routed"] == [], value
 
 
 def test_scan_results_single_cell_still_works(tmp_path):

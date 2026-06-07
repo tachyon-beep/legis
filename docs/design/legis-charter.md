@@ -35,6 +35,19 @@ Legis can describe repository change and CI state on its own.
 
 Legis becomes the common operating picture for project change and governance while preserving the authority boundaries of the other Weft products.
 
+## Known governance gaps
+
+- **Self-asserted write actor (`verified_author: null`).** Actor identity on
+  federation write events (e.g. a comment or status change attributed to an
+  agent) is self-asserted by the caller, not cryptographically verified. For
+  trust-local, single-operator use this is acceptable. A multi-principal
+  deployment that needs non-repudiable write attribution would require a
+  verified-identity binding at the write boundary — Legis governs *change*
+  provenance but does not today mint or verify the actor identity carried on a
+  sibling's write. Verified authorship is a deferred item in the governance
+  story, not a current guarantee. (Surfaced in the 2026-06 lacuna dogfood as
+  finding C3; tracked federation-side under the residual-friction tail.)
+
 ## Near-term scope
 
 The initial repository is documentation-first. It should make the intended role reviewable before runtime implementation starts.

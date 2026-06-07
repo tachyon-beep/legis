@@ -6,6 +6,7 @@ from legis.enforcement.lifecycle import GateStatus
 from legis.enforcement.protected import ProtectedGate, TamperError
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
+from legis.identity.resolver import IdentityResolutionStatus, LineageSnapshotStatus
 from legis.service.errors import AuditIntegrityError, InvalidArgumentError
 from legis.service.governance import (
     compute_override_rate,
@@ -18,11 +19,27 @@ from legis.store.audit_store import AuditStore
 
 
 class _FakeResult:
+    # Mirrors IdentityResolution, including the two mandatory str,Enum status
+    # axes. Defaults derive from ``alive`` via the same bijection the real type
+    # now enforces in __post_init__, so a contradictory fake can't sneak through.
     def __init__(self, entity_key, alive, content_hash, lineage_snapshot):
         self.entity_key = entity_key
         self.alive = alive
         self.content_hash = content_hash
         self.lineage_snapshot = lineage_snapshot
+        self.identity_resolution_status = {
+            True: IdentityResolutionStatus.RESOLVED,
+            False: IdentityResolutionStatus.NOT_ALIVE,
+            None: IdentityResolutionStatus.UNAVAILABLE,
+        }[alive]
+        if alive:
+            self.lineage_snapshot_status = (
+                LineageSnapshotStatus.VERIFIED
+                if lineage_snapshot is not None
+                else LineageSnapshotStatus.UNAVAILABLE
+            )
+        else:
+            self.lineage_snapshot_status = LineageSnapshotStatus.NOT_APPLICABLE
 
 
 class _FakeIdentity:
@@ -262,6 +279,27 @@ def test_evaluate_override_rate_gate_scores_with_key(tmp_path):
     res = evaluate_override_rate_gate(
         records, hmac_key="protected-key", protected_policies=frozenset({"no-eval"})
     )
+    assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
+
+
+def test_evaluate_override_rate_gate_ignores_soft_sniffs_on_simple_records(tmp_path):
+    # A chill/coached record can carry an arbitrary extra_extensions dict through
+    # the simple-tier engine. Such a record holding file_fingerprint/ast_path is
+    # NOT protected (the engine never writes protected_cell or a signature), so a
+    # keyless, non-protected deployment must score it rather than fail closed.
+    from legis.service.governance import evaluate_override_rate_gate
+
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    engine = EnforcementEngine(store, SystemClock())  # chill: no judge
+    engine.submit_override(
+        policy="some-policy",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="r",
+        agent_id="a",
+        extensions={"file_fingerprint": "fp", "ast_path": "ap"},
+    )
+    records = store.read_all()
+    res = evaluate_override_rate_gate(records, hmac_key=None, protected_policies=frozenset())
     assert res.status in {GateStatus.PASS, GateStatus.PASS_WITH_NOTICE, GateStatus.FAIL}
 
 

@@ -1,4 +1,4 @@
-.worktrees/
+# OS / editor cruft
 .DS_Store
 Thumbs.db
 .idea/
@@ -8,14 +8,40 @@ Thumbs.db
 .venv/
 __pycache__/
 *.py[cod]
-.pytest_cache/
 *.egg-info/
-# Local audit/scratch databases (never commit audit data)
-*.db
-.filigree
-.filigree.conf
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+coverage.json
+
+# Worktrees
+.worktrees/
+
+# Local tooling config (machine-specific, never commit)
 .mcp.json
+
+# Agent instruction files — filigree-generated, regenerated each session
+AGENTS.md
+CLAUDE.md
+
+# --- Weft suite working folders & local config (regenerated/local; never commit) ---
+# Filigree — issue-tracker database + project config
+.filigree/
+.filigree.conf
+# Loomweave — code-archaeology index/cache + config
+.loomweave/
 loomweave.yaml
+# Wardline — scanner cache + config
+.wardline/
 wardline.yaml
-.loomweave/loomweave.lock
+# Legis — local audit/scratch databases + their SQLite WAL sidecars
+# (audit data is never committed) and local working dir / config
+*.db
+*.db-shm
+*.db-wal
+# Federated runtime-state subtree (legis is the sole writer; never .weft/ wholesale)
+.weft/legis/
+
+# Filigree issue tracker
+.weft/

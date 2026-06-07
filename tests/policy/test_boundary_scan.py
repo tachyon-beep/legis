@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from legis.canonical import content_hash
 from legis.policy.boundary_scan import scan_policy_boundaries
-from legis.policy.decorator import get_normalized_ast_str
+from legis.policy.decorator import fingerprint_source
 
 
 def _test_fingerprint(source: str) -> str:
-    return content_hash(get_normalized_ast_str(source))
+    # The canonical fingerprint both the gate and scanner compute (Q-L5).
+    return fingerprint_source(source)
 
 
 def _write_boundary_subject(

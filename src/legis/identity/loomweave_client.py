@@ -18,8 +18,6 @@ routes carry ``X-Weft-Component: loomweave:<hmac>`` plus freshness headers.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import ipaddress
 import os
@@ -30,6 +28,13 @@ import urllib.request
 import uuid
 from collections.abc import Mapping
 from typing import Any, Callable, Protocol, runtime_checkable
+
+from legis.weft_signing import (
+    sign_weft_request,
+    weft_body_bytes,
+    weft_hmac_key_from_env,
+    weft_path_and_query,
+)
 
 Fetch = Callable[[str, str, "dict | None", Mapping[str, str]], dict]
 
@@ -50,18 +55,12 @@ class LoomweaveIdentity(Protocol):
     def lineage(self, sei: str) -> list[dict[str, Any]]: ...
 
 
-def _json_body_bytes(body: dict | None) -> bytes:
-    if body is None:
-        return b""
-    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _path_and_query(url: str) -> str:
-    parsed = urllib.parse.urlsplit(url)
-    path_and_query = parsed.path or "/"
-    if parsed.query:
-        path_and_query = f"{path_and_query}?{parsed.query}"
-    return path_and_query
+# The Weft-component transport-HMAC scheme is shared with the Filigree channel;
+# both delegate to ``weft_signing`` so the wire format has a single definition
+# (the module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
+# internal transport and existing call sites stable).
+_json_body_bytes = weft_body_bytes
+_path_and_query = weft_path_and_query
 
 
 def sign_loomweave_request(
@@ -74,23 +73,14 @@ def sign_loomweave_request(
     nonce: str,
 ) -> dict[str, str]:
     """Return Loomweave's current Weft-component HMAC request headers."""
-    body_bytes = _json_body_bytes(body)
-    body_hash = hashlib.sha256(body_bytes).hexdigest()
-    message = (
-        f"{method}\n{_path_and_query(url)}\n{body_hash}\n{timestamp}\n{nonce}"
-    ).encode("utf-8")
-    signature = hmac.new(key, message, hashlib.sha256).hexdigest()
-    return {
-        "X-Weft-Component": f"loomweave:{signature}",
-        "X-Weft-Timestamp": str(timestamp),
-        "X-Weft-Nonce": nonce,
-    }
+    return sign_weft_request(
+        "loomweave", key, method, url, body, timestamp=timestamp, nonce=nonce
+    )
 
 
 def loomweave_hmac_key_from_env() -> bytes | None:
     """Resolve Loomweave HMAC key material from env without making it mandatory."""
-    value = os.environ.get("LEGIS_LOOMWEAVE_HMAC_KEY") or os.environ.get("LEGIS_HMAC_KEY")
-    return value.encode("utf-8") if value else None
+    return weft_hmac_key_from_env("LEGIS_LOOMWEAVE_HMAC_KEY")
 
 
 def _urllib_fetch(

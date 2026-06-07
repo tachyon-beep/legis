@@ -39,6 +39,20 @@ def test_main_no_command_returns_2():
     assert rc == 2
 
 
+def test_version_flag_prints_version_and_exits_zero(capsys):
+    import pytest
+
+    from legis import __version__
+
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["--version"])
+    # argparse's version action exits 0 after printing.
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert __version__ in out
+    assert "legis" in out
+
+
 def test_check_override_rate_exits_1_on_fail(tmp_path, capsys):
     from legis.clock import FixedClock
     from legis.enforcement.engine import EnforcementEngine

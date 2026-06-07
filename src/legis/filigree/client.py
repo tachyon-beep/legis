@@ -8,8 +8,6 @@ content hash for Filigree to store verbatim; drift comparison stays legis's job.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import ipaddress
 import os
@@ -19,6 +17,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable, Protocol, runtime_checkable
+
+from legis.weft_signing import (
+    sign_weft_request,
+    weft_body_bytes,
+    weft_hmac_key_from_env,
+    weft_path_and_query,
+)
 
 Fetch = Callable[[str, str, "dict | None"], dict]
 
@@ -30,18 +35,13 @@ class FiligreeError(RuntimeError):
 MAX_RESPONSE_BYTES = 1_000_000
 
 
-def _json_body_bytes(body: dict | None) -> bytes:
-    if body is None:
-        return b""
-    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _path_and_query(url: str) -> str:
-    parsed = urllib.parse.urlsplit(url)
-    path_and_query = parsed.path or "/"
-    if parsed.query:
-        path_and_query = f"{path_and_query}?{parsed.query}"
-    return path_and_query
+# The Weft-component transport-HMAC scheme is shared with the Loomweave channel;
+# both delegate to ``weft_signing`` so the wire format (canonicalization +
+# ``X-Weft-*`` headers) has a single definition and cannot silently diverge. The
+# module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
+# internal transport and existing call sites stable.
+_json_body_bytes = weft_body_bytes
+_path_and_query = weft_path_and_query
 
 
 def sign_filigree_request(
@@ -55,28 +55,15 @@ def sign_filigree_request(
 ) -> dict[str, str]:
     """Weft-component HMAC headers for a legis->Filigree request (Q-M4).
 
-    Mirrors ``identity.loomweave_client.sign_loomweave_request`` so the Filigree
-    channel has the same transport authentication the Loomweave channel already
-    had. The attach ``signature`` is an app-level attestation about WHAT is
+    Delegates to the shared ``weft_signing`` seam (same scheme as the Loomweave
+    channel). The attach ``signature`` is an app-level attestation about WHAT is
     bound; this proves WHO is calling. ``timestamp`` and ``nonce`` are injected
-    (not generated here) so the signature is deterministically testable.
-
-    Canonicalization contract: the body hash is taken over ``_json_body_bytes``
-    (sorted keys, compact ``(",", ":")`` separators). The wire transport
-    (``_urllib_fetch``) sends those exact bytes, and a Filigree verifier MUST
-    canonicalize the received body identically before hashing — any spacing or
-    key-ordering drift on either side breaks every signature. See ADR-0003.
+    (not generated here) so the signature is deterministically testable. See
+    ``weft_signing`` for the canonicalization contract and ADR-0003.
     """
-    body_hash = hashlib.sha256(_json_body_bytes(body)).hexdigest()
-    message = (
-        f"{method}\n{_path_and_query(url)}\n{body_hash}\n{timestamp}\n{nonce}"
-    ).encode("utf-8")
-    signature = hmac.new(key, message, hashlib.sha256).hexdigest()
-    return {
-        "X-Weft-Component": f"filigree:{signature}",
-        "X-Weft-Timestamp": str(timestamp),
-        "X-Weft-Nonce": nonce,
-    }
+    return sign_weft_request(
+        "filigree", key, method, url, body, timestamp=timestamp, nonce=nonce
+    )
 
 
 def filigree_hmac_key_from_env() -> bytes | None:
@@ -85,8 +72,7 @@ def filigree_hmac_key_from_env() -> bytes | None:
     Absent key -> unsigned (backward compatible with deployments that have not
     provisioned the channel key yet), mirroring ``loomweave_hmac_key_from_env``.
     """
-    value = os.environ.get("LEGIS_FILIGREE_HMAC_KEY") or os.environ.get("LEGIS_HMAC_KEY")
-    return value.encode("utf-8") if value else None
+    return weft_hmac_key_from_env("LEGIS_FILIGREE_HMAC_KEY")
 
 
 @runtime_checkable

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from legis.provenance import Provenance
+
 
 class PullRequestState(str, Enum):
     OPEN = "open"
@@ -24,4 +26,4 @@ class PullRequest:
     # Q-M4: recorded PR metadata is a writer-supplied claim, not forge-verified.
     # "unauthenticated" so a consumer never treats writer-asserted PR state as
     # authoritative (see CheckRun.provenance).
-    provenance: str = "unauthenticated"
+    provenance: str = Provenance.UNAUTHENTICATED

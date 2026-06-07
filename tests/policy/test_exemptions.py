@@ -6,7 +6,6 @@ from legis.policy.exemptions import (
     Exemption,
     ExemptionAllowlist,
     ExemptionError,
-    ExemptionRegistry,
     load_exemptions,
 )
 

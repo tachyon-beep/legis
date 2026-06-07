@@ -6,7 +6,7 @@ Legis is the fourth Weft product: the git/CI and governance side of the suite's 
 
 ## Status
 
-Legis is at **`1.0.0rc1`** — the first release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) underpinning the forthcoming agent-facing MCP surface has landed. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
+Legis is at **`1.0.0rc4`** — the fourth release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--repair]` provides an operator health view and safe repair for the install + config layer. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
 
 ## The Weft suite
 

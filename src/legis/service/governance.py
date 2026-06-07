@@ -51,20 +51,15 @@ def resolve_for_record(
     res = identity.resolve(locator)
     ext: dict = {}
     if res.alive is not None:
-        identity_status = getattr(
-            res, "identity_resolution_status", "resolved" if res.alive else "not_alive"
-        )
-        lineage_status = getattr(
-            res,
-            "lineage_snapshot_status",
-            "verified" if res.lineage_snapshot is not None else "not_applicable",
-        )
+        # Both status axes are mandatory str,Enum fields on IdentityResolution now,
+        # so read them directly — the old getattr fallbacks guarded a shape the
+        # type no longer permits. The members serialize as their bare strings.
         ext["loomweave"] = {
             "alive": res.alive,
             "content_hash": res.content_hash,
             "lineage_snapshot": res.lineage_snapshot,
-            "identity_resolution_status": identity_status,
-            "lineage_snapshot_status": lineage_status,
+            "identity_resolution_status": res.identity_resolution_status,
+            "lineage_snapshot_status": res.lineage_snapshot_status,
         }
     return res.entity_key, ext
 
@@ -89,6 +84,23 @@ def verified_records(
     owner exposing ``records()`` / ``verify_integrity()`` and a verifier
     exposing ``verify()``) so the service layer is not coupled to the
     enforcement concrete types.
+
+    Cost note (rc4 review #7): this verifies the *whole* trail on every call —
+    ``verify_integrity()`` re-hashes the chain (O(N)) and ``trail_verifier.verify``
+    re-checks signatures (O(N)) — including on interactive paths (the keyed
+    override-submit idempotency check and every override-rate read). That cost is
+    the tamper-evidence property, not an oversight: there is no load-time or
+    open-time verification anywhere (``AuditStore.__init__`` only creates the
+    schema), so this path is the only thing standing between a tampered record and
+    an interactive read. Two tempting optimizations are deliberately NOT taken:
+    reserving full verification for the explicit governance-gate would leave every
+    interactive read unverified (a silent tamper window); and incremental
+    verification (trusting a cached last-verified prefix and re-hashing only the
+    new tail) cannot detect out-of-band tampering of an already-verified record —
+    exactly what the hash chain exists to catch — and still would not reach O(1),
+    because the signature pass is O(N) regardless. If trail size ever makes this
+    latency-bound, the honest lever is trail retention/compaction, not narrowing
+    what each read verifies.
     """
     if trail_owner is not None:
         records = trail_owner.records()
@@ -119,14 +131,30 @@ def compute_override_rate(records: list):
 
 
 def _requires_protected_verification(payload: dict[str, Any], protected_policies) -> bool:
+    """Gate-local protected-detection for the KEYLESS branch of the override-rate
+    gate: would refusing to score this record be right because it genuinely needs
+    a signature we have no key to check?
+
+    The discriminator is *status-claim vs incidental metadata*. The markers kept
+    below — ``protected_cell`` and the signature keys — are a record purporting to
+    BE protected, so failing closed on them in a keyless deployment is correct
+    even if injected. ``file_fingerprint`` / ``ast_path`` carry no such claim:
+    they are ordinary metadata, and the simple-tier engine accepts an arbitrary
+    ``extensions`` dict, so they can ride on a never-signed chill/coached record —
+    flagging them would fail-close a non-protected deployment on a record that has
+    nothing to verify. That over-reach is why those two sniffs are dropped here.
+
+    Intentionally NARROWER than ``TrailVerifier._requires_verification`` (the
+    verify path, which must stay over-inclusive): the two answer different
+    questions — keyless "must I refuse to score this?" vs with-key "must this be
+    signed?" — so do NOT re-merge them.
+    """
     ext = payload.get("extensions", {}) or {}
     return (
         payload.get("policy") in protected_policies
         or ext.get("protected_cell") is True
         or "judge_metadata_signature" in ext
         or "signoff_signature" in ext
-        or "file_fingerprint" in ext
-        or "ast_path" in ext
     )
 
 

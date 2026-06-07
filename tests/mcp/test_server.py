@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import sqlite3
 
 from legis.canonical import canonical_json, content_hash
@@ -208,7 +209,10 @@ def test_tools_reject_before_initialize(tmp_path):
     assert responses[0]["error"]["code"] == -32002
 
 
-def test_initialize_rejects_unsupported_protocol_version(tmp_path):
+def test_initialize_negotiates_unsupported_protocol_version(tmp_path):
+    # MCP spec: an unsupported (or newer) requested version must not hard-error;
+    # the server replies with a version it does support and lets the client
+    # decide. This is what lets newer clients (e.g. 2025-06-18) connect.
     runtime, _store = _runtime(tmp_path)
     runtime.initialized = False
 
@@ -218,14 +222,15 @@ def test_initialize_rejects_unsupported_protocol_version(tmp_path):
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "initialize",
-                "params": {"protocolVersion": "1999-01-01"},
+                "params": {"protocolVersion": "2025-06-18"},
             }
         ),
         runtime,
     )
 
-    assert responses[0]["error"]["code"] == -32602
-    assert "2025-03-26" in responses[0]["error"]["data"]["supported"]
+    assert "error" not in responses[0]
+    assert responses[0]["result"]["protocolVersion"] == "2025-03-26"
+    assert responses[0]["result"]["serverInfo"]["name"] == "legis"
 
 
 def test_build_runtime_initialize_does_not_create_local_state(tmp_path, monkeypatch):
@@ -244,9 +249,12 @@ def test_build_runtime_initialize_does_not_create_local_state(tmp_path, monkeypa
     )
 
     assert responses[0]["result"]["serverInfo"]["name"] == "legis"
-    assert not (tmp_path / "legis-governance.db").exists()
-    assert not (tmp_path / "legis-checks.db").exists()
-    assert not (tmp_path / "legis-pulls.db").exists()
+    # The federated store subtree must not be created on the initialize path —
+    # stores are opened lazily, so neither the .weft/legis dir nor any DB appears.
+    assert not (tmp_path / ".weft").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-governance.db").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-checks.db").exists()
+    assert not (tmp_path / ".weft" / "legis" / "legis-pulls.db").exists()
 
 
 def test_policy_explain_returns_service_explanation_payload(tmp_path):
@@ -862,6 +870,31 @@ def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path,
     }
 
 
+def test_scan_route_rejects_empty_severity_map(tmp_path, monkeypatch):
+    # Drift fix: the HTTP adapter already rejected an empty cell_by_severity, but
+    # MCP silently accepted an empty severity_map (routed nothing). Both transports
+    # now reject it up front via the shared resolver — no silent governance skip.
+    monkeypatch.setenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", "1")
+    runtime, store = _runtime(tmp_path)
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": _active_scan(), "severity_map": {}},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    assert store.read_all() == []
+
+
 def test_scan_route_rejects_request_routing_when_server_owned(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
     runtime, store = _runtime(tmp_path)
@@ -995,6 +1028,109 @@ def test_scan_route_records_verified_artifact_provenance(tmp_path, monkeypatch):
     assert wardline["artifact_status"] == "verified"
     assert wardline["scanner_identity"] == "wardline@1"
     assert wardline["artifact_signature"].startswith("hmac-sha256:v2:")
+
+
+def _dirty_scan():
+    return {
+        "scanner_identity": "wardline@1.0.0rc1",
+        "rule_set_version": "rules@abc123",
+        "commit_sha": "a" * 40,
+        "tree_sha": "b" * 40,
+        "dirty": True,
+        **_active_scan(),
+    }
+
+
+def test_scan_route_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
+    # P1: a dirty dev artifact in the CI posture (key configured) is a typed
+    # amber SKIPPED_DIRTY_TREE outcome, NOT the generic INVALID_ARGUMENT red,
+    # and nothing is governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
+    runtime, store = _runtime(tmp_path)
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _dirty_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result.get("isError") is not True
+    structured = result["structuredContent"]
+    assert structured["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert structured["routed"] == []
+    assert store.read_all() == []
+
+
+def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
+    # P0: the explicit server-side dev-mode opt-in governs the unsigned dirty
+    # artifact, recorded honestly as artifact_status="dirty".
+    monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", "1")
+    runtime, store = _runtime(tmp_path)
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _dirty_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert result["outcome"] == "ROUTED"
+    assert result["routed"][0]["mode"] == "surface_only"
+    wardline = store.read_all()[0].payload["extensions"]["wardline"]
+    assert wardline["artifact_status"] == "dirty"
+    assert "artifact_signature" not in wardline
+
+
+def test_scan_route_malformed_finding_is_invalid_argument_red(tmp_path, monkeypatch):
+    # The other half of the dirty-vs-malformed contract (cf. the amber test
+    # above): a malformed finding — here an unknown severity — is a generic red
+    # INVALID_ARGUMENT, NOT the amber SKIPPED_DIRTY_TREE. WardlinePayloadError is
+    # deliberately not a WardlineDirtyTreeError, so the boundary keeps "broken or
+    # tampered scan" distinct from "commit first". Nothing is governed.
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+    malformed = {
+        "findings": [
+            {
+                "rule_id": "PY-WL-101",
+                "message": "untrusted reaches trusted",
+                "severity": "NOT_A_SEVERITY",
+                "kind": "defect",
+                "fingerprint": "fp1",
+            }
+        ]
+    }
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": malformed}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert store.read_all() == []
 
 
 def test_scan_route_fail_on_threshold_routes_each_finding(tmp_path, monkeypatch):
@@ -1184,6 +1320,62 @@ def test_read_tools_return_git_pull_checks_and_override_rate(tmp_path, git_repo)
     assert rate["note"] == "measures operator force-pasts; not movable by agent retries"
 
 
+def test_pull_request_get_returns_checks_on_a_fresh_runtime(tmp_path, monkeypatch):
+    # Regression: build_runtime yields check_surface=None, and the first tool
+    # call an agent makes may be pull_request_get (no prior check_list to lazily
+    # initialise the surface). The result must NOT be call-order-dependent — a PR
+    # with recorded checks must report them, or a governance agent is told a PR is
+    # clean when checks exist and may be failing.
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    checks.record(
+        CheckRun(
+            check_name="unit",
+            run_id="run-1",
+            commit_sha="abc123",
+            outcome=CheckOutcome.FAIL,
+            pr=7,
+            ran_against="abc123",
+        )
+    )
+    # The lazy _checks() builder resolves the DB from LEGIS_CHECK_DB, exactly as a
+    # deployed server does — so the surface is uninitialised but reachable.
+    monkeypatch.setenv("LEGIS_CHECK_DB", f"sqlite:///{tmp_path / 'checks.db'}")
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    pulls.record(
+        PullRequest(
+            number=7,
+            title="Feature",
+            base="main",
+            head="feature",
+            state=PullRequestState.OPEN,
+            url="https://example.test/pr/7",
+        )
+    )
+    # Fresh runtime: check_surface left at its build_runtime default (None).
+    runtime, _store = _runtime(tmp_path, check_surface=None)
+    runtime.pull_surface = pulls
+
+    responses = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "pull_request_get",
+                    "arguments": {"number": "7"},
+                },
+            },
+        ),
+        runtime,
+    )
+
+    pr = responses[0]["result"]["structuredContent"]
+    assert pr["number"] == 7
+    assert pr["checks"][0]["check_name"] == "unit"
+    assert pr["checks"][0]["outcome"] == "fail"
+
+
 def test_check_list_reads_recorded_checks_by_commit_and_pr(tmp_path):
     checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
     checks.record(
@@ -1339,6 +1531,20 @@ cell = "protected"
     assert runtime.cell_registry.cell_for("ordinary.policy") == "chill"
 
 
+def test_tool_registries_are_in_sync():
+    # mcp.py hand-maintains three parallel name registries: the public schema
+    # (tool_definitions), the dispatch table (_TOOL_HANDLERS), and the agent-
+    # exposed set (_AGENT_TOOLS). They MUST agree. A handler without a schema
+    # entry is reachable-but-unvalidated (it accepts arbitrary arg keys); a
+    # schema entry without a handler advertises a tool that errors UNKNOWN_TOOL.
+    # The table-driven dispatch makes exactly this drift easy to introduce, so
+    # pin it directly rather than inferring it from per-tool listing tests.
+    from legis.mcp import _AGENT_TOOLS, _TOOL_HANDLERS, tool_definitions
+
+    defined = {t["name"] for t in tool_definitions()}
+    assert defined == set(_TOOL_HANDLERS) == set(_AGENT_TOOLS)
+
+
 def test_git_rename_feed_get_is_listed():
     from legis.mcp import tool_definitions
 
@@ -1376,6 +1582,11 @@ def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):
     # NotEnabledError is mapped to an error envelope, not raised.
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+    # Le1 (weft-f506e5f845): the recovery hint must name the concrete
+    # enablement path, not a vague "ask the operator". Every governance cell
+    # is wired behind LEGIS_HMAC_KEY in build_runtime.
+    next_action = result["structuredContent"]["next_action"]
+    assert "LEGIS_HMAC_KEY" in next_action
 
 
 def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_path):
@@ -1393,3 +1604,126 @@ def test_filigree_closure_gate_get_surfaces_integrity_failure(monkeypatch, tmp_p
 
     assert result["isError"] is True
     assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+
+
+# --- roadmap 14: stdin JSON-RPC line-size bound ---
+
+def test_run_jsonrpc_rejects_oversized_line_and_stays_framed(tmp_path, monkeypatch):
+    # A single line over the bound is rejected with -32700 and does not consume
+    # the following request — framing realigns at the next newline.
+    monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", "400")
+    runtime, _store = _runtime(tmp_path)
+    runtime.initialized = False
+    oversized = {
+        "jsonrpc": "2.0", "id": 99, "method": "tools/list",
+        "params": {"pad": "A" * 2000},
+    }
+    responses = _run(
+        _messages(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+             "params": {"protocolVersion": "2025-03-26"}},
+            oversized,
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ),
+        runtime,
+    )
+
+    assert responses[0]["id"] == 1 and "result" in responses[0]
+    assert responses[1]["id"] is None
+    assert responses[1]["error"]["code"] == -32700
+    assert "maximum size" in responses[1]["error"]["message"]
+    # The request AFTER the oversized line is still parsed and answered.
+    assert responses[2]["id"] == 2 and "result" in responses[2]
+
+
+def test_max_request_bytes_env_override_and_fallback(monkeypatch, caplog):
+    from legis.mcp import _DEFAULT_MAX_REQUEST_BYTES, _max_request_bytes
+
+    monkeypatch.delenv("LEGIS_MCP_MAX_REQUEST_BYTES", raising=False)
+    assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+    monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", "4096")
+    assert _max_request_bytes() == 4096
+    # Both the unparseable and the non-positive fat-finger fall back, but neither
+    # may do so silently — an operator lowering the bound must see why it was
+    # ignored.
+    for bad in ("not-an-int", "0", "-5"):
+        caplog.clear()
+        monkeypatch.setenv("LEGIS_MCP_MAX_REQUEST_BYTES", bad)
+        with caplog.at_level(logging.WARNING, logger="legis.mcp"):
+            assert _max_request_bytes() == _DEFAULT_MAX_REQUEST_BYTES
+        assert "LEGIS_MCP_MAX_REQUEST_BYTES" in caplog.text
+
+
+def test_read_bounded_line_enforces_bytes_not_chars():
+    # The bound is named in BYTES; readline() counts characters. A record that
+    # fits the char count but whose UTF-8 encoding exceeds the cap (multibyte
+    # content) must still overflow — otherwise the byte limit could be exceeded
+    # ~4×. The record AFTER it must stay framed.
+    from legis.mcp import _read_bounded_line
+
+    multibyte = "中" * 200  # 200 chars, 600 UTF-8 bytes — under 400 chars, over 400 bytes
+    stream = io.StringIO(f"{multibyte}\n" + '{"next":true}\n')
+
+    line, overflow = _read_bounded_line(stream, 400)
+    assert overflow is True
+    assert line.startswith("中")
+
+    nxt, nxt_overflow = _read_bounded_line(stream, 400)
+    assert nxt_overflow is False
+    assert nxt == '{"next":true}\n'
+
+
+def test_read_bounded_line_at_byte_boundary():
+    # The bound counts the trailing newline (fail-safe off-by-one): a 399-byte
+    # data record + "\n" == 400 bytes passes; one more byte overflows.
+    from legis.mcp import _read_bounded_line
+
+    ok_line, ok_overflow = _read_bounded_line(io.StringIO("x" * 399 + "\n"), 400)
+    assert ok_overflow is False
+    assert ok_line == "x" * 399 + "\n"
+
+    _, over_overflow = _read_bounded_line(io.StringIO("x" * 400 + "\n"), 400)
+    assert over_overflow is True
+
+
+def test_read_bounded_line_drains_oversized_multibyte_record():
+    # A record longer than the *character* cap forces the drain loop (first
+    # branch) — exercise it with multibyte content and assert the next record
+    # stays framed (the existing multibyte test stays under the char cap and
+    # hits the second branch instead).
+    from legis.mcp import _read_bounded_line
+
+    stream = io.StringIO("中" * 20 + "\n" + "{}\n")  # 20 chars > 10-char cap
+    line, overflow = _read_bounded_line(stream, 10)
+    assert overflow is True
+    assert line.startswith("中")
+
+    nxt, nxt_overflow = _read_bounded_line(stream, 10)
+    assert nxt == "{}\n"
+    assert nxt_overflow is False
+
+
+def test_service_error_logs_unexpected_internal_error(caplog):
+    # An unexpected exception is surfaced to the caller as INTERNAL_ERROR; it must
+    # also be logged server-side (with the exception) so the operator/Sentry sees
+    # what the agent caller's payload alone would hide.
+    from legis.mcp import _service_error
+
+    with caplog.at_level(logging.ERROR, logger="legis.mcp"):
+        result = _service_error(RuntimeError("kaboom"))
+
+    assert result["structuredContent"]["error_code"] == "INTERNAL_ERROR"
+    assert any(r.levelno == logging.ERROR and r.exc_info for r in caplog.records)
+
+
+def test_service_error_does_not_log_expected_typed_errors(caplog):
+    # Expected, typed service errors map to typed codes and must NOT spam the
+    # server log — only the unexpected INTERNAL_ERROR fall-through logs.
+    from legis.mcp import _service_error
+    from legis.service.errors import NotFoundError
+
+    with caplog.at_level(logging.ERROR, logger="legis.mcp"):
+        result = _service_error(NotFoundError("nope"))
+
+    assert result["structuredContent"]["error_code"] == "NOT_FOUND"
+    assert not caplog.records

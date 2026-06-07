@@ -1,6 +1,6 @@
 [project]
 name = "legis"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 description = "Legis — the git/CI + governance layer of the Weft suite"
 readme = "README.md"
 license = "MIT"
@@ -40,6 +40,7 @@ dev = [
     "pytest-cov>=5.0",
     "httpx>=0.27",
     "mypy>=1.19",
+    "ruff>=0.8",
     "types-PyYAML>=6.0",
 ]
 
@@ -62,3 +63,23 @@ python_version = "3.12"
 files = ["src/legis"]
 show_error_codes = true
 warn_unused_configs = true
+
+[tool.ruff]
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+# Ruff's default rule set (pyflakes F + the safe slice of pycodestyle E). This
+# is the level that caught the F401 unused imports this floor-raise cleared; the
+# CI gate (`ruff check src`) keeps src clean. Import-sorting (I) / pyupgrade (UP)
+# are deliberately not enabled here — turning them on would impose unrelated
+# reformatting churn and trip F821 on the honesty-gate test fixtures that inject
+# `handler` dynamically; out of scope for a lint-gating change.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.report]
+# Global silent-regression floor. CI passes --cov-fail-under explicitly (same
+# value) so a local `pytest --cov` matches the gate. Per-package floors for the
+# security-critical packages are enforced separately by
+# scripts/check_coverage_floors.py.
+fail_under = 88

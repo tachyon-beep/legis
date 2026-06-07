@@ -7,9 +7,11 @@ from legis.policy.decorator import (
 )
 
 
-# A real, resolvable "test" function the gate will fingerprint.
+# Fixture functions the gate fingerprints BY SOURCE — they are never executed,
+# so the free `handler` name is intentional (it stands for the real boundary
+# call the gate looks for); noqa keeps that deliberate undefined name.
 def fake_boundary_test():
-    result = handler("payload")
+    result = handler("payload")  # noqa: F821
     assert result == "payload", "no-eval"
 
 
@@ -20,7 +22,7 @@ def string_only_boundary_test():
 
 
 def weak_policy_boundary_test():
-    assert handler("payload") == "payload"
+    assert handler("payload") == "payload"  # noqa: F821
     assert "no-eval" == "no-eval"
 
 
@@ -57,7 +59,7 @@ def test_gate_passes_with_a_pinned_unmodified_test():
 
 def test_gate_parses_nested_test_sources_consistently():
     def nested_boundary_test():
-        result = handler("payload")
+        result = handler("payload")  # noqa: F821
         assert result == "payload", "no-eval"
 
     good = fingerprint(nested_boundary_test)

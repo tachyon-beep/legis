@@ -1,5 +1,12 @@
+import pytest
+
 from legis.clock import FixedClock
-from legis.enforcement.protected import ProtectedGate, TrailVerifier, signing_fields
+from legis.enforcement.protected import (
+    ProtectedGate,
+    TamperError,
+    TrailVerifier,
+    signing_fields,
+)
 from legis.enforcement.signing import verify
 from legis.enforcement.verdict import JudgeOpinion, Verdict
 from legis.identity.entity_key import EntityKey
@@ -46,10 +53,6 @@ def test_loomweave_block_does_not_break_the_signature(tmp_path):
     payload = store.read_all()[0].payload
     sig = payload["extensions"]["judge_metadata_signature"]
     assert verify(signing_fields(payload), sig, KEY) is True
-
-
-import pytest
-from legis.enforcement.protected import TamperError
 
 
 def test_mutating_loomweave_block_invalidates_the_signature(tmp_path):

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -37,7 +38,49 @@ from sqlalchemy.pool import NullPool
 
 from legis.canonical import canonical_json, content_hash
 
+logger = logging.getLogger(__name__)
+
 GENESIS = "0" * 64
+
+
+def _apply_sqlite_pragmas(dbapi_connection: Any, url: str) -> None:
+    """Apply the durability/concurrency PRAGMAs to a freshly-opened connection.
+
+    Best-effort: a PRAGMA failure must not break connection setup (the store is
+    still usable without WAL), but it must NOT vanish silently either. Two
+    distinct failure channels are surfaced:
+
+    * An exception while issuing a PRAGMA → logged with ``exc_info``.
+    * WAL silently not taking effect → ``PRAGMA journal_mode=WAL`` does *not*
+      raise when WAL is unavailable (read-only mount, some network filesystems,
+      in-memory DBs); it returns the journal mode actually in force. The old
+      ``except Exception: pass`` never caught this most-likely case, so the
+      connection ran without WAL and the symptom surfaced much later as an
+      opaque "database is locked" under concurrency. Detect and log it here.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        journal_row = cursor.execute("PRAGMA journal_mode=WAL").fetchone()
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        journal_mode = journal_row[0] if journal_row else None
+        if journal_mode is not None and str(journal_mode).lower() != "wal":
+            logger.warning(
+                "audit store SQLite did not enter WAL mode (journal_mode=%r, "
+                "url=%s); concurrent appends may surface as opaque 'database is "
+                "locked' errors instead of waiting",
+                journal_mode,
+                url,
+            )
+    except Exception:  # noqa: BLE001  (PRAGMA failure must not break connect)
+        logger.warning(
+            "audit store failed to apply SQLite PRAGMAs (url=%s); connection "
+            "falls back to defaults (no WAL / default busy_timeout)",
+            url,
+            exc_info=True,
+        )
+    finally:
+        cursor.close()
 
 
 @dataclass(frozen=True)
@@ -55,6 +98,11 @@ def _chain(prev_hash: str, c_hash: str) -> str:
 
 class AuditStore:
     def __init__(self, url: str) -> None:
+        # The federated store subtree (.weft/legis) is created lazily, here at
+        # open time — SQLite makes the .db file but never its parent directory.
+        from legis.config import ensure_sqlite_parent
+
+        ensure_sqlite_parent(url)
         # NullPool: hold no connection between operations — an append-only
         # audit store wants no lingering locks and clean resource lifecycle.
         self._engine = create_engine(url, future=True, poolclass=NullPool)
@@ -68,17 +116,7 @@ class AuditStore:
         @event.listens_for(self._engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             if "sqlite" in url:
-                cursor = dbapi_connection.cursor()
-                try:
-                    cursor.execute("PRAGMA journal_mode=WAL")
-                    cursor.execute("PRAGMA synchronous=NORMAL")
-                    cursor.execute("PRAGMA busy_timeout=5000")
-                except Exception:
-                    pass
-                finally:
-                    cursor.close()
-
-        # Remove the global force_immediate_transaction event listener to prevent locking on read-only queries.
+                _apply_sqlite_pragmas(dbapi_connection, url)
 
         self._md = MetaData()
         self._log = Table(
@@ -122,13 +160,16 @@ class AuditStore:
         connection thread-locally; nested ``transaction()`` calls reuse the
         outer one.
 
-        Appends only. ``read_all`` / ``read_by_seq`` / ``verify_integrity`` open
-        their own connection via ``self._engine.begin()`` — they will NOT see
-        this batch's uncommitted appends, and on SQLite a read connection can
-        hit ``SQLITE_BUSY`` against the held ``BEGIN IMMEDIATE`` write lock. Do
-        all reads before entering the context (as ``wardline.governor`` does: it
-        resolves every entity before opening the batch). Only ``append``'s own
-        chain-head read is safe here, because it runs on the ambient connection.
+        Appends only, and now *enforced*: ``read_all`` / ``read_by_seq`` /
+        ``verify_integrity`` / ``get_latest_sequence_and_hash`` open their own
+        connection via ``self._engine.begin()``, so a read issued inside this
+        context would not see the batch's uncommitted appends and on SQLite would
+        hit ``SQLITE_BUSY`` against the held ``BEGIN IMMEDIATE`` write lock. Each
+        guards on the thread-local and raises ``RuntimeError`` rather than
+        contending silently (``_assert_no_batch_in_progress``). Do all reads
+        before entering the context (as ``wardline.governor`` does: it resolves
+        every entity before opening the batch). Only ``append``'s own chain-head
+        read is safe here, because it runs on the ambient connection.
         """
         if getattr(self._txn, "conn", None) is not None:
             # Already inside a batch on this thread — reuse it (nested no-op).
@@ -142,6 +183,26 @@ class AuditStore:
                 yield
             finally:
                 self._txn.conn = None
+
+    def _assert_no_batch_in_progress(self, method: str) -> None:
+        """Fail loudly if a fresh-connection read runs inside a held batch (Q-M5).
+
+        ``transaction()`` holds a ``BEGIN IMMEDIATE`` write lock on the ambient
+        thread-local connection. Every public read opens its OWN connection, so
+        a read issued while the batch is held would (a) contend with that lock
+        (``SQLITE_BUSY`` on SQLite, and possibly no error on other backends) and
+        (b) miss the batch's uncommitted appends. The original contract relied on
+        callers never doing this; this guard *enforces* it, turning a silent,
+        backend-dependent contention into an explicit, deterministic error so a
+        future in-batch read in a gate append path fails its tests immediately.
+        """
+        if getattr(self._txn, "conn", None) is not None:
+            raise RuntimeError(
+                f"AuditStore.{method}() called inside an active transaction() batch "
+                "on this thread. Fresh-connection reads contend with the batch's "
+                "held BEGIN IMMEDIATE write lock and cannot see its uncommitted "
+                "appends — resolve all reads before opening the batch (Q-M5)."
+            )
 
     def _insert(self, conn: Any, payload: dict[str, Any]) -> int:
         c_hash = content_hash(payload)
@@ -176,6 +237,7 @@ class AuditStore:
             return self._insert(conn, payload)
 
     def read_all(self) -> list[AuditRecord]:
+        self._assert_no_batch_in_progress("read_all")
         with self._engine.begin() as conn:
             rows = conn.execute(
                 select(self._log).order_by(self._log.c.seq.asc())
@@ -192,6 +254,7 @@ class AuditStore:
         ]
 
     def read_by_seq(self, seq: int) -> AuditRecord | None:
+        self._assert_no_batch_in_progress("read_by_seq")
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(self._log).where(self._log.c.seq == seq)
@@ -207,10 +270,24 @@ class AuditStore:
         )
 
     def verify_integrity(self) -> bool:
+        # O(N) by design: a full chain re-hash is the only way to detect
+        # out-of-band tampering of an arbitrary record (the hash chain gives O(1)
+        # verification of *appends*, never of a mutated prefix). Callers on
+        # interactive read paths (service.verified_records) pay this deliberately;
+        # see that function's cost note (rc4 review #7) for why it is not narrowed.
+        self._assert_no_batch_in_progress("verify_integrity")
         prev_hash = GENESIS
         try:
             records = self.read_all()
         except (json.JSONDecodeError, TypeError, ValueError):
+            # No seq survives a decode failure of the whole read; name the
+            # failure mode so an investigator knows the trail is unreadable
+            # rather than merely mismatched.
+            logger.error(
+                "audit trail integrity check failed: a record payload did not "
+                "decode as JSON",
+                exc_info=True,
+            )
             return False
         for rec in records:
             # json.loads accepts Infinity/NaN, so a directly-tampered payload
@@ -220,17 +297,43 @@ class AuditStore:
             try:
                 computed = content_hash(rec.payload)
             except (ValueError, TypeError):
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: payload is "
+                    "not canonicalizable (tamper)",
+                    rec.seq,
+                    exc_info=True,
+                )
                 return False
             if computed != rec.content_hash:
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: content hash "
+                    "mismatch (recorded %s, recomputed %s)",
+                    rec.seq,
+                    rec.content_hash,
+                    computed,
+                )
                 return False
             if rec.prev_hash != prev_hash:
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: broken chain "
+                    "link (prev_hash %s != expected %s)",
+                    rec.seq,
+                    rec.prev_hash,
+                    prev_hash,
+                )
                 return False
             if rec.chain_hash != _chain(rec.prev_hash, rec.content_hash):
+                logger.error(
+                    "audit trail integrity check failed at seq=%s: chain hash "
+                    "does not match prev+content",
+                    rec.seq,
+                )
                 return False
             prev_hash = rec.chain_hash
         return True
 
     def get_latest_sequence_and_hash(self) -> tuple[int, str]:
+        self._assert_no_batch_in_progress("get_latest_sequence_and_hash")
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(self._log.c.seq, self._log.c.chain_hash)

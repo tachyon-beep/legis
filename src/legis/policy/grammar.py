@@ -12,7 +12,7 @@ false-green. Same seam shape as Wardline's ``TaintSourceProvider`` and Loomweave
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable

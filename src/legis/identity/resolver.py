@@ -9,12 +9,44 @@ append-only lineage snapshot at the moment of the governance decision.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
-from typing import Any
+from enum import Enum
+from typing import Any, Callable
 
 from legis.canonical import content_hash
 from legis.identity.loomweave_client import LoomweaveIdentity
 from legis.identity.entity_key import EntityKey
+
+logger = logging.getLogger(__name__)
+
+# A long-lived resolver re-probes the Loomweave sei capability at most once per
+# this window. Without it a positive latch is permanent: a Loomweave that loses
+# the capability mid-life would be trusted forever (Q-L6).
+_DEFAULT_CAPABILITY_TTL_SECONDS = 300.0
+
+
+class IdentityResolutionStatus(str, Enum):
+    """The identity axis verdict (str,Enum — serializes as the bare string).
+
+    ``INVALID`` is produced only by the SEI backfill path (it keys raw dicts,
+    not :class:`IdentityResolution`); the resolver itself emits only the other
+    three.
+    """
+
+    RESOLVED = "resolved"
+    NOT_ALIVE = "not_alive"
+    UNAVAILABLE = "unavailable"
+    INVALID = "invalid"
+
+
+class LineageSnapshotStatus(str, Enum):
+    """The REQ-L-01 lineage-snapshot verdict (str,Enum — bare-string wire)."""
+
+    VERIFIED = "verified"
+    UNAVAILABLE = "unavailable"
+    NOT_APPLICABLE = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -23,14 +55,64 @@ class IdentityResolution:
     alive: bool | None          # identity axis; None when no capability/decision
     content_hash: str | None    # content axis; None when unavailable
     lineage_snapshot: dict[str, Any] | None  # {"length": N, "hash": ...} or None
-    identity_resolution_status: str
-    lineage_snapshot_status: str
+    identity_resolution_status: IdentityResolutionStatus
+    lineage_snapshot_status: LineageSnapshotStatus
+
+    def __post_init__(self) -> None:
+        # The identity axis and its status are two views of one fact — keep them
+        # from contradicting each other at construction. A "resolved" record with
+        # alive=False (or any other crossed pair) was representable before this
+        # guard; the invariant lived only in the construction sites. The bijection
+        # is exactly the three shapes the resolver actually builds.
+        #
+        # ``alive`` must be exactly None/False/True by identity: a bare ``in`` /
+        # dict lookup would alias ints (1 == True, 0 == False) and a non-bool
+        # would surface as a KeyError, not this guard's ValueError.
+        if not any(self.alive is v for v in (None, False, True)):
+            raise ValueError(
+                f"IdentityResolution.alive must be None/False/True, got {self.alive!r}"
+            )
+        expected = {
+            None: IdentityResolutionStatus.UNAVAILABLE,
+            False: IdentityResolutionStatus.NOT_ALIVE,
+            True: IdentityResolutionStatus.RESOLVED,
+        }[self.alive]
+        if self.identity_resolution_status is not expected:
+            raise ValueError(
+                f"contradictory IdentityResolution: alive={self.alive!r} "
+                f"requires identity_resolution_status="
+                f"{expected.value!r}, got {self.identity_resolution_status.value!r}"
+            )
+        # The lineage axis is the record's other half: a snapshot is present iff
+        # the status is VERIFIED (the resolver pairs them so — VERIFIED carries a
+        # snapshot; UNAVAILABLE/NOT_APPLICABLE carry None). Keep that pairing from
+        # contradicting itself too, so the whole record — not just the identity
+        # axis — is impossible to construct in a self-contradictory state.
+        snapshot_present = self.lineage_snapshot is not None
+        verified = self.lineage_snapshot_status is LineageSnapshotStatus.VERIFIED
+        if snapshot_present != verified:
+            raise ValueError(
+                f"contradictory IdentityResolution: lineage_snapshot "
+                f"{'present' if snapshot_present else 'absent'} requires "
+                f"lineage_snapshot_status"
+                f"{'==' if snapshot_present else '!='} VERIFIED, got "
+                f"{self.lineage_snapshot_status.value!r}"
+            )
 
 
 class IdentityResolver:
-    def __init__(self, client: LoomweaveIdentity | None) -> None:
+    def __init__(
+        self,
+        client: LoomweaveIdentity | None,
+        *,
+        capability_ttl: float = _DEFAULT_CAPABILITY_TTL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._client = client
-        self._capable: bool | None = None  # probe once per instance
+        self._capable: bool | None = None  # cached probe result; None = unknown
+        self._capable_checked_at: float | None = None
+        self._capability_ttl = capability_ttl
+        self._monotonic = monotonic
 
     @property
     def client(self) -> LoomweaveIdentity | None:
@@ -40,19 +122,51 @@ class IdentityResolver:
     def _capability(self) -> bool:
         if self._client is None:
             return False
-        if self._capable is None:
+        now = self._monotonic()
+        checked_at = self._capable_checked_at
+        # The latch (positive OR negative) is fresh only while within the TTL.
+        # The original code latched the first result for the resolver's whole
+        # life, so a capability lost (or gained) upstream was never noticed by a
+        # long-lived resolver (Q-L6).
+        fresh = (
+            self._capable is not None
+            and checked_at is not None
+            and now - checked_at < self._capability_ttl
+        )
+        if not fresh:
             try:
                 self._capable = bool(self._client.capability())
             except Exception:
-                return False  # honest transient degrade — retry on next resolve
-        return self._capable
+                # Honest transient degrade — clear the latch so the next resolve
+                # retries rather than trusting a stale value. Log it: the typed
+                # return is indistinguishable from a Loomweave that genuinely has
+                # no sei capability, so the warning is the only operator signal
+                # that the integration is broken rather than absent.
+                logger.warning(
+                    "Loomweave sei-capability probe failed; degrading to locator keys",
+                    exc_info=True,
+                )
+                self._capable = None
+                self._capable_checked_at = None
+                return False
+            self._capable_checked_at = now
+        return self._capable if self._capable is not None else False
 
-    def _snapshot(self, sei: str) -> tuple[dict[str, Any] | None, str]:
+    def _snapshot(
+        self, sei: str
+    ) -> tuple[dict[str, Any] | None, LineageSnapshotStatus]:
         try:
             lineage = self._client.lineage(sei)  # type: ignore[union-attr]
         except Exception:
-            return None, "unavailable"
-        return {"length": len(lineage), "hash": content_hash(lineage)}, "verified"
+            logger.warning(
+                "Loomweave lineage snapshot failed; recording lineage as unavailable",
+                exc_info=True,
+            )
+            return None, LineageSnapshotStatus.UNAVAILABLE
+        return (
+            {"length": len(lineage), "hash": content_hash(lineage)},
+            LineageSnapshotStatus.VERIFIED,
+        )
 
     def resolve(self, locator: str) -> IdentityResolution:
         degraded = IdentityResolution(
@@ -60,14 +174,18 @@ class IdentityResolver:
             None,
             None,
             None,
-            "unavailable",
-            "not_applicable",
+            IdentityResolutionStatus.UNAVAILABLE,
+            LineageSnapshotStatus.NOT_APPLICABLE,
         )
         if not self._capability():
             return degraded
         try:
             res = self._client.resolve_locator(locator)  # type: ignore[union-attr]
         except Exception:
+            logger.warning(
+                "Loomweave locator resolve failed; degrading to locator key",
+                exc_info=True,
+            )
             return degraded
         if not isinstance(res, dict):
             return degraded
@@ -79,18 +197,23 @@ class IdentityResolver:
                 False,
                 None,
                 None,
-                "not_alive",
-                "not_applicable",
+                IdentityResolutionStatus.NOT_ALIVE,
+                LineageSnapshotStatus.NOT_APPLICABLE,
             )
         sei = res.get("sei")
         if not isinstance(sei, str) or not sei:
             return degraded
         snapshot, snapshot_status = self._snapshot(sei)
+        # content_hash is carried verbatim into the governance record; trust only
+        # a string. A non-string from a buggy/hostile Loomweave degrades to None
+        # rather than polluting the typed content axis (Q-L6).
+        raw_content_hash = res.get("content_hash")
+        content_hash_value = raw_content_hash if isinstance(raw_content_hash, str) else None
         return IdentityResolution(
             EntityKey.from_sei(sei),
             True,
-            res.get("content_hash"),
+            content_hash_value,
             snapshot,
-            "resolved",
+            IdentityResolutionStatus.RESOLVED,
             snapshot_status,
         )
