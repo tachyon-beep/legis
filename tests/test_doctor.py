@@ -28,3 +28,22 @@ def test_render_text_lists_only_problems_when_healthy_says_ok():
     out = render_text([DoctorCheck("a", "ok"), DoctorCheck("b", "error", message="bad")])
     assert "b: error" in out
     assert "legis doctor: ok" not in out
+
+
+from pathlib import Path
+
+from legis.doctor import run_doctor
+
+
+def test_run_doctor_empty_is_healthy(tmp_path, capsys):
+    # With no checks registered yet, an empty list renders healthy, exit 0.
+    rc = run_doctor(tmp_path, repair=False, fmt="text")
+    assert rc == 0
+    assert "legis doctor: ok" in capsys.readouterr().out
+
+
+def test_run_doctor_json_format(tmp_path, capsys):
+    rc = run_doctor(tmp_path, repair=False, fmt="json")
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"ok": True, "checks": [], "next_actions": []}
