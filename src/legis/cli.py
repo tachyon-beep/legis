@@ -249,8 +249,6 @@ def _check_override_rate(db_url: str) -> int:
 
 
 def _run_doctor(args) -> int:
-    from pathlib import Path
-
     from legis.doctor import run_doctor
 
     return run_doctor(Path(args.root), repair=args.repair, fmt=args.format)

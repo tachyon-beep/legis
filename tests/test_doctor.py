@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from legis.doctor import DoctorCheck, render_json, render_text
+from legis.cli import main as cli_main
+from legis.doctor import DoctorCheck, render_json, render_text, run_doctor
 
 
 def test_doctorcheck_to_dict_omits_empty_message():
@@ -30,11 +31,6 @@ def test_render_text_lists_only_problems_when_healthy_says_ok():
     assert "legis doctor: ok" not in out
 
 
-from pathlib import Path
-
-from legis.doctor import run_doctor
-
-
 def test_run_doctor_empty_is_healthy(tmp_path, capsys):
     # With no checks registered yet, an empty list renders healthy, exit 0.
     rc = run_doctor(tmp_path, repair=False, fmt="text")
@@ -47,9 +43,6 @@ def test_run_doctor_json_format(tmp_path, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"ok": True, "checks": [], "next_actions": []}
-
-
-from legis.cli import main as cli_main
 
 
 def test_cli_doctor_runs_and_exits_zero(tmp_path, capsys, monkeypatch):
