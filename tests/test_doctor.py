@@ -313,3 +313,38 @@ def test_db_override_empty_string_is_error(tmp_path, monkeypatch):
     # (matches config precedence; review #3).
     monkeypatch.setenv("LEGIS_GOVERNANCE_DB", "")
     assert check_db_overrides(tmp_path).status == "error"
+
+
+# ---------------------------------------------------------------------------
+# Task 9: end-to-end --repair pipeline + invariant tests
+# ---------------------------------------------------------------------------
+
+
+def test_repair_makes_fresh_project_healthy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # First run: unhealthy (no install artifacts, no .mcp.json).
+    assert run_doctor(tmp_path, repair=False, fmt="text") == 1
+    # Repair run: install-wiring + .mcp.json get fixed; re-check is healthy.
+    assert run_doctor(tmp_path, repair=True, fmt="text") == 0
+    # Third run, no repair: stays healthy.
+    assert run_doctor(tmp_path, repair=False, fmt="text") == 0
+
+
+def test_repair_never_writes_weft_toml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "weft.toml").write_text("[legis]\nstore_dir = \n")  # malformed
+    before = (tmp_path / "weft.toml").read_text()
+    run_doctor(tmp_path, repair=True, fmt="json")
+    assert (tmp_path / "weft.toml").read_text() == before
+
+
+def test_json_output_has_no_secret(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "secrets.read")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "TOP-SECRET")
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        run_doctor(tmp_path, repair=False, fmt="json")
+    assert "TOP-SECRET" not in buf.getvalue()
