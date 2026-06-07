@@ -201,6 +201,17 @@ listed as not-yet-built.
   directly; precedence/alias changes are a one-line edit in one place, and a
   direct resolver call can no longer silently ignore its override. No change to
   the resolved URLs for existing deployments.
+- **Weft-component transport-HMAC seam extracted to `weft_signing`** — the
+  Loomweave SEI client and the Filigree association client signed their requests
+  with byte-for-byte copies of the same `X-Weft-Component` scheme
+  (`_json_body_bytes` / `_path_and_query` / `sign_*_request` /
+  `*_hmac_key_from_env`). The wire format now has a single definition; both
+  clients delegate to it (component name and channel env var parameterised), so
+  a future canonicalization or header change can no longer touch one channel and
+  silently diverge the other. The shared serializer deliberately stays off
+  `canonical.canonical_json` (whose `ensure_ascii=False` would change the signed
+  bytes). Behavior-preserving — existing per-channel golden vectors unchanged,
+  plus a new cross-channel anti-drift test. No change to signatures on the wire.
 
 ### Fixed
 - **Ingest accepts realistic scans** — the over-strict Wardline ingest validator
