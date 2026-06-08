@@ -153,6 +153,21 @@ def resolve_scan_routing(
     )
 
 
+@dataclass(frozen=True)
+class RoutedScan:
+    """The outcome of routing a wardline scan.
+
+    Carries the per-finding ``routed`` records AND the scan-level
+    ``artifact_status`` posture (``verified`` / ``dirty`` / ``unverified``), so a
+    caller can echo dev-grade-vs-CI-grade at the response root instead of leaving
+    it buried in each routed record's provenance — and absent entirely when
+    nothing routes (opp #6 / vacuous-green, same class as wardline W2).
+    """
+
+    routed: list[dict[str, Any]]
+    artifact_status: str
+
+
 def route_wardline_scan(
     scan: Mapping[str, Any],
     *,
@@ -165,7 +180,7 @@ def route_wardline_scan(
     fail_on: WardlineSeverity | None = None,
     artifact_key: bytes | None = None,
     allow_dirty: bool = False,
-) -> list[dict[str, Any]]:
+) -> RoutedScan:
     artifact_provenance = verify_wardline_artifact(
         scan, artifact_key, allow_dirty=allow_dirty
     )
@@ -192,7 +207,7 @@ def route_wardline_scan(
         }
         policy = None
 
-    return route_findings(
+    routed = route_findings(
         findings,
         policy=policy,
         cell_map=cell_map,
@@ -201,4 +216,8 @@ def route_wardline_scan(
         engine=engine,
         signoff=signoff,
         batch_provenance=batch_provenance,
+    )
+    return RoutedScan(
+        routed=routed,
+        artifact_status=artifact_provenance["artifact_status"],
     )

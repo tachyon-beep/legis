@@ -887,6 +887,8 @@ def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path,
     )[0]["result"]["structuredContent"]
     assert routed == {
         "outcome": "ROUTED",
+        # opp #6: scan-level posture echoed at the root (keyless + unsigned here).
+        "artifact_status": "unverified",
         "routed": [
             {
                 "mode": "surface_override",
@@ -896,6 +898,32 @@ def test_scan_route_requires_exactly_one_cell_spec_and_routes_findings(tmp_path,
             }
         ],
     }
+
+
+def test_scan_route_echoes_top_level_artifact_status_posture(tmp_path, monkeypatch):
+    # opp #6 / vacuous-green (same class as wardline W2): a keyless dev-grade
+    # pass must be distinguishable from a CI-signed pass at the TOP LEVEL of the
+    # response — not only buried in each routed record's provenance (and absent
+    # entirely when nothing routes). An agent relaying "governance passed" needs
+    # the posture echoed at the response root.
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, _store = _runtime(tmp_path)
+
+    structured = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "scan_route", "arguments": {"scan": _active_scan()}},
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert structured["outcome"] == "ROUTED"
+    # keyless + unsigned => dev-grade "unverified" posture, echoed at the root
+    assert structured["artifact_status"] == "unverified"
 
 
 def test_scan_route_rejects_empty_severity_map(tmp_path, monkeypatch):

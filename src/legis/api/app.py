@@ -792,7 +792,7 @@ def create_app(
         needs_engine = bool(routing.cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
                                              WardlineCellPolicy.SURFACE_ONLY})
         try:
-            routed = _route_wardline_scan(
+            result = _route_wardline_scan(
                 body.scan,
                 agent_id=_recorded_actor(actor, body.agent_id),
                 identity=identity,
@@ -819,6 +819,13 @@ def create_app(
             raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"outcome": ScanOutcome.ROUTED, "routed": routed}
+        # Echo the scan-level posture at the root (opp #6), identical contract to
+        # the MCP scan_route surface, so an HTTP caller can likewise distinguish a
+        # keyless dev pass from a CI-signed verified pass.
+        return {
+            "outcome": ScanOutcome.ROUTED,
+            "routed": result.routed,
+            "artifact_status": result.artifact_status,
+        }
 
     return app

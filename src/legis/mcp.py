@@ -951,7 +951,7 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
     )
     scan = _require_object(args, "scan")
     try:
-        routed = route_wardline_scan(
+        result = route_wardline_scan(
             scan,
             agent_id=runtime.agent_id,
             identity=runtime.identity,
@@ -980,7 +980,16 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
         # apart from a genuine legis/scan fault and names what to do; nothing is
         # governed (routed == []).
         return _tool_result(exc.to_payload())
-    return _tool_result({"outcome": ScanOutcome.ROUTED, "routed": routed})
+    # Echo the scan-level posture at the root (opp #6): a keyless dev pass
+    # (`unverified`/`dirty`) is distinguishable from a CI-signed `verified` pass,
+    # even when nothing routed.
+    return _tool_result(
+        {
+            "outcome": ScanOutcome.ROUTED,
+            "routed": result.routed,
+            "artifact_status": result.artifact_status,
+        }
+    )
 
 
 def _tool_git_branch_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
