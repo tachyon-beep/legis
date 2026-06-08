@@ -16,11 +16,12 @@ from typing import Any
 
 from legis.clock import Clock
 from legis.enforcement.judge import Judge
-from legis.enforcement.signing import sign, verify
+from legis.enforcement.signing import SIG_PREFIX_V3, sign, verify
 from legis.enforcement.signoff import signoff_signing_fields
 from legis.enforcement.verdict import Verdict
 from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
+from legis.store.head_anchor import AnchorError, HeadAnchor
 from legis.store.protocol import AppendOnlyStore
 
 
@@ -38,11 +39,19 @@ class ProtectedResult:
     signature: str
 
 
-def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
+def signing_fields(
+    payload: dict[str, Any], *, seq: int | None = None
+) -> dict[str, Any]:
     """The exact dict that is HMAC-signed — reconstructable from a stored payload.
 
     Binds entity + policy in addition to the roadmap's six fields, so a signed
     verdict cannot be transplanted to another entity.
+
+    When *seq* is given (AUD-1 / v3), the record's chain position is folded in,
+    binding the verdict not just to its content but to *where* it sits in the
+    trail — closing the delete-and-rechain forgery. At verify time *seq* MUST be
+    the seq column of the stored row, never a payload field (which an attacker
+    controls identically), or the binding is theatre.
     """
     ext = payload.get("extensions") or {}
     clar = ext.get("loomweave") or {}
@@ -75,6 +84,8 @@ def signing_fields(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             }
         )
+    if seq is not None:
+        fields["chain_seq"] = seq
     return fields
 
 
@@ -87,9 +98,18 @@ class TrailVerifier:
     protected record to "unsigned, skip".
     """
 
-    def __init__(self, key: bytes, protected_policies: frozenset[str]) -> None:
+    def __init__(
+        self,
+        key: bytes,
+        protected_policies: frozenset[str],
+        *,
+        anchor: HeadAnchor | None = None,
+    ) -> None:
         self._key = key
         self._protected = protected_policies
+        # Opt-in (AUD-1): an out-of-band head anchor that catches tail-truncation,
+        # which seq-binding + contiguity structurally cannot. None → not anchored.
+        self._anchor = anchor
 
     @property
     def protected_policies(self) -> frozenset[str]:
@@ -107,6 +127,14 @@ class TrailVerifier:
         )
 
     def verify(self, records) -> None:
+        records = list(records)
+        # Tail-truncation check first (AUD-1): the per-record signature pass
+        # below cannot see records that are simply gone. The anchor can.
+        if self._anchor is not None:
+            try:
+                self._anchor.check(records)
+            except AnchorError as exc:
+                raise TamperError(str(exc)) from exc
         for rec in records:
             if not self._requires_verification(rec.payload):
                 continue
@@ -121,7 +149,10 @@ class TrailVerifier:
                     raise TamperError(
                         f"protected sign-off record seq={rec.seq} is missing its signature"
                     )
-                fields = signoff_signing_fields(rec.payload)
+                if sig.startswith(SIG_PREFIX_V3):
+                    fields = signoff_signing_fields(rec.payload, seq=rec.seq)
+                else:
+                    fields = signoff_signing_fields(rec.payload)
                 if not verify(fields, sig, self._key):
                     raise TamperError(
                         f"protected sign-off record seq={rec.seq} signature does not verify"
@@ -133,7 +164,14 @@ class TrailVerifier:
                         f"protected override record seq={rec.seq} is missing its signature"
                     )
                 try:
-                    fields = signing_fields(rec.payload)
+                    # v3 (AUD-1) binds the chain position: reconstruct from the
+                    # seq COLUMN (rec.seq), never a payload field, so a renumbered
+                    # record fails to verify at its new position. v2 records
+                    # (legacy / pre-AUD-1) carry no position binding.
+                    if sig.startswith(SIG_PREFIX_V3):
+                        fields = signing_fields(rec.payload, seq=rec.seq)
+                    else:
+                        fields = signing_fields(rec.payload)
                 except (KeyError, AttributeError, TypeError) as exc:
                     raise TamperError(
                         f"protected record seq={rec.seq} is structurally malformed: {exc}"
@@ -160,11 +198,15 @@ class ProtectedGate:
         *,
         protected_policies: frozenset[str] = frozenset(),
         validator: ProtectedValidator | None = None,
+        anchor: HeadAnchor | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._judge = judge
         self._key = key
+        # Opt-in (AUD-1): advanced to the committed head after each append so a
+        # later tail-truncation is detectable. None → not anchored (default).
+        self._anchor = anchor
         # For these policies the LLM judge is ADVISORY ONLY (Q-H3): a model
         # ACCEPTED does not clear the gate on the model's word. A prompt-injected
         # rationale that fools the judge into ACCEPTED would otherwise be
@@ -207,10 +249,24 @@ class ProtectedGate:
             recorded_at=self._clock.now_iso(),
             extensions=ext,
         )
-        payload = base.to_payload()
-        signature = sign(signing_fields(payload), self._key)
-        payload["extensions"]["judge_metadata_signature"] = signature
-        seq = self._store.append(payload)
+        captured: dict[str, str] = {}
+
+        def build(seq: int, _prev_hash: str) -> dict[str, Any]:
+            # AUD-1 / v3: the store hands us our own chain position so the
+            # signature binds seq. A renumber-to-hide-a-deletion then fails to
+            # verify at the new position.
+            payload = base.to_payload()
+            signature = sign(
+                signing_fields(payload, seq=seq), self._key, version="v3"
+            )
+            payload["extensions"]["judge_metadata_signature"] = signature
+            captured["signature"] = signature
+            return payload
+
+        seq = self._store.append_signed(build)
+        if self._anchor is not None:
+            self._anchor.update(*self._store.get_latest_sequence_and_hash())
+        signature = captured["signature"]
         return ProtectedResult(
             accepted=verdict in (Verdict.ACCEPTED, Verdict.OVERRIDDEN_BY_OPERATOR),
             seq=seq,

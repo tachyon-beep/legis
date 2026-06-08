@@ -60,14 +60,16 @@ def test_accepted_record_is_bound_and_signed(tmp_path):
     assert ext["judge_verdict"] == "ACCEPTED"
     assert ext["file_fingerprint"] == "sha256:abc"
     assert ext["ast_path"] == "Module/FunctionDef[f]/Call[eval]"
-    assert ext["judge_metadata_signature"].startswith("hmac-sha256:v2:")
+    # AUD-1: protected verdicts are now v3 (the signature binds chain position).
+    assert ext["judge_metadata_signature"].startswith("hmac-sha256:v3:")
 
 
 def test_signature_covers_entity_and_policy(tmp_path):
     g, store = gate(tmp_path, JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"))
     submit(g)
-    payload = store.read_all()[0].payload
-    fields = signing_fields(payload)
+    rec = store.read_all()[0]
+    payload = rec.payload
+    fields = signing_fields(payload, seq=rec.seq)
     sig = payload["extensions"]["judge_metadata_signature"]
     assert verify(fields, sig, KEY) is True
     # Transplanting the verdict to a different entity must invalidate the sig.
@@ -146,8 +148,9 @@ def test_prompt_injected_accepted_does_not_clear_protected_without_validator(tmp
     assert ext["judge_advisory_verdict"] == "ACCEPTED"  # the model's opinion, for audit
     # The signed verdict is the effective BLOCKED, so the record cannot be read
     # back as a cleared ACCEPTED.
-    payload = store.read_all()[0].payload
-    assert verify(signing_fields(payload), ext["judge_metadata_signature"], KEY) is True
+    rec = store.read_all()[0]
+    payload = rec.payload
+    assert verify(signing_fields(payload, seq=rec.seq), ext["judge_metadata_signature"], KEY) is True
     assert signing_fields(payload)["verdict"] == "BLOCKED"
 
 

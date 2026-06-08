@@ -68,7 +68,8 @@ def test_protected_post_records_and_verified_read_succeeds(tmp_path):
     trail = c.get("/overrides")
     assert trail.status_code == 200
     sig = trail.json()[0]["extensions"]["judge_metadata_signature"]
-    assert sig.startswith("hmac-sha256:v2:")
+    # AUD-1: protected verdicts now sign at v3 (chain position bound).
+    assert sig.startswith("hmac-sha256:v3:")
 
 
 def test_protected_post_rejects_stale_source_fingerprint_before_signing(tmp_path):
