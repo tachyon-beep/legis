@@ -108,3 +108,32 @@ def test_anchor_with_empty_path_is_a_noop(tmp_path):
     anchor = HeadAnchor("", KEY)
     anchor.update(5, "abc")  # no file written, no raise
     anchor.check([])  # no raise
+
+
+def test_anchor_replay_is_a_known_unclosed_limitation(tmp_path):
+    # KNOWN LIMITATION (red-team, AUD-1): the anchor signature stops forgery but
+    # NOT replay. An attacker who snapshots a genuinely-signed earlier anchor
+    # (head=1), lets the trail grow, then truncates the DB back to seq=1 and
+    # restores the saved anchor, goes UNDETECTED — the restored anchor is real,
+    # its seq + chain_hash are consistent with the truncated DB. This is inherent
+    # to a local mutable sidecar (nothing on disk the file-write attacker cannot
+    # also roll back); full rollback resistance needs append-only/remote storage
+    # for the anchor. This test pins that boundary so it is honest and
+    # version-controlled — if a future change claims to close replay, it must
+    # delete this test deliberately, not let the over-claim drift back in.
+    store = _store(tmp_path)
+    anchor = HeadAnchor(str(tmp_path / "gov.anchor"), KEY)
+    store.append({"k": 0})
+    seq, chain = store.get_latest_sequence_and_hash()
+    anchor.update(seq, chain)
+    saved = (tmp_path / "gov.anchor").read_bytes()  # the attacker snapshots it
+    for i in (1, 2):
+        store.append({"k": i})
+        anchor.update(*store.get_latest_sequence_and_hash())
+
+    _truncate_tail(tmp_path, keep=1)
+    (tmp_path / "gov.anchor").write_bytes(saved)  # replay the stale-but-genuine anchor
+
+    assert store.verify_integrity() is True
+    # The replayed anchor verifies — the rollback is NOT caught locally.
+    anchor.check(store.read_all())  # no raise: documents the residual

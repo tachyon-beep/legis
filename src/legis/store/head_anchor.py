@@ -24,9 +24,27 @@ Scope, stated honestly:
     direction: the check only alarms when the DB head is *below* the anchor, so
     a lagging anchor yields false-negatives (never false alarms), and the next
     successful append re-advances it.
-  * It detects truncation back to *any* point at or below the anchored head,
-    including a rollback to an earlier consistent prefix. It does not, and
-    cannot, reconstruct what was removed — it reports that removal happened.
+  * What it catches: forgery (no key → no valid anchor), and truncation/rollback
+    by an attacker who does *not* hold a genuine earlier anchor — i.e. one who
+    arrives after the head has grown, or who never retained an old copy. It
+    reports that removal happened; it cannot reconstruct what was removed.
+  * REPLAY LIMITATION (red-team, AUD-1): the signature stops forgery but not
+    replay. The anchor is a single mutable file; *any* genuinely-signed earlier
+    version of it is a valid "the head was once this low" statement. An attacker
+    who is continuously present (or who snapshots the anchor file) can save the
+    anchor while the head is low, let the trail grow, then truncate the DB back
+    to that low head and restore the saved anchor — it verifies (real signature,
+    consistent seq + chain_hash), so the rollback is undetected. This is
+    inherent to local same-filesystem storage: there is nothing on disk the
+    file-write attacker cannot also roll back, so no purely-local check (no
+    counter, timestamp, or extra copy) closes it — a stale-but-genuine anchor is
+    indistinguishable from a current one without external memory. Closing replay
+    requires storing the anchor where the attacker cannot roll it back —
+    append-only/WORM or remote storage — or an external monitor that tracks the
+    anchored head's monotonicity (head_seq only ever rises). Point ``path`` at
+    such storage for full rollback resistance; on a local sidecar the anchor
+    still raises the bar (forgery- and late-attacker-truncation-resistant) but
+    does not, and cannot, defeat a snapshotting attacker.
 """
 
 from __future__ import annotations
