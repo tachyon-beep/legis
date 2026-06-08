@@ -739,7 +739,11 @@ def create_app(
             }
         integrity = find_lineage_integrity(verified_governance_records(), identity.client)
         return {
-            "status": "unverified" if integrity.unavailable else "verified",
+            "status": (
+                "diverged" if integrity.divergences
+                else "unverified" if integrity.unavailable
+                else "verified"
+            ),
             "divergences": [
                 {"sei": d.sei, "recorded_length": d.recorded_length,
                  "current_length": d.current_length} for d in integrity.divergences

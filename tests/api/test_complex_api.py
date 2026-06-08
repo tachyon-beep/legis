@@ -294,6 +294,9 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
     c = TestClient(app)
     assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
     body = c.get("/governance/lineage-integrity").json()
+    # A confirmed tamper must surface at the top-level status, not just in the
+    # divergences list — "verified" alongside a divergence is a false green (GOV-1).
+    assert body["status"] == "diverged"
     assert [d["sei"] for d in body["divergences"]] == ["loomweave:eid:abc123"]
     assert body["divergences"][0]["recorded_length"] == 2
     assert body["divergences"][0]["current_length"] == 1
