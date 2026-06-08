@@ -24,6 +24,7 @@ class BoundaryFinding:
 
 
 _EVIDENCE_RULE_IDS = {
+    "disabled": "POLICY_BOUNDARY_TEST_DISABLED",
     "shadowed": "POLICY_BOUNDARY_TEST_SHADOWS_SUBJECT",
     "not_exercised": "POLICY_BOUNDARY_TEST_DOES_NOT_EXERCISE_SUBJECT",
     "policy_not_asserted": "POLICY_BOUNDARY_TEST_WEAK",

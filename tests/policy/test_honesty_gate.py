@@ -3,6 +3,7 @@ import pytest
 from legis.policy.decorator import (
     check_policy_boundary,
     fingerprint,
+    fingerprint_source,
     policy_boundary,
 )
 
@@ -99,6 +100,39 @@ def test_gate_rejects_shadowed_boundary_calls():
     finding = check_policy_boundary(_decorate(stale_proof), shadowed_resolver)
     assert finding.ok is False
     assert "shadow" in finding.reason
+
+
+# A pinned, running evidence test that is later disabled with @pytest.mark.skip.
+# It is never collected as a test (name does not start with `test_`); the marker
+# merely sets an attribute. inspect.getsource includes the @skip line, but the
+# fingerprint strips decorators, so the recomputed fingerprint is byte-identical
+# to the clean version's — the drift check cannot see the disablement (POLICY-1).
+@pytest.mark.skip(reason="disabled after the human pinned it")
+def skip_disabled_boundary_test():
+    result = handler("payload")  # noqa: F821
+    assert result == "payload", "no-eval"
+
+
+def test_gate_rejects_evidence_test_disabled_by_skip_marker():
+    # Pin the fingerprint of the same-named/body test BEFORE the @skip was added,
+    # computed straight from source. The live recompute (over the @skip-decorated
+    # function) must equal it — that equality IS the POLICY-1 vulnerability — yet
+    # the gate must now reject the disabled test.
+    clean_source = (
+        "def skip_disabled_boundary_test():\n"
+        "    result = handler('payload')\n"
+        "    assert result == 'payload', 'no-eval'\n"
+    )
+    clean_fp = fingerprint_source(clean_source)
+    assert fingerprint(skip_disabled_boundary_test) == clean_fp, (
+        "fingerprint should be blind to the @skip decorator (Q-L5)"
+    )
+
+    finding = check_policy_boundary(
+        _decorate(clean_fp), lambda ref: skip_disabled_boundary_test
+    )
+    assert finding.ok is False
+    assert "disabl" in finding.reason.lower()
 
 
 def test_gate_fails_on_fingerprint_drift():

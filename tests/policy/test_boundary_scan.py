@@ -90,6 +90,73 @@ def test_policy_boundary_exercises_subject():
     assert findings[0].rule_id == "POLICY_BOUNDARY_TEST_FINGERPRINT_MISMATCH"
 
 
+def test_scan_policy_boundaries_rejects_skip_disabled_evidence_test(tmp_path: Path) -> None:
+    # POLICY-1, end-to-end: a reviewer pins a real, running evidence test, then
+    # the test is disabled with @pytest.mark.skip after the fact. The fingerprint
+    # is blind to decorators (Q-L5), so the drift check still passes byte-for-byte
+    # — the gate must catch the disablement on its own. Pinning the *clean*
+    # fingerprint and disabling on disk reproduces the byte-identical-fingerprint
+    # claim: the single finding being TEST_DISABLED (not FINGERPRINT_MISMATCH)
+    # proves the fingerprint still matched.
+    clean_test = '''
+def test_policy_boundary_exercises_subject():
+    assert guarded({"policy": "PY-WL-101"}) == "ok"
+'''
+    fp = _test_fingerprint(clean_test)
+    disabled_test = '''
+import pytest
+
+
+@pytest.mark.skip(reason="disabled after the human pinned it")
+def test_policy_boundary_exercises_subject():
+    assert guarded({"policy": "PY-WL-101"}) == "ok"
+'''
+    src = tmp_path / "src" / "pkg"
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    _write_boundary_subject(
+        src,
+        test_ref="tests/test_subject.py::test_policy_boundary_exercises_subject",
+        test_fingerprint=fp,
+    )
+    (tests / "test_subject.py").write_text(disabled_test, encoding="utf-8")
+
+    findings = scan_policy_boundaries(src, repo_root=tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "POLICY_BOUNDARY_TEST_DISABLED"
+
+
+def test_scan_policy_boundaries_rejects_xfail_disabled_evidence_test(tmp_path: Path) -> None:
+    clean_test = '''
+def test_policy_boundary_exercises_subject():
+    assert guarded({"policy": "PY-WL-101"}) == "ok"
+'''
+    fp = _test_fingerprint(clean_test)
+    disabled_test = '''
+import pytest
+
+
+@pytest.mark.xfail
+def test_policy_boundary_exercises_subject():
+    assert guarded({"policy": "PY-WL-101"}) == "ok"
+'''
+    src = tmp_path / "src" / "pkg"
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    _write_boundary_subject(
+        src,
+        test_ref="tests/test_subject.py::test_policy_boundary_exercises_subject",
+        test_fingerprint=fp,
+    )
+    (tests / "test_subject.py").write_text(disabled_test, encoding="utf-8")
+
+    findings = scan_policy_boundaries(src, repo_root=tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "POLICY_BOUNDARY_TEST_DISABLED"
+
+
 def test_scan_policy_boundaries_reports_test_that_does_not_exercise_subject(
     tmp_path: Path,
 ) -> None:

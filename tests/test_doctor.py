@@ -5,11 +5,13 @@ import json
 from legis.cli import main as cli_main
 from legis.doctor import (
     DoctorCheck,
+    check_filigree_binding_scope,
     check_gitignore,
     check_hook,
     check_instruction_block,
     check_mcp_json,
     check_skill_pack,
+    collect_checks,
     render_json,
     render_text,
     run_doctor,
@@ -546,3 +548,76 @@ def test_json_output_has_no_secret(tmp_path, monkeypatch):
     payload = json.loads(out)
     hmac_checks = [c for c in payload["checks"] if c["id"] == "runtime.hmac_key"]
     assert hmac_checks and hmac_checks[0]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# check_filigree_binding_scope — the federation scan-results binding in
+# .mcp.json must be project-scoped, else filigree server-mode N1 fail-closes
+# the unscoped write (HTTP 400) and scans silently non-emit.
+# ---------------------------------------------------------------------------
+
+
+def _write_mcp_with_filigree_url(root, url: str | None) -> None:
+    args = ["mcp", "--root", "."]
+    if url is not None:
+        args += ["--filigree-url", url]
+    (root / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"wardline": {"command": "wardline", "args": args}}}),
+        encoding="utf-8",
+    )
+
+
+def test_filigree_scope_warns_on_unscoped_federation_write(tmp_path):
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "warn"
+    # honors "outputs": names the offending URL so the operator sees the binding
+    assert "8749/api/weft/scan-results" in c.message
+    assert "/api/p/" in c.message  # points at the scoped form to use
+
+
+def test_filigree_scope_ok_on_path_scoped_binding(tmp_path):
+    url = "http://127.0.0.1:8749/api/p/legis/weft/scan-results"
+    _write_mcp_with_filigree_url(tmp_path, url)
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+    # honors "outputs": surfaces the project-scoped binding rather than a bare ok
+    assert url in c.message
+
+
+def test_filigree_scope_ok_on_query_scoped_binding(tmp_path):
+    _write_mcp_with_filigree_url(
+        tmp_path, "http://127.0.0.1:8749/api/weft/scan-results?project=legis"
+    )
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+
+
+def test_filigree_scope_ok_when_no_binding_present(tmp_path):
+    _write_mcp_with_filigree_url(tmp_path, None)
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+
+
+def test_filigree_scope_ok_when_no_mcp_json(tmp_path):
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+
+
+def test_filigree_scope_ignores_non_federation_path(tmp_path):
+    # A non-federation-write filigree path is not N1-gated, so it must not warn
+    # (avoid false positives on, e.g., a base or an issue endpoint).
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/issue/x/comments")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+
+
+def test_filigree_scope_survives_malformed_mcp_json(tmp_path):
+    (tmp_path / ".mcp.json").write_text("{not json", encoding="utf-8")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+
+
+def test_collect_checks_includes_filigree_scope(tmp_path):
+    ids = {c.id for c in collect_checks(tmp_path, repair=False)}
+    assert "install.filigree_scope" in ids

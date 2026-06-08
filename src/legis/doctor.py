@@ -13,7 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy.engine import make_url
 
@@ -420,6 +420,80 @@ def check_sibling_url(cid: str, env: str) -> DoctorCheck:
     return DoctorCheck(cid, "error", message=f"{env} invalid URL: {url!r}")
 
 
+# The federation-WRITE paths filigree's ProjectMiddleware fail-closes in
+# server-mode when unscoped (dashboard.py protected_paths + the 400 "scope to a
+# project — use /api/p/{key}/… or ?project={key}"). An unscoped binding to one of
+# these silently NON-emits under a multi-project daemon (N1). A path is project-
+# scoped iff it is mounted under /api/p/<key>/ OR carries a ?project= query.
+_FEDERATION_WRITE_PATHS = frozenset(
+    {"/api/scan-results", "/api/observations", "/api/v1/scan-results", "/api/v1/observations"}
+)
+
+
+def _filigree_binding_urls(root: Path) -> list[str]:
+    """Every ``--filigree-url`` value across the .mcp.json server entries.
+
+    This widens doctor past its own legis entry into the scanner (wardline) entry
+    that actually emits scan-results — deliberately, because that is the binding
+    subject to filigree's N1 fail-closed server-mode write."""
+    path = root / ".mcp.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return []
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    urls: list[str] = []
+    for entry in servers.values():
+        args = entry.get("args") if isinstance(entry, dict) else None
+        if not isinstance(args, list):
+            continue
+        for i, arg in enumerate(args):
+            if arg == "--filigree-url" and i + 1 < len(args) and isinstance(args[i + 1], str):
+                urls.append(args[i + 1])
+    return urls
+
+
+def _is_unscoped_federation_write(url: str) -> bool:
+    """True iff *url* targets a federation-write path WITHOUT a project scope."""
+    parsed = urlsplit(url)
+    path = parsed.path
+    if path.startswith("/api/p/") or "project" in parse_qs(parsed.query):
+        return False  # scoped (path mount or ?project=)
+    norm = path.rstrip("/")
+    return path.startswith("/api/weft/") or norm in _FEDERATION_WRITE_PATHS
+
+
+def check_filigree_binding_scope(root: Path) -> DoctorCheck:
+    """Report-only: is the .mcp.json filigree scan-results binding project-scoped?
+
+    An unscoped federation write (``/api/weft/…`` etc.) is fail-closed with a 400
+    by a filigree server-mode daemon (N1), so the scan silently never lands. Warn
+    (not error: harmless against a single-project / stdio filigree) and name the
+    binding URL + verdict so ``doctor`` *outputs* the scope, not a bare ok."""
+    cid = "install.filigree_scope"
+    urls = _filigree_binding_urls(root)
+    if not urls:
+        return DoctorCheck(cid, "ok", message="no filigree scan-results binding in .mcp.json")
+    unscoped = [u for u in urls if _is_unscoped_federation_write(u)]
+    if unscoped:
+        return DoctorCheck(
+            cid,
+            "warn",
+            message=(
+                "filigree binding not project-scoped: "
+                + ", ".join(unscoped)
+                + " — filigree server-mode fail-closes unscoped federation writes (HTTP 400) "
+                "so scans silently non-emit; scope to /api/p/<project>/weft/scan-results "
+                "or add ?project=<project>"
+            ),
+        )
+    return DoctorCheck(cid, "ok", message="project-scoped: " + ", ".join(urls))
+
+
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     """Run every check against *root*. Repairs run inside individual checks
     when *repair* is True; each returned check reflects post-repair state."""
@@ -431,6 +505,7 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_hook(root, repair=repair))
     checks.append(check_gitignore(root, repair=repair))
     checks.append(check_mcp_json(root, repair=repair))
+    checks.append(check_filigree_binding_scope(root))
     checks.append(check_weft_toml(root))
     checks.append(check_store_dir(root, repair=repair))
     checks.append(check_db_overrides(root))
