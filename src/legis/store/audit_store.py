@@ -62,11 +62,23 @@ def _apply_sqlite_pragmas(dbapi_connection: Any, url: str) -> None:
       ``except Exception: pass`` never caught this most-likely case, so the
       connection ran without WAL and the symptom surfaced much later as an
       opaque "database is locked" under concurrency. Detect and log it here.
+
+    Durability is ``synchronous=FULL``, NOT the throughput-favouring ``NORMAL``
+    (AUD-3). Under WAL, ``NORMAL`` fsyncs the WAL only at a checkpoint, so a
+    committed-but-not-yet-checkpointed append is lost on a power-cut — and the
+    survivors form a consistent, contiguous, fully-signed chain, i.e. a
+    valid-looking *shortened* trail indistinguishable from "nothing more was
+    written". For an audit-integrity store that silent tail-loss is the harm,
+    so each commit is fsynced (``FULL``); throughput is the right thing to
+    trade. This is the prevention half; AUD-1's out-of-band head anchor is the
+    detection half (it flags a trail that shrank below its recorded head). The
+    floor is intentionally not configurable — an audit store's durability must
+    not be lowerable back to the bug.
     """
     cursor = dbapi_connection.cursor()
     try:
         journal_row = cursor.execute("PRAGMA journal_mode=WAL").fetchone()
-        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA synchronous=FULL")
         cursor.execute("PRAGMA busy_timeout=5000")
         journal_mode = journal_row[0] if journal_row else None
         if journal_mode is not None and str(journal_mode).lower() != "wal":

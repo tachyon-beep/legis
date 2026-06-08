@@ -152,6 +152,20 @@ def test_pragma_wal_actually_applied_on_file(tmp_path):
     assert mode.lower() == "wal"
 
 
+def test_pragma_synchronous_is_full_for_durability(tmp_path):
+    # AUD-3: an audit-integrity store must not lose committed appends on a
+    # power-cut. Under WAL, synchronous=NORMAL only fsyncs the WAL at a
+    # checkpoint, so committed-but-unsynced records vanish on power loss,
+    # leaving a consistent, contiguous, valid-looking SHORTENED trail. FULL (2)
+    # fsyncs every commit, so a committed governance record is durable. (0=OFF,
+    # 1=NORMAL, 2=FULL, 3=EXTRA.) Read on a connection that went through the
+    # listener — synchronous is per-connection, not a persistent file property.
+    s = make_store(tmp_path)
+    with s._engine.connect() as conn:
+        level = conn.exec_driver_sql("PRAGMA synchronous").scalar()
+    assert level == 2  # FULL
+
+
 def test_pragma_busy_timeout_set_on_listener_connection(tmp_path):
     # busy_timeout is per-connection (not persistent), so it must be read on a
     # connection that went through the listener — i.e. one from the store engine.
