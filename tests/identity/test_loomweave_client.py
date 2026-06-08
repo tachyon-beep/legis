@@ -121,6 +121,42 @@ def test_sign_loomweave_request_matches_loomweave_hmac_contract():
     }
 
 
+def test_capability_probe_is_signed_when_key_is_provisioned():
+    # ID-3: the capability probe is the trust-establishing handshake — it decides
+    # whether legis treats the provider as SEI-capable at all. When a key is
+    # provisioned it must carry the Weft-component HMAC like every other route;
+    # an unsigned probe is the one route an auth-enforcing Loomweave cannot
+    # authenticate, and the lone unsigned exception in a keyed deployment.
+    fetch = _fake_fetch({("GET", "/api/v1/_capabilities"): {"sei": {"supported": True, "version": 1}}})
+    c = HttpLoomweaveIdentity(
+        "http://localhost",
+        fetch=fetch,
+        hmac_key="s3cr3t",
+        clock=lambda: 1_900_000_000,
+        nonce_factory=lambda: "nonce-1",
+    )
+
+    assert c.capability() is True
+
+    headers = fetch.calls[-1][3]
+    expected = sign_loomweave_request(
+        b"s3cr3t",
+        "GET",
+        "http://localhost/api/v1/_capabilities",
+        None,
+        timestamp=1_900_000_000,
+        nonce="nonce-1",
+    )
+    assert headers == expected
+
+
+def test_capability_probe_stays_unsigned_when_no_key():
+    # Keyless (loopback/trusted) deployments are unchanged: no key → no headers.
+    fetch = _fake_fetch({("GET", "/api/v1/_capabilities"): {"sei": {"supported": True, "version": 1}}})
+    assert HttpLoomweaveIdentity("http://localhost", fetch=fetch).capability() is True
+    assert fetch.calls[-1][3] == {}
+
+
 def test_resolve_locator_sends_weft_hmac_headers_when_key_is_provisioned():
     body = {"sei": "loomweave:eid:abc", "current_locator": "python:function:m.f", "content_hash": "h", "alive": True}
     fetch = _fake_fetch({("POST", "/api/v1/identity/resolve"): body})

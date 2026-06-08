@@ -156,10 +156,13 @@ class HttpLoomweaveIdentity:
         self._clock = clock or (lambda: int(time.time()))
         self._nonce_factory = nonce_factory or (lambda: uuid.uuid4().hex)
 
-    def _request(self, method: str, path: str, body: dict | None, *, signed: bool = True) -> dict:
+    def _request(self, method: str, path: str, body: dict | None) -> dict:
+        # Every SEI route signs when a key is provisioned and goes bare when not
+        # (loopback/trusted). There is deliberately no per-call "unsigned" knob:
+        # an opt-out is exactly what left the capability probe spoofable (ID-3).
         url = f"{self._base}{path}"
         headers: dict[str, str] = {}
-        if signed and self._hmac_key is not None:
+        if self._hmac_key is not None:
             headers = sign_loomweave_request(
                 self._hmac_key,
                 method,
@@ -171,8 +174,16 @@ class HttpLoomweaveIdentity:
         return self._fetch(method, url, body, headers)
 
     def capability(self) -> bool:
+        # ID-3: sign the probe when keyed, exactly like every other SEI route
+        # (``_request`` already no-ops signing when no key is provisioned, so
+        # loopback/trusted deployments are unchanged). The capability probe is
+        # the trust-establishing handshake — whether legis treats the provider
+        # as SEI-capable at all — so it must not be the lone unsigned exception
+        # an auth-enforcing Loomweave cannot authenticate. Wire confidentiality
+        # against an on-path response rewrite remains TLS's job, which
+        # ``_validate_base_url`` enforces for any non-loopback (keyed) host.
         body = _require_dict(
-            self._request("GET", "/api/v1/_capabilities", None, signed=False),
+            self._request("GET", "/api/v1/_capabilities", None),
             "Loomweave capability",
         )
         sei = body.get("sei") if isinstance(body, dict) else None
