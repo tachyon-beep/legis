@@ -175,12 +175,17 @@ Legis is complete when:
 
 ## Repository layout
 
+- `docs/guide/` — operator guides: configuration reference and output interpretation
 - `docs/federation/` — Weft-facing contracts and participation notes
 - `docs/design/` — product intent and design notes
 - `docs/superpowers/specs/` — approved design specs
 - `docs/superpowers/plans/` — implementation plans
 
 ## Documents
+
+**Operator guides (how to configure and read Legis):**
+- `docs/guide/configuration.md` — what to set, what each cell costs to enable, the full env-var/flag reference, and the dev-only escape hatches
+- `docs/guide/reading-legis-output.md` — what you're seeing when an agent acts: the verdict/outcome/status vocabulary and which signals need a human
 
 **Design and federation:**
 - `docs/design/legis-charter.md` — authority boundary, operating modes, near-term scope
