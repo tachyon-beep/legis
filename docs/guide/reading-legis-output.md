@@ -26,6 +26,32 @@ They overlap on `BLOCKED` but mean different things in different places. When in
 doubt: an **envelope** is what a tool call returned; a **Verdict** is what the
 trail says happened.
 
+## A worked example: an agent hits a coached policy
+
+Concrete, end to end — the mental model the tables below fill in:
+
+1. An agent edits code that trips the `import-allowlist` policy, which your
+   `cells.toml` routes to the **coached** cell.
+2. The agent submits an override with a rationale. Because the cell has a judge,
+   the LLM evaluates it *before anything records*. The judge is unconvinced and
+   the call returns **`BLOCKED`** with `blocked_reason_code: RATIONALE_INSUFFICIENT`
+   and `next_actions: [REVISE_CODE, REVISE_RATIONALE]`. **Nothing is written to the
+   trail; this attempt does not count toward the override-rate.** You see nothing
+   that needs you.
+3. The agent sharpens its rationale (or fixes the import) and resubmits. This time
+   the judge accepts: the call returns **`ACCEPTED_BY_JUDGE`**, and a **`ACCEPTED`**
+   Verdict is written to the SEI-keyed audit trail with the judge's rationale
+   recorded verbatim.
+4. **Later, on your schedule,** you review the trail and see the `ACCEPTED` record:
+   which policy, which entity, the rationale the judge accepted. If it looks wrong,
+   you act then — out of band. You were never blocked, and the agent never silently
+   passed.
+
+Had the same policy been routed to **structured** instead, step 2 would have
+returned **`ESCALATED_PENDING`** and stopped — waiting for *you* to sign off before
+the agent could proceed. That is the one common case where you are in the loop by
+design. The rest of this guide is the reference for every signal in that flow.
+
 ## When an agent overrides a policy
 
 This is the core event. An agent hit a policy at the CI/git boundary and chose to
