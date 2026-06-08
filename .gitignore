@@ -20,6 +20,8 @@ coverage.json
 
 # Local tooling config (machine-specific, never commit)
 .mcp.json
+# Claude Code scheduled-tasks runtime lock (transient; never commit)
+.claude/*.lock
 
 # Agent instruction files — filigree-generated, regenerated each session
 AGENTS.md

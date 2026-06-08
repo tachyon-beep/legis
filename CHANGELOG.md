@@ -81,12 +81,29 @@ or relocated, and no MCP tool enables a cell or self-grants authority (pinned by
   governing nothing. The dirty-snapshot opt-in stays an env-only operator switch — no
   `scan_route` call argument was added. (Compounds with sibling finding C1: loomweave's
   tracked runtime DB perpetually dirties the tree; that fix is loomweave-side.)
+- **`install.filigree_scope` doctor check is gated on filigree being installed.** The
+  report-only unscoped-binding warning only fires when filigree is actually set up in
+  the project (file-existence probe: `.filigree.conf` AND a resolved store config — no
+  import of filigree, staying decoupled from its schema). An unscoped binding only
+  fail-closes against a server-mode filigree daemon, so the warning is noise when
+  filigree is absent. When it does fire, the message now names it as operator-owned (the
+  `--filigree-url` is operator-pinned in wardline's `.mcp.json` entry; legis never writes
+  it), so the check stays `repairable=False` and names the operator action instead of
+  implying `--fix` can resolve it.
+- **`legis doctor --format json` checks now carry a `repairable` field** (bool). Additive
+  — every check object gains the key; no existing key changed.
 
 ### Added
 - **Two report-only `legis doctor` checks (N3).** `runtime.policy_cells` and
   `runtime.wardline_routing` report whether the governance surface is wired and, when
   not, name the exact enablement keys (warn, never auto-fixed; presence-only — they
   write nothing and never render a key value).
+- **`legis doctor --fix`** — canonical spelling of the repair flag (`--repair` stays a
+  working alias, no break for scripts). Each check now carries a `repairable` bit, and
+  the text view tags every problem `[fixed]` / `[auto-fixable]` / `[operator]` with a
+  footer that points auto-fixable items at `legis doctor --fix` and tells the operator
+  that `[operator]` items need out-of-band config + a relaunch. Distinguishes "doctor
+  can repair this" from "only you can" at a glance.
 
 ### Docs
 - **Charter: self-asserted write actor (C3, weft-f506e5f845).** `legis-charter.md`'s

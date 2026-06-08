@@ -31,12 +31,28 @@ from legis import install as legis_install
 
 
 def test_doctorcheck_to_dict_omits_empty_message():
-    assert DoctorCheck("a.b", "ok").to_dict() == {"id": "a.b", "status": "ok", "fixed": False}
+    assert DoctorCheck("a.b", "ok").to_dict() == {
+        "id": "a.b",
+        "status": "ok",
+        "fixed": False,
+        "repairable": False,
+    }
     assert DoctorCheck("a.b", "error", message="boom").to_dict() == {
         "id": "a.b",
         "status": "error",
         "fixed": False,
+        "repairable": False,
         "message": "boom",
+    }
+
+
+def test_doctorcheck_to_dict_carries_repairable_true():
+    assert DoctorCheck("a.b", "error", message="x", repairable=True).to_dict() == {
+        "id": "a.b",
+        "status": "error",
+        "fixed": False,
+        "repairable": True,
+        "message": "x",
     }
 
 
@@ -44,7 +60,7 @@ def test_render_json_shape():
     checks = [DoctorCheck("a", "ok"), DoctorCheck("b", "error", message="bad")]
     payload = json.loads(render_json(checks))
     assert payload["ok"] is False
-    assert payload["checks"][0] == {"id": "a", "status": "ok", "fixed": False}
+    assert payload["checks"][0] == {"id": "a", "status": "ok", "fixed": False, "repairable": False}
     assert payload["next_actions"] == ["b: bad"]
 
 
@@ -61,6 +77,48 @@ def test_render_text_lists_only_problems_when_healthy_says_ok():
     out_warn = render_text([DoctorCheck("a", "ok"), DoctorCheck("b", "warn", message="heads up")])
     assert "legis doctor: ok" in out_warn
     assert "b: warn" in out_warn
+
+
+def test_render_text_tags_auto_fixable_and_footer():
+    out = render_text(
+        [DoctorCheck("install.x", "error", message="m", repairable=True)]
+    )
+    assert "install.x: error — m [auto-fixable]" in out
+    assert "Run `legis doctor --fix` to repair auto-fixable items." in out
+    # no operator items => no operator footer
+    assert "[operator] items are not auto-fixable" not in out
+
+
+def test_render_text_tags_operator_and_footer():
+    out = render_text(
+        [DoctorCheck("runtime.policy_cells", "warn", message="m", repairable=False)]
+    )
+    assert "runtime.policy_cells: warn — m [operator]" in out
+    assert "[operator] items are not auto-fixable by `legis doctor --fix`" in out
+    # no auto-fixable items => no fix footer
+    assert "Run `legis doctor --fix` to repair auto-fixable items." not in out
+
+
+def test_render_text_tags_fixed():
+    # A repaired check carries fixed=True; render it directly since the
+    # problems-only filter excludes ok checks from a real --fix run.
+    out = render_text([DoctorCheck("install.x", "warn", message="m", fixed=True, repairable=True)])
+    assert "install.x: warn — m [fixed]" in out
+    # [fixed] is not auto-fixable-pending, so no fix footer from it alone
+    assert "Run `legis doctor --fix` to repair auto-fixable items." not in out
+
+
+def test_render_text_both_footers_when_mixed():
+    out = render_text(
+        [
+            DoctorCheck("install.x", "error", message="a", repairable=True),
+            DoctorCheck("runtime.policy_cells", "warn", message="b", repairable=False),
+        ]
+    )
+    assert "[auto-fixable]" in out
+    assert "[operator]" in out
+    assert "Run `legis doctor --fix` to repair auto-fixable items." in out
+    assert "[operator] items are not auto-fixable by `legis doctor --fix`" in out
 
 
 def test_run_doctor_healthy_after_repair(tmp_path, capsys):
@@ -107,6 +165,54 @@ def test_cli_doctor_json(tmp_path, capsys, monkeypatch):
     rc = cli_main(["doctor", "--repair", "--format", "json"])
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_cli_doctor_fix_repairs_project(tmp_path, capsys, monkeypatch):
+    # --fix is the canonical flag and must drive the same repair path as --repair.
+    monkeypatch.chdir(tmp_path)
+    rc = cli_main(["doctor", "--fix"])
+    assert rc == 0
+    assert "legis doctor: ok" in capsys.readouterr().out
+
+
+def test_cli_doctor_repair_alias_still_accepted(tmp_path, capsys, monkeypatch):
+    # Back-compat: --repair remains a working alias of --fix (no break for scripts).
+    monkeypatch.chdir(tmp_path)
+    rc = cli_main(["doctor", "--repair"])
+    assert rc == 0
+    assert "legis doctor: ok" in capsys.readouterr().out
+
+
+def test_cli_doctor_fix_dest_is_fix():
+    # argparse dest must be "fix" (both spellings land on the same dest).
+    from legis.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args(["doctor", "--fix"]).fix is True
+    assert parser.parse_args(["doctor", "--repair"]).fix is True
+    assert parser.parse_args(["doctor"]).fix is False
+
+
+def test_doctor_json_carries_repairable_per_check_and_true_for_six(tmp_path, capsys):
+    # repairable is always present per check, and True exactly for the six
+    # repair-honoring check functions (which emit eight check ids, since the
+    # instruction-block and skill-pack checks each run for two targets).
+    run_doctor(tmp_path, repair=False, fmt="json")
+    payload = json.loads(capsys.readouterr().out)
+    by_id = {c["id"]: c for c in payload["checks"]}
+    for c in payload["checks"]:
+        assert "repairable" in c  # always present (stable json shape)
+    repairable_ids = {cid for cid, c in by_id.items() if c["repairable"]}
+    assert repairable_ids == {
+        "install.claude_md",
+        "install.agents_md",
+        "install.claude_skill",
+        "install.agents_skill",
+        "install.hook",
+        "install.gitignore",
+        "install.mcp_json",
+        "store.dir",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +694,19 @@ def test_json_output_has_no_secret(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _mark_filigree_installed(root, *, legacy: bool = False) -> None:
+    """Lay down filigree's install markers (file-existence only) so the
+    install-gate in check_filigree_binding_scope evaluates the binding instead of
+    short-circuiting to "filigree not installed"."""
+    (root / ".filigree.conf").write_text("", encoding="utf-8")
+    if legacy:
+        cfg = root / ".filigree" / "config.json"
+    else:
+        cfg = root / ".weft" / "filigree" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("{}", encoding="utf-8")
+
+
 def _write_mcp_with_filigree_url(root, url: str | None) -> None:
     args = ["mcp", "--root", "."]
     if url is not None:
@@ -599,15 +718,50 @@ def _write_mcp_with_filigree_url(root, url: str | None) -> None:
 
 
 def test_filigree_scope_warns_on_unscoped_federation_write(tmp_path):
+    _mark_filigree_installed(tmp_path)
     _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
     c = check_filigree_binding_scope(tmp_path)
     assert c.status == "warn"
+    assert c.repairable is False  # operator-owned; legis never writes the binding
     # honors "outputs": names the offending URL so the operator sees the binding
     assert "8749/api/weft/scan-results" in c.message
-    assert "/api/p/" in c.message  # points at the scoped form to use
+    assert "/api/p/<project>" in c.message  # operator action + literal placeholder
+    assert "operator-pinned" in c.message  # names ownership
+    assert "Operator action" in c.message
+
+
+def test_filigree_scope_suppressed_when_filigree_not_installed(tmp_path):
+    # An unscoped binding but NO filigree markers => the warning is suppressed
+    # (nothing can fail-close it). Must NOT be a real unscoped warning.
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+    assert c.message == "filigree not installed in this project"
+
+
+def test_filigree_scope_partial_markers_treated_as_not_installed(tmp_path):
+    # Only .filigree.conf (no resolved config.json) does NOT count as installed:
+    # the AND in _filigree_installed requires both the root anchor AND a store
+    # config, so a half-marker resolves to "not installed" and the warning is
+    # suppressed. The anti-false-green guarantee runs the other way — a REAL
+    # install (BOTH markers) still surfaces a genuine unscoped warning, which is
+    # covered by test_filigree_scope_warns_on_unscoped_federation_write.
+    (tmp_path / ".filigree.conf").write_text("", encoding="utf-8")
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "ok"
+    assert c.message == "filigree not installed in this project"
+
+
+def test_filigree_scope_warns_with_legacy_config_marker(tmp_path):
+    _mark_filigree_installed(tmp_path, legacy=True)
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "warn"
 
 
 def test_filigree_scope_ok_on_path_scoped_binding(tmp_path):
+    _mark_filigree_installed(tmp_path)
     url = "http://127.0.0.1:8749/api/p/legis/weft/scan-results"
     _write_mcp_with_filigree_url(tmp_path, url)
     c = check_filigree_binding_scope(tmp_path)
@@ -617,6 +771,7 @@ def test_filigree_scope_ok_on_path_scoped_binding(tmp_path):
 
 
 def test_filigree_scope_ok_on_query_scoped_binding(tmp_path):
+    _mark_filigree_installed(tmp_path)
     _write_mcp_with_filigree_url(
         tmp_path, "http://127.0.0.1:8749/api/weft/scan-results?project=legis"
     )
@@ -625,12 +780,14 @@ def test_filigree_scope_ok_on_query_scoped_binding(tmp_path):
 
 
 def test_filigree_scope_ok_when_no_binding_present(tmp_path):
+    _mark_filigree_installed(tmp_path)
     _write_mcp_with_filigree_url(tmp_path, None)
     c = check_filigree_binding_scope(tmp_path)
     assert c.status == "ok"
 
 
 def test_filigree_scope_ok_when_no_mcp_json(tmp_path):
+    _mark_filigree_installed(tmp_path)
     c = check_filigree_binding_scope(tmp_path)
     assert c.status == "ok"
 
@@ -638,12 +795,14 @@ def test_filigree_scope_ok_when_no_mcp_json(tmp_path):
 def test_filigree_scope_ignores_non_federation_path(tmp_path):
     # A non-federation-write filigree path is not N1-gated, so it must not warn
     # (avoid false positives on, e.g., a base or an issue endpoint).
+    _mark_filigree_installed(tmp_path)
     _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/issue/x/comments")
     c = check_filigree_binding_scope(tmp_path)
     assert c.status == "ok"
 
 
 def test_filigree_scope_survives_malformed_mcp_json(tmp_path):
+    _mark_filigree_installed(tmp_path)
     (tmp_path / ".mcp.json").write_text("{not json", encoding="utf-8")
     c = check_filigree_binding_scope(tmp_path)
     assert c.status == "ok"
