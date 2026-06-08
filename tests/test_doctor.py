@@ -425,6 +425,15 @@ def test_split_brain_block_is_not_reported_fresh(tmp_path):
     assert repaired.status == "error"
     assert repaired.fixed is False
     assert "stale second legis body" in (tmp_path / "CLAUDE.md").read_text()
+    # INSTALL-1: the split-brain branch documents itself "resolve it by hand" and
+    # --fix is a no-op for it (it returns before the repair branch). So it must be
+    # repairable=False -> rendered [operator], NOT [auto-fixable]. Tagging it
+    # auto-fixable would re-create the --fix loop and is a false signal.
+    assert c.repairable is False
+    out = render_text([c])
+    assert "[operator]" in out
+    assert "[auto-fixable]" not in out
+    assert "Run `legis doctor --fix` to repair auto-fixable items." not in out
 
 
 def test_skill_pack_stale_fingerprint_is_error_then_repaired(tmp_path):
@@ -739,18 +748,40 @@ def test_filigree_scope_suppressed_when_filigree_not_installed(tmp_path):
     assert c.message == "filigree not installed in this project"
 
 
-def test_filigree_scope_partial_markers_treated_as_not_installed(tmp_path):
-    # Only .filigree.conf (no resolved config.json) does NOT count as installed:
-    # the AND in _filigree_installed requires both the root anchor AND a store
-    # config, so a half-marker resolves to "not installed" and the warning is
-    # suppressed. The anti-false-green guarantee runs the other way — a REAL
-    # install (BOTH markers) still surfaces a genuine unscoped warning, which is
-    # covered by test_filigree_scope_warns_on_unscoped_federation_write.
+def test_filigree_scope_conf_only_is_installed_and_warns(tmp_path):
+    # .filigree.conf ALONE is a genuine install: filigree's find_filigree_anchor
+    # resolves on the conf alone (core.py:1050-1054), no config.json required.
+    # So a conf-only project with an unscoped binding MUST warn — suppressing it
+    # would be the exact false-green the governance forbids (a server-mode daemon
+    # fail-closes the unscoped write while doctor stays green).
     (tmp_path / ".filigree.conf").write_text("", encoding="utf-8")
     _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
     c = check_filigree_binding_scope(tmp_path)
-    assert c.status == "ok"
-    assert c.message == "filigree not installed in this project"
+    assert c.status == "warn"
+    assert "8749/api/weft/scan-results" in c.message
+
+
+def test_filigree_scope_confless_weft_store_is_installed_and_warns(tmp_path):
+    # Confless federation install: .weft/filigree/ dir present, NO .filigree.conf.
+    # filigree resolves this as installed (core.py:1055-1059); legis must too, or
+    # it suppresses a real unscoped-binding warning.
+    (tmp_path / ".weft" / "filigree").mkdir(parents=True)
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "warn"
+    assert "8749/api/weft/scan-results" in c.message
+
+
+def test_filigree_scope_confless_legacy_dir_is_installed_and_warns(tmp_path):
+    # Confless legacy install: legacy .filigree/ dir present, NO .filigree.conf.
+    # filigree resolves this as installed (core.py:1060-1064); legis must too.
+    # This is the live federation-legacy-path case (legacy .filigree/ dirs exist
+    # in this environment).
+    (tmp_path / ".filigree").mkdir(parents=True)
+    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+    c = check_filigree_binding_scope(tmp_path)
+    assert c.status == "warn"
+    assert "8749/api/weft/scan-results" in c.message
 
 
 def test_filigree_scope_warns_with_legacy_config_marker(tmp_path):

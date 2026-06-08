@@ -169,7 +169,12 @@ def check_instruction_block(root: Path, filename: str, *, repair: bool) -> Docto
                 "brain); the stale copy cannot be auto-collapsed across another "
                 "tool's block — resolve it by hand"
             ),
-            repairable=True,
+            # NOT auto-fixable: --fix returns before the repair branch for this
+            # split-brain case (the injector won't splice across a sibling's
+            # block), so tag it [operator] to match its own "resolve it by hand"
+            # message — tagging [auto-fixable] would re-create the --fix loop the
+            # plan eliminates (false signal in a codebase that blocks on those).
+            repairable=False,
         )
     if repair:
         ok, msg = _install.inject_instructions(root / filename)
@@ -532,18 +537,28 @@ def _filigree_installed(root: Path) -> bool:
     """True iff filigree is set up in *root*, by FILE-EXISTENCE ONLY (no import of
     filigree, no JSON parse — staying decoupled from filigree's moved schema).
 
-    Mirrors filigree's marker precedence: the authoritative v2.0 root anchor
-    ``.filigree.conf`` AND a resolved store config (new ``.weft/filigree/config.json``
-    or legacy ``.filigree/config.json``). The AND is load-bearing: it prevents
-    suppressing a real unscoped-binding warning in a project where filigree is
-    genuinely installed (a lone ``.mcp.json`` binding is not enough to claim "not
-    installed"). Conversely, when filigree is not installed here the unscoped
-    binding cannot fail-close anything, so the warning is noise."""
-    if not (root / ".filigree.conf").is_file():
-        return False
-    return (root / ".weft" / "filigree" / "config.json").is_file() or (
-        root / ".filigree" / "config.json"
-    ).is_file()
+    Mirrors filigree's authoritative install predicate ``find_filigree_anchor``
+    (filigree core.py:1046-1064), which treats a project as installed if ANY ONE
+    of three markers is present — never AND:
+
+      - ``.filigree.conf`` is a file (the v2.0 root anchor; resolves on conf alone,
+        no ``config.json`` required), OR
+      - ``.weft/filigree/`` is a dir (federation-layout, confless install), OR
+      - ``.filigree/`` is a dir (legacy, confless install).
+
+    The OR is load-bearing and errs toward "installed" (warning shown): an
+    AND-with-mandatory-conf gate would return "not installed" for confless /
+    legacy / conf-only installs and SILENTLY DROP a real unscoped-binding warning
+    in a project where filigree genuinely IS installed — the false-green
+    governance forbids. The store/legacy checks are ``.is_dir()`` on the
+    directories (matching filigree exactly), NOT a ``config.json`` ``.is_file()``:
+    ``config.json`` presence is filigree's narrower worktree-local check, not its
+    install predicate."""
+    return (
+        (root / ".filigree.conf").is_file()
+        or (root / ".weft" / "filigree").is_dir()
+        or (root / ".filigree").is_dir()
+    )
 
 
 def check_filigree_binding_scope(root: Path) -> DoctorCheck:
