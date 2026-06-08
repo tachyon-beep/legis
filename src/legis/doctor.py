@@ -98,18 +98,31 @@ def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
 # ---------------------------------------------------------------------------
 
 
-def _block_fresh(root: Path, filename: str) -> bool:
-    """True iff <root>/<filename> has the legis block at the current token."""
+def _block_tokens(root: Path, filename: str) -> list[str | None] | None:
+    """Tokens of every legis block in <root>/<filename>, or None if unreadable.
+
+    ``[]`` means the file exists but carries no legis block. More than one entry
+    is a split brain (two divergent copies of the guidance)."""
     path = root / filename
     if not path.exists():
-        return False
+        return None
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return False
-    if _install.INSTRUCTIONS_MARKER not in content:
-        return False
-    return _install._extract_marker_token(content) == _install._marker_token()
+        return None
+    return _install._own_open_marker_tokens(content)
+
+
+def _block_fresh(root: Path, filename: str) -> bool:
+    """True iff <root>/<filename> has EXACTLY ONE legis block at the current token.
+
+    A second (stale) block is a split brain the injector tolerates but cannot
+    canonicalise across a sibling — reading freshness off the first marker alone
+    would report "healthy" while conflicting guidance sits in the file
+    (INSTALL-1). Requiring a singleton list at the current token closes that.
+    """
+    tokens = _block_tokens(root, filename)
+    return tokens == [_install._marker_token()]
 
 
 def check_instruction_block(root: Path, filename: str, *, repair: bool) -> DoctorCheck:
@@ -117,6 +130,22 @@ def check_instruction_block(root: Path, filename: str, *, repair: bool) -> Docto
     cid = "install.claude_md" if filename == "CLAUDE.md" else "install.agents_md"
     if _block_fresh(root, filename):
         return DoctorCheck(cid, "ok")
+    # A split brain (>1 legis block) cannot be auto-collapsed: the injector
+    # bounds its rewrite at its own first close and will not splice across a
+    # sibling's block or delete inter-block user content, so re-running install
+    # canonicalises the first block but leaves the stale copy. Surface it for
+    # hand-resolution instead of churning or, worse, reporting healthy.
+    tokens = _block_tokens(root, filename)
+    if tokens is not None and len(tokens) > 1:
+        return DoctorCheck(
+            cid,
+            "error",
+            message=(
+                f"{filename} has {len(tokens)} legis instruction blocks (split "
+                "brain); the stale copy cannot be auto-collapsed across another "
+                "tool's block — resolve it by hand"
+            ),
+        )
     if repair:
         ok, msg = _install.inject_instructions(root / filename)
         if ok and _block_fresh(root, filename):

@@ -280,6 +280,39 @@ def test_instruction_block_stale_token_is_error_then_repaired(tmp_path):
     assert legis_install._extract_marker_token((tmp_path / "CLAUDE.md").read_text()) == fresh_token
 
 
+def test_split_brain_block_is_not_reported_fresh(tmp_path):
+    # INSTALL-1: a fresh first legis block can coexist with a STALE second legis
+    # block — a split brain the injector deliberately tolerates when it cannot
+    # canonicalise across a sibling's block (install.py warns + leaves the stale
+    # copy). The freshness probe must NOT read "healthy" off the first marker
+    # alone; a stale second block is conflicting guidance that must surface.
+    fresh = legis_install._marker_token()
+    foreign = (
+        "<!-- wardline:instructions:v1:abcd1234 -->\n"
+        "wardline body\n"
+        "<!-- /wardline:instructions -->\n"
+    )
+    (tmp_path / "CLAUDE.md").write_text(
+        "HEAD\n"
+        f"{legis_install.INSTRUCTIONS_MARKER}:{fresh} -->\n"
+        "first (fresh) legis body\n"
+        "<!-- /legis:instructions -->\n"
+        + foreign
+        + f"{legis_install.INSTRUCTIONS_MARKER}:v0:deadbeef -->\n"
+        "stale second legis body\n"
+        "<!-- /legis:instructions -->\n"
+    )
+    c = check_instruction_block(tmp_path, "CLAUDE.md", repair=False)
+    assert c.status == "error"
+    assert "split" in c.message.lower()
+    # repair=True must NOT claim to have fixed a split brain it cannot collapse
+    # across the sibling block — it stays an honest error (the stale copy remains).
+    repaired = check_instruction_block(tmp_path, "CLAUDE.md", repair=True)
+    assert repaired.status == "error"
+    assert repaired.fixed is False
+    assert "stale second legis body" in (tmp_path / "CLAUDE.md").read_text()
+
+
 def test_skill_pack_stale_fingerprint_is_error_then_repaired(tmp_path):
     legis_install.install_skills(tmp_path)
     pack = tmp_path / ".claude" / "skills" / legis_install.SKILL_NAME

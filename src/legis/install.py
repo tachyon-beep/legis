@@ -219,6 +219,39 @@ def _extract_marker_token(content: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _own_open_marker_tokens(content: str) -> list[str | None]:
+    """Tokens of legis's *own* top-level open instruction fences, in order.
+
+    Foreign-aware exactly like ``_first_own_open_fence_pos``: a legis open fence
+    quoted *inside* an (unclosed) sibling block is not legis's own and is not
+    counted, so this never miscounts a documented example as a real block. A
+    canonical open fence yields its ``v{version}:{hash}`` token; a malformed one
+    yields ``None`` (present but not extractable → never "fresh").
+
+    The list length is the number of distinct legis blocks. More than one is a
+    split brain — two divergent copies of the guidance — which the injector
+    tolerates when it cannot canonicalise across a sibling's block (it warns and
+    leaves the stale copy). The freshness probe consumes this so it cannot read
+    "healthy" off the first marker alone while a stale second block survives
+    (INSTALL-1).
+    """
+    tokens: list[str | None] = []
+    inside_foreign: str | None = None
+    for m in _INSTR_FENCE_RE.finditer(content):
+        ns = m.group("ns").lower()
+        is_close = bool(m.group("close"))
+        if inside_foreign is not None:
+            if is_close and ns == inside_foreign:
+                inside_foreign = None
+            continue
+        if ns == "legis" and not is_close:
+            tm = _MARKER_TOKEN_RE.match(content, m.start())
+            tokens.append(tm.group(1) if tm else None)
+        elif ns != "legis" and not is_close:
+            inside_foreign = ns
+    return tokens
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write *content* to *path* atomically (temp + rename), preserving mode."""
     # Refuse-to-empty guard (filigree-04bad2a2bf parity). Every caller of this
