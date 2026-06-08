@@ -89,6 +89,15 @@ ask is that the approach be *explicit*, not left ambiguous.
 > are legitimate, a truncated or mutated prior event is divergence. Implemented in
 > `governance/gaps.py:find_lineage_divergence`; demonstrated by Sprint 5 Task 5.
 
+> **Custody seal depends on TLS (ID-SEI-1).** Because Option 3 makes transport the
+> custody seal for SEI responses (the Weft request HMAC authenticates legis's
+> *requests*, not Loomweave's *responses*), TLS is the only response-integrity
+> control on the SEI path. `LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1` permits plaintext to
+> a remote Loomweave/Filigree and therefore **voids that seal** — an on-path attacker
+> could forge a resolve response into a wrong-but-stable identity binding with no TLS
+> break. The flag now logs a warning when it bypasses HTTPS on a non-loopback host and
+> is for **dev/loopback use only**, never a keyed production deployment.
+
 **REQ-L-02 — §6 provider seam design (non-blocking; sequencing).**
 The SEI §3 matcher's git-rename detection should be designed as a typed
 provider interface (not Loomweave-internal) before it ships, so legis can supply

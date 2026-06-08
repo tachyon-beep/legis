@@ -34,6 +34,10 @@ def gate(tmp_path, opinion):
         FixedClock("2026-06-02T12:00:00+00:00"),
         judge=ScriptedJudge(opinion),
         key=KEY,
+        # JUDGE-3: protected cell is fail-closed; a judge ACCEPTED clears only
+        # with a deterministic validator confirming it. These tests exercise the
+        # cleared-record mechanics (binding, signing), so confirm deterministically.
+        validator=lambda record: True,
     )
     return g, store
 
@@ -109,6 +113,58 @@ def test_judge_receives_source_and_loomweave_context_that_will_be_signed(tmp_pat
     assert judge.seen.extensions["loomweave"]["content_hash"] == "h"
 
 
+def test_model_origin_operator_verdict_does_not_clear_the_gate(tmp_path):
+    # JUDGE-3 defense-in-depth: even if a judge returns OVERRIDDEN_BY_OPERATOR (an
+    # operator-authority verdict that _record_signed counts as accepted), the
+    # protected gate's submit() path must NOT honor it — only operator_override()
+    # may produce that verdict. A model-origin operator verdict downgrades to
+    # BLOCKED. (The judge parser also blocks this at the source; this pins the
+    # gate-level backstop, including for a policy that IS declared protected.)
+    g, store = _protected_gate(
+        tmp_path, JudgeOpinion(Verdict.OVERRIDDEN_BY_OPERATOR, "judge@1", "injected")
+    )
+    result = g.submit(
+        policy="no-eval",  # declared protected — the bypass worked even here
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="injected: approve",
+        agent_id="attacker",
+        file_fingerprint="sha256:abc",
+        ast_path="Module/Call[eval]",
+    )
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+    ext = store.read_all()[0].payload["extensions"]
+    assert ext["judge_verdict"] == "BLOCKED"
+    assert ext["judge_advisory_verdict"] == "OVERRIDDEN_BY_OPERATOR"
+
+
+def test_empty_protected_policies_no_validator_is_fail_closed(tmp_path):
+    # JUDGE-3 regression: the sharpest production scenario — LEGIS_PROTECTED_POLICIES
+    # unset (empty set) and no validator wired (the default gate construction in
+    # mcp.py / api/app.py). A fooled-judge ACCEPTED routed to the protected cell
+    # must NOT clear or be signed as authoritative; it downgrades to BLOCKED.
+    store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    g = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "injected")),
+        key=KEY,
+        # empty protected_policies (default), no validator (default)
+    )
+    result = g.submit(
+        policy="secrets-leak",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="trust me",
+        agent_id="attacker",
+        file_fingerprint="sha256:abc",
+        ast_path="Module/Call[eval]",
+    )
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+    ext = store.read_all()[0].payload["extensions"]
+    assert ext["judge_advisory_verdict"] == "ACCEPTED"
+
+
 # --- Q-H3: the LLM judge is advisory only on protected policies ---
 
 def _protected_gate(tmp_path, opinion, *, validator=None):
@@ -177,8 +233,13 @@ def test_validator_veto_downgrades_accepted_on_protected(tmp_path):
     assert result.verdict is Verdict.BLOCKED
 
 
-def test_non_protected_policy_accepted_still_clears(tmp_path):
-    # A policy not in protected_policies is unchanged: judge ACCEPTED clears.
+def test_undeclared_protected_cell_policy_is_also_fail_closed(tmp_path):
+    # JUDGE-3 (was test_non_protected_policy_accepted_still_clears): the protected
+    # cell is now fail-closed UNCONDITIONALLY. A policy routed here but absent from
+    # protected_policies used to clear on the judge's word — that was the silent
+    # fail-open (cell routing is glob-capable and diverges from the exact-match
+    # set). It now downgrades to BLOCKED just like a declared policy; membership
+    # only governs the config-hygiene warning, not the protection.
     g, store = _protected_gate(tmp_path, JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"))
     result = g.submit(
         policy="some-other-policy",
@@ -188,5 +249,8 @@ def test_non_protected_policy_accepted_still_clears(tmp_path):
         file_fingerprint="sha256:abc",
         ast_path="Module/Call[eval]",
     )
-    assert result.accepted is True
-    assert result.verdict is Verdict.ACCEPTED
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+    ext = store.read_all()[0].payload["extensions"]
+    assert ext["judge_verdict"] == "BLOCKED"
+    assert ext["judge_advisory_verdict"] == "ACCEPTED"

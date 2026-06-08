@@ -96,6 +96,15 @@ Legis's enforcement surface is a **2×2**, and the base always stays weightless.
 
 The elspeth CI judge (`/home/john/elspeth`) is the working design ancestor of the protected cell — it is the "thick version" shipped inside elspeth's own codebase. Legis is where the same mechanisms land as a suite-level, opt-in layer.
 
+### Known security limitations
+
+Legis is a governance-*honesty* tool, so it states its own residual limits plainly rather than leaving them in source comments:
+
+- **The coached cell is a model-robustness wall, not a cryptographic one.** A blocked agent clears the coached gate by convincing the LLM judge; a *malicious prompt injection* that persuades the model will likewise clear it. Structural injection (forging a verdict key) is closed and any transport/parse failure is fail-closed to `BLOCKED`, but the coached cell has no defense-in-depth against a model that is genuinely fooled. For verdicts that must not rest on the model's word, use the **protected** cell, where a judge `ACCEPTED` is advisory only and is downgraded to require operator sign-off (unless a deterministic, non-LLM validator confirms it).
+- **Tamper-evidence assumes the signing key is out of the attacker's reach, and is not absolute against raw DB-file writes.** v3 signing binds each record's chain position, so in-place edits, reordering, and renumbering are detected. A holder of raw write access to the governance `.db` can still *delete* a record and re-chain, or rewrite a record's policy to a non-protected value and strip its protected markers ("modify-to-unsigned"), or truncate the tail — these are residuals of the conceded raw-file-write threat tier. The opt-in `HeadAnchor` mitigates truncation/rewind (with a documented anchor-replay caveat). Keep the governance store on storage only the operator controls.
+- **Durability tier.** The audit store runs `synchronous=FULL`, but a power loss can still drop the most recent un-checkpointed appends; the trail stays internally consistent (a shortened-but-valid tail), it does not corrupt.
+- **SEI binding integrity rests on TLS by design.** The Weft request HMAC authenticates legis's *requests* to Loomweave/Filigree; it does not sign their *responses*. Response integrity is TLS's job. `LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1` permits plaintext to a remote sibling and therefore **voids that custody seal** (an on-path attacker could forge a stable identity binding) — it now logs a warning and is for dev/loopback use only.
+
 ### Graded enforcement
 
 Across all four cells, one underlying primitive: when a policy fires, the *cell* decides who answers and what is recorded.

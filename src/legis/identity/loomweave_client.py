@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import logging
 import os
 import time
 import urllib.error
@@ -37,6 +38,8 @@ from legis.weft_signing import (
 )
 
 Fetch = Callable[[str, str, "dict | None", Mapping[str, str]], dict]
+
+logger = logging.getLogger(__name__)
 
 
 class LoomweaveError(RuntimeError):
@@ -135,8 +138,21 @@ def _validate_base_url(base_url: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise LoomweaveError("Loomweave base URL must be an http(s) URL with a host")
     allow_insecure_remote = os.environ.get("LEGIS_ALLOW_INSECURE_REMOTE_HTTP") == "1"
-    if parsed.scheme == "http" and not _is_loopback(parsed.hostname) and not allow_insecure_remote:
-        raise LoomweaveError("Loomweave base URL must use HTTPS unless it is loopback")
+    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
+        if not allow_insecure_remote:
+            raise LoomweaveError("Loomweave base URL must use HTTPS unless it is loopback")
+        # ID-SEI-1: the flag is permitting a PLAINTEXT connection to a remote
+        # Loomweave. TLS is the ONLY integrity control on SEI *responses* (the
+        # request HMAC authenticates requests, not responses), so this voids the
+        # SEI/binding custody seal — an on-path attacker can forge a stable
+        # identity binding with no TLS break. Dev/loopback only; never production.
+        logger.warning(
+            "LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1 is permitting a plaintext HTTP "
+            "connection to non-loopback Loomweave host %r; this voids the SEI "
+            "binding TLS custody seal (responses are forgeable). Dev/loopback use "
+            "only.",
+            parsed.hostname,
+        )
     return base_url.rstrip("/")
 
 

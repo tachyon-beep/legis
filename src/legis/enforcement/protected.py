@@ -10,6 +10,7 @@ transplanted onto a different entity.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,8 @@ from legis.identity.entity_key import EntityKey
 from legis.records.override_record import OverrideRecord
 from legis.store.head_anchor import AnchorError, HeadAnchor
 from legis.store.protocol import AppendOnlyStore
+
+logger = logging.getLogger(__name__)
 
 
 class TamperError(RuntimeError):
@@ -93,9 +96,21 @@ class TrailVerifier:
     """Load-time signature check. A record whose policy is protected MUST carry a
     valid signature; a missing or mismatched signature is tampering.
 
-    The protected-policy set comes from config (ADR-0002), NOT from the record —
-    so stripping a signature and flipping an in-record flag cannot downgrade a
-    protected record to "unsigned, skip".
+    Scope of the guarantee (honest after the 2026-06-09 review, finding F1).
+    v3 ``chain_seq``-binding + contiguity catch in-place EDIT, REORDER, and
+    RENUMBER of records that remain protected — a mutated or repositioned signed
+    record fails to verify at its position. What is NOT caught here: a holder of
+    raw write access to the DB file can rewrite a damning record's ``policy`` to a
+    non-protected value AND strip its protected-cell markers ("modify-to-unsigned"),
+    or simply truncate the tail, so ``_requires_verification`` no longer selects
+    it and both ``verify_integrity()`` and ``verify()`` pass. Those are residuals
+    of the conceded raw-file-write threat tier (the same tier as the AUD-1
+    deletion residual), mitigated only by the opt-in ``HeadAnchor`` — and even
+    then with the documented anchor-replay caveat. The verification requirement
+    is currently derived from in-record fields, so it cannot, by itself, defend
+    against an actor who can rewrite those fields; hardening it (a
+    config/identity-derived requirement, or signing every append so "unsigned" is
+    itself whole-trail tamper) is tracked post-1.0.
     """
 
     def __init__(
@@ -207,14 +222,19 @@ class ProtectedGate:
         # Opt-in (AUD-1): advanced to the committed head after each append so a
         # later tail-truncation is detectable. None → not anchored (default).
         self._anchor = anchor
-        # For these policies the LLM judge is ADVISORY ONLY (Q-H3): a model
+        # The LLM judge is ADVISORY in the protected cell (Q-H3): a model
         # ACCEPTED does not clear the gate on the model's word. A prompt-injected
         # rationale that fools the judge into ACCEPTED would otherwise be
         # HMAC-signed as authoritative evidence. ACCEPTED stands only if a
-        # non-LLM deterministic validator confirms it; otherwise it is downgraded
-        # to BLOCKED and the agent must obtain operator sign-off
-        # (operator_override). Empty set / no validator preserves prior behaviour
-        # for non-protected policies.
+        # non-LLM deterministic ``validator`` confirms it; otherwise it is
+        # downgraded to BLOCKED and the agent must obtain operator sign-off
+        # (operator_override). This downgrade is UNCONDITIONAL within the cell
+        # (finding JUDGE-3): ``protected_policies`` no longer gates it — a policy
+        # is protected by virtue of being routed to this cell, not by separate
+        # membership (cell routing is glob-capable and can diverge from the
+        # exact-match set). The set now only drives a config-hygiene warning for
+        # an undeclared protected-cell policy, plus the TrailVerifier read-side
+        # signature requirement.
         self._protected_policies = protected_policies
         self._validator = validator
 
@@ -303,15 +323,33 @@ class ProtectedGate:
         opinion = self._judge.evaluate(proposed)
         verdict = opinion.verdict
         record_ext = dict(extensions or {})
-        if (
-            verdict is Verdict.ACCEPTED
-            and policy in self._protected_policies
-            and (self._validator is None or not self._validator(proposed))
-        ):
-            # Model is advisory on a protected policy: its ACCEPTED is recorded
-            # for audit but does NOT clear the gate (Q-H3). Downgrade the signed
-            # verdict to BLOCKED; the agent must escalate to operator sign-off.
-            record_ext["judge_advisory_verdict"] = Verdict.ACCEPTED.value
+        # Protected cell: the LLM judge is ADVISORY (Q-H3). The gate clears ONLY
+        # on a judge ACCEPTED that a deterministic, non-LLM validator confirms.
+        # EVERY other judge-origin verdict is downgraded to BLOCKED so the agent
+        # must escalate to operator sign-off. This is UNCONDITIONAL within the
+        # cell — a policy is protected by virtue of being routed here, not by
+        # separate protected_policies membership (finding JUDGE-3: cell routing is
+        # glob-capable and diverges from the exact-match set, so gating on
+        # membership left a silent fail-open). Crucially the downgrade must cover
+        # the WHOLE accepted-set, not just ACCEPTED: a fooled/injected model that
+        # emits OVERRIDDEN_BY_OPERATOR (which _record_signed also treats as
+        # accepted) must not clear the gate either. OVERRIDDEN_BY_OPERATOR is
+        # produced only by operator_override(), which bypasses this method; the
+        # judge parser additionally rejects it at the source.
+        validator_confirms = self._validator is not None and self._validator(proposed)
+        if not (verdict is Verdict.ACCEPTED and validator_confirms):
+            if verdict is not Verdict.BLOCKED:
+                # Record the model's advisory opinion for audit, then block.
+                record_ext["judge_advisory_verdict"] = verdict.value
+                if policy not in self._protected_policies:
+                    logger.warning(
+                        "protected-cell override for policy %r is not declared in "
+                        "protected_policies; downgrading the advisory %s "
+                        "fail-closed. Add it to LEGIS_PROTECTED_POLICIES to make "
+                        "the protection explicit and silence this warning.",
+                        policy,
+                        verdict.value,
+                    )
             verdict = Verdict.BLOCKED
         return self._record_signed(
             policy=policy,

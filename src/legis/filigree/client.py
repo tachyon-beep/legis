@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import logging
 import os
 import secrets
 import time
@@ -26,6 +27,8 @@ from legis.weft_signing import (
 )
 
 Fetch = Callable[[str, str, "dict | None"], dict]
+
+logger = logging.getLogger(__name__)
 
 
 class FiligreeError(RuntimeError):
@@ -137,8 +140,19 @@ def _validate_base_url(base_url: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise FiligreeError("Filigree base URL must be an http(s) URL with a host")
     allow_insecure_remote = os.environ.get("LEGIS_ALLOW_INSECURE_REMOTE_HTTP") == "1"
-    if parsed.scheme == "http" and not _is_loopback(parsed.hostname) and not allow_insecure_remote:
-        raise FiligreeError("Filigree base URL must use HTTPS unless it is loopback")
+    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
+        if not allow_insecure_remote:
+            raise FiligreeError("Filigree base URL must use HTTPS unless it is loopback")
+        # ID-SEI-1: plaintext to a remote Filigree. TLS is the only integrity
+        # control on responses (the request HMAC authenticates requests, not
+        # responses), so an on-path attacker can tamper with what legis reads
+        # back. Dev/loopback only; never production.
+        logger.warning(
+            "LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1 is permitting a plaintext HTTP "
+            "connection to non-loopback Filigree host %r; responses are forgeable "
+            "without TLS. Dev/loopback use only.",
+            parsed.hostname,
+        )
     return base_url.rstrip("/")
 
 

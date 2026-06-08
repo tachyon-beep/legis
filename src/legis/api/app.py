@@ -732,11 +732,25 @@ def create_app(
     # When no client is wired there is nothing stable to probe.
 
     @app.get("/governance/identity-gaps")
-    def identity_gaps() -> list[dict]:
+    def identity_gaps() -> dict:
+        # GOV-2: distinguish "could not check" from "checked, zero gaps". A bare
+        # [] when Loomweave is unwired reads as an all-clear on the exact
+        # condition this endpoint exists to catch — the same false-green shape as
+        # GOV-1, which the sibling lineage-integrity endpoint already avoids.
         if identity is None or identity.client is None:
-            return []
+            return {
+                "status": "unavailable",
+                "gaps": [],
+                "unavailable": [{"reason": "loomweave client not configured"}],
+            }
         gaps = find_orphan_gaps(verified_governance_records(), identity.client)
-        return [{"sei": g.sei, "reason": g.reason, "lineage": g.lineage} for g in gaps]
+        return {
+            "status": "checked",
+            "gaps": [
+                {"sei": g.sei, "reason": g.reason, "lineage": g.lineage}
+                for g in gaps
+            ],
+        }
 
     @app.get("/governance/lineage-integrity")
     def lineage_integrity() -> dict:

@@ -27,9 +27,13 @@ class ScriptedJudge:
 
 def _gate(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
+    # JUDGE-3: the protected cell is fail-closed — a judge ACCEPTED only clears
+    # when a deterministic validator confirms it. These tests exercise the
+    # accepted-record mechanics (loomweave block, fixed-field binding), so wire a
+    # confirming validator to reach the cleared state.
     g = ProtectedGate(store, FixedClock("2026-06-02T12:00:00+00:00"),
                       judge=ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
-                      key=KEY)
+                      key=KEY, validator=lambda record: True)
     return g, store
 
 

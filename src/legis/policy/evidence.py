@@ -41,12 +41,28 @@ def _disabling_marker(decorator: ast.expr) -> str | None:
     under-matching would silently let a disabled test satisfy the gate — the exact
     false-green this closes.
 
-    Residuals it does NOT catch, by design: a module-level
-    ``pytestmark = pytest.mark.skip`` or a class-level ``@pytest.mark.skip`` on the
-    test's enclosing class. Both are the same false-green class, but the runtime
-    gate only has ``inspect.getsource`` of the test function/method — it
-    structurally cannot see module globals or the class decorator — so flagging
-    them here would break the Q-L5 runtime/static parity contract.
+    Residuals it does NOT catch, by design (POLICY-1 / 2026-06-09 review):
+    - A module-level ``pytestmark = pytest.mark.skip`` or a class-level
+      ``@pytest.mark.skip`` on the test's enclosing class. The runtime gate only
+      has ``inspect.getsource`` of the test function/method — it structurally
+      cannot see module globals or the class decorator — so flagging them would
+      break the Q-L5 runtime/static parity contract.
+    - An ALIASED disabling marker bound to a name, e.g. ``skipper =
+      pytest.mark.skip`` then ``@skipper``: the decorator surfaces only as
+      ``Name('skipper')`` and knowing it MEANS skip requires the out-of-function
+      assignment, which the runtime gate cannot see (resolving it would break
+      parity). It is catchable only by a name-heuristic that fails closed on any
+      decorator whose terminal name is not an allow-listed safe marker — NOT
+      adopted here because it would false-positive on legitimate markers
+      (``parametrize``, ``usefixtures``, custom project markers) and there are
+      currently zero shipped ``@policy_boundary`` decoration sites, so the live
+      exposure is nil. Tracked as a post-1.0 hardening.
+    - A fixture-mediated skip: a pinned evidence test whose conftest fixture is
+      later edited to call ``pytest.skip()`` never runs, yet its fingerprint is
+      unchanged (the fixture body lives in another file). Out-of-band signal,
+      genuinely parity-bound.
+    All are the same false-green class; they are documented here rather than
+    silently absent so the gate's guarantee is stated honestly.
     """
     expr: ast.expr = decorator
     if isinstance(expr, ast.Call):

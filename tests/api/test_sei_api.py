@@ -60,7 +60,12 @@ def _app(tmp_path, client):
 def _complex_app(tmp_path, client, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
-    pg = ProtectedGate(store, clock, judge=ScriptedJudge(opinion), key=KEY)
+    # JUDGE-3: protected cell is fail-closed; confirm deterministically so an
+    # ACCEPTED override clears (these tests exercise SEI-keying/signing mechanics).
+    pg = ProtectedGate(
+        store, clock, judge=ScriptedJudge(opinion), key=KEY,
+        validator=lambda record: True,
+    )
     sg = SignoffGate(store, clock)
     return TestClient(create_app(
         protected_gate=pg, signoff_gate=sg, trail_verifier=TrailVerifier(KEY, PROTECTED),
@@ -141,9 +146,10 @@ def test_identity_gaps_endpoint_surfaces_orphans(tmp_path):
     c = _app(tmp_path, OrphanClient(alive, lineage=[{"event": "born"}]))
     c.post("/overrides", json={"policy": "no-eval", "entity": "python:function:m.f",
                                "rationale": "reviewed", "agent_id": "agent-1"})
-    gaps = c.get("/governance/identity-gaps").json()
-    assert gaps == [{"sei": "loomweave:eid:abc123", "reason": "orphaned",
-                     "lineage": [{"event": "orphaned"}]}]
+    body = c.get("/governance/identity-gaps").json()
+    assert body["status"] == "checked"
+    assert body["gaps"] == [{"sei": "loomweave:eid:abc123", "reason": "orphaned",
+                             "lineage": [{"event": "orphaned"}]}]
 
 
 def test_lineage_integrity_endpoint_reports_clean_when_appended(tmp_path):
@@ -190,7 +196,8 @@ def test_protected_and_signoff_paths_carry_loomweave_block(tmp_path):
     key = b"k"
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
-    pg = ProtectedGate(store, clock, judge=_Judge(), key=key)
+    # JUDGE-3: fail-closed protected cell; confirm so the ACCEPTED override clears.
+    pg = ProtectedGate(store, clock, judge=_Judge(), key=key, validator=lambda record: True)
     sg = SignoffGate(store, clock)
     app = create_app(
         protected_gate=pg, signoff_gate=sg,

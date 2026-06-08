@@ -183,9 +183,12 @@ def build_runtime(agent_id: str) -> McpRuntime:
         protected = protected_policies()
         trail_verifier = TrailVerifier(key, protected)
 
-        # Protected policies: the LLM judge is advisory only (Q-H3). With no
-        # deterministic validator wired, a judge ACCEPTED is downgraded and the
-        # agent must escalate to operator sign-off.
+        # Protected cell: the LLM judge is advisory only (Q-H3). With no
+        # deterministic validator wired, ANY judge ACCEPTED in this cell is
+        # downgraded fail-closed and the agent must escalate to operator sign-off
+        # — unconditionally, regardless of protected_policies membership (the set
+        # drives only a config-hygiene warning + the read-side signature
+        # requirement). See ProtectedGate (finding JUDGE-3).
         protected_gate = ProtectedGate(
             store, clock, build_judge_from_env("MCP"), key,
             protected_policies=protected,

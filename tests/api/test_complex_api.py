@@ -51,7 +51,12 @@ def _source_body(tmp_path, **overrides):
 def _app(tmp_path, opinion=JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"), repo_path=None):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
-    pg = ProtectedGate(store, clock, judge=ScriptedJudge(opinion), key=KEY)
+    # JUDGE-3: protected cell is fail-closed; confirm deterministically so an
+    # ACCEPTED override clears (these tests exercise the cleared-path mechanics).
+    pg = ProtectedGate(
+        store, clock, judge=ScriptedJudge(opinion), key=KEY,
+        validator=lambda record: True,
+    )
     sg = SignoffGate(store, clock)
     app = create_app(
         repo_path=repo_path or tmp_path,
@@ -251,14 +256,16 @@ def test_identity_gaps_scan_the_protected_trail(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(
-        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
+        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY,
+        validator=lambda record: True)  # JUDGE-3: confirm so ACCEPTED clears
     app = create_app(repo_path=tmp_path, protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
                      identity=IdentityResolver(OrphanClient()))
     c = TestClient(app)
     # A protected override keyed on an SEI Loomweave now reports dead.
     assert c.post("/protected/overrides", json=_source_body(tmp_path)).status_code == 201
-    gaps = c.get("/governance/identity-gaps").json()
-    assert [g["sei"] for g in gaps] == ["loomweave:eid:abc123"]
+    body = c.get("/governance/identity-gaps").json()
+    assert body["status"] == "checked"
+    assert [g["sei"] for g in body["gaps"]] == ["loomweave:eid:abc123"]
 
 
 def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
@@ -289,7 +296,8 @@ def test_lineage_integrity_detects_divergence_on_the_protected_trail(tmp_path):
     store = AuditStore(f"sqlite:///{tmp_path / 'gov.db'}")
     clock = FixedClock("2026-06-02T12:00:00+00:00")
     pg = ProtectedGate(store, clock, judge=ScriptedJudge(
-        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY)
+        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")), key=KEY,
+        validator=lambda record: True)  # JUDGE-3: confirm so ACCEPTED clears
     app = create_app(repo_path=tmp_path, protected_gate=pg, trail_verifier=TrailVerifier(KEY, PROTECTED),
                      identity=IdentityResolver(ShrinkingClient()))
     c = TestClient(app)
@@ -333,6 +341,12 @@ def test_create_app_wires_env_configured_openrouter_judge_for_protected_override
         json={**PBODY, "file_fingerprint": _fingerprint(source)},
     )
 
-    assert resp.status_code == 201
-    assert resp.json()["verdict"] == "ACCEPTED"
+    # JUDGE-3: the env-configured judge IS wired and consulted (judge_model is
+    # populated), but in the default production config no deterministic validator
+    # is wired, so the protected cell is fail-closed: the model's ACCEPTED is
+    # advisory and downgraded to BLOCKED (409). Clearing requires operator
+    # sign-off (or a wired validator).
+    assert resp.status_code == 409
+    assert resp.json()["accepted"] is False
+    assert resp.json()["verdict"] == "BLOCKED"
     assert resp.json()["judge_model"] == "openrouter:test-model"

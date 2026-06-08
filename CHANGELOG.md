@@ -7,6 +7,45 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 
 ## [Unreleased]
 
+### Security / honesty (second pre-1.0 adversarial review, 2026-06-09)
+
+A second independent adversarial review re-attacked the first audit's (self-verified)
+fixes. The crypto-threshold assumption held; these gaps it surfaced are now closed:
+
+- **JUDGE-3 — protected cell is now fail-closed unconditionally.** A judge `ACCEPTED`
+  in the protected cell is advisory and is downgraded to `BLOCKED` (escalate to
+  operator sign-off) unless a deterministic, non-LLM validator confirms it — a policy
+  is protected by virtue of being *routed* to the cell, no longer by separate
+  membership in `LEGIS_PROTECTED_POLICIES`. Previously the Q-H3 downgrade was gated on
+  that exact-match set, which diverges from the glob-capable cell routing, so a
+  protected-cell policy outside the set (including any glob route, and the empty-set
+  default) had its `ACCEPTED` signed as authoritative on the model's word — a silent
+  fail-open. **Behavior change:** in the default config (no validator wired), all
+  protected overrides now require operator sign-off. `protected_policies` now drives
+  only a config-hygiene warning (an undeclared protected-cell policy) and the
+  read-side signature requirement.
+- **GOV-2 — `/governance/identity-gaps` no longer reports a false all-clear.** It now
+  returns a `{status, gaps}` envelope (`status: "unavailable"` when the Loomweave
+  client is unwired vs `"checked"`), so "could not check" is distinguishable from
+  "checked, zero orphan gaps" — the same false-green shape GOV-1 fixed on the sibling
+  lineage-integrity endpoint. *Response-shape change for this endpoint* (was a bare
+  list).
+- **F1 — `TrailVerifier` docstring corrected.** It no longer claims that flipping an
+  in-record flag cannot downgrade a protected record to "unsigned, skip"; the
+  modify-to-unsigned and tail-truncation residuals of the raw-file-write tier are now
+  documented honestly (code hardening tracked post-1.0).
+- **POLICY-1 — aliased-marker / fixture-skip residuals documented.** The evidence-
+  liveness gate's `_disabling_marker` now honestly documents that an aliased disabling
+  marker (`skipper = pytest.mark.skip; @skipper`) and a fixture-mediated `pytest.skip()`
+  are not caught (zero shipped `@policy_boundary` sites today; name-heuristic hardening
+  tracked post-1.0).
+- **ID-SEI-1 — `LEGIS_ALLOW_INSECURE_REMOTE_HTTP` now warns.** Permitting plaintext to
+  a remote Loomweave/Filigree voids the SEI/binding TLS custody seal (responses are not
+  HMAC-signed); the bypass now logs a warning and is documented as dev/loopback-only.
+- **ID-SEI-2 — `alive` is now strict-bool.** A non-bool truthy `alive` from a
+  buggy/hostile Loomweave (e.g. the string `"false"`, or `1`) no longer promotes to a
+  stable SEI identity; it degrades fail-closed.
+
 Dogfood-#2 governance honesty (convention C-10) — branch-local; merge/release
 gated on the filigree-first propagation. Capability confinement (proposed C-8) is
 preserved: operator signing keys stay out of agent reach, no key is auto-provisioned

@@ -95,9 +95,18 @@ def _parse_structured_response(raw: str) -> tuple[Verdict, str] | None:
     if not isinstance(verdict, str) or not isinstance(rationale, str):
         return None
     try:
-        return Verdict(verdict), rationale
+        parsed = Verdict(verdict)
     except ValueError:
         return None
+    # JUDGE-3: the judge may ONLY accept or block. OVERRIDDEN_BY_OPERATOR is an
+    # operator-authority verdict produced exclusively by ``operator_override`` —
+    # a model must never be able to emit it (a fooled/injected model returning
+    # ``{"verdict": "OVERRIDDEN_BY_OPERATOR"}`` would otherwise clear a protected
+    # gate, since that verdict counts as accepted). Anything outside the allowed
+    # set is treated as unparseable → the caller fail-closes to BLOCKED.
+    if parsed not in (Verdict.ACCEPTED, Verdict.BLOCKED):
+        return None
+    return parsed, rationale
 
 
 class LLMClient(Protocol):

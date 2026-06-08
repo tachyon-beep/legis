@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 
 import pytest
 
@@ -230,3 +231,28 @@ def test_urllib_fetch_rejects_oversized_responses(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     with pytest.raises(LoomweaveError, match="too large"):
         _urllib_fetch("GET", "http://localhost/api/v1/_capabilities", None)
+
+
+def test_insecure_remote_http_warns_when_flag_bypasses_https(monkeypatch, caplog):
+    # ID-SEI-1: the flag permits plaintext to a REMOTE host — which voids the SEI
+    # response TLS custody seal — so it must warn loudly (it was silent before).
+    monkeypatch.setenv("LEGIS_ALLOW_INSECURE_REMOTE_HTTP", "1")
+    with caplog.at_level(logging.WARNING):
+        HttpLoomweaveIdentity("http://remote.example:9000")
+    assert any(
+        "LEGIS_ALLOW_INSECURE_REMOTE_HTTP" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_no_insecure_warning_for_loopback_or_https(monkeypatch, caplog):
+    monkeypatch.setenv("LEGIS_ALLOW_INSECURE_REMOTE_HTTP", "1")
+    with caplog.at_level(logging.WARNING):
+        HttpLoomweaveIdentity("http://localhost:9000")   # loopback plaintext is fine
+        HttpLoomweaveIdentity("https://remote.example")  # remote but TLS-protected
+    assert caplog.records == []
+
+
+def test_remote_http_without_flag_still_raises(monkeypatch):
+    monkeypatch.delenv("LEGIS_ALLOW_INSECURE_REMOTE_HTTP", raising=False)
+    with pytest.raises(LoomweaveError):
+        HttpLoomweaveIdentity("http://remote.example")
