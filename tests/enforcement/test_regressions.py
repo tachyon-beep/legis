@@ -8,8 +8,6 @@ from legis.clock import FixedClock
 from legis.enforcement.signoff import SignoffGate
 from legis.git.surface import GitSurface, GitError
 from legis.policy.decorator import check_policy_boundary, policy_boundary, fingerprint
-from legis.policy.grammar import PolicyGrammar, PolicyResult
-from legis.policy.exemptions import ExemptionRegistry, Exemption
 from legis.store.audit_store import AuditStore
 
 
@@ -124,21 +122,6 @@ def test_api_policy_evaluate_logging(tmp_path, monkeypatch):
         assert records[0].payload["policy"] == "unknown-policy-here"
     finally:
         store._engine.dispose()
-
-
-def test_exemption_unhashable_target_value():
-    exemptions = ExemptionRegistry([Exemption("no-eval", "safe", "reason")])
-    g = PolicyGrammar(exemptions=exemptions)
-    
-    class DummyBoundary:
-        name = "no-eval"
-        def evaluate(self, target):
-            return PolicyResult.VIOLATION, "violation"
-            
-    g.register(DummyBoundary())
-    
-    res = g.evaluate("no-eval", {"value": ["unhashable", "list"]})
-    assert res.result is PolicyResult.VIOLATION
 
 
 def test_cli_check_override_rate_tampered_db(tmp_path):

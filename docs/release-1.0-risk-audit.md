@@ -2,7 +2,29 @@
 
 > Multi-agent deep-dive: 9 specialist finder lanes over the high-risk surface, adversarial verification of decision-critical findings, synthesized go/no-go. Suite green (767 passed, strict filterwarnings), 92% coverage. Generated 2026-06-08 on branch rc4 (commit 4a254f2).
 
-## Verdict: GO-WITH-FIXES
+## Verdict: GO-WITH-FIXES → effectively GO
+
+> **Resolution update (2026-06-08, commits `0dabc8b`…`b36939d` + working tree; suite now 804 passed, 2 skipped).**
+> **All 2 blockers and all 8 tracked follow-ups are now resolved** — 7 in committed source, the final 3 `low` items in the working tree (uncommitted). The crypto threshold remains uncrossed and judge-injection remains fail-closed (now additionally hardened). Filigree: the 3 `low` items were filed (`legis-cbedf16dd9` AUTH-1, `legis-e512e97bfc` POLICY-2, `legis-dfc5632033` CRYPTO-THRESHOLD-001) and closed on fix; the 7 earlier findings were resolved directly via commits and were never ticketed.
+
+| Finding | Tier | Status | Commit | Verification |
+|---|---|---|---|---|
+| **GOV-1** | blocker | ✅ closed | `41e0b20` | `api/app.py` status now `"diverged" if divergences else "unverified" if unavailable else "verified"` |
+| **POLICY-1** | blocker | ✅ closed | `0dabc8b` | additive `_DISABLING_MARKERS` + `POLICY_BOUNDARY_TEST_DISABLED`; Q-L5 decorator-strip contract preserved |
+| **AUD-1** | post-1.0 (high) | ✅ closed | `acdbff0`, `cf42727` | v3 `chain_seq`-binding + `store/head_anchor.py`; replay honestly documented as a known unclosed limit |
+| **AUD-3** | post-1.0 (med) | ✅ closed | `691e838` | `PRAGMA synchronous=FULL` |
+| **INSTALL-1** | post-1.0 (med) | ✅ closed | `0a9cfe9` | doctor split-brain detection (no longer first-marker-only) |
+| **ID-3** | post-1.0 (low) | ✅ closed | `98c9f5c` | SEI capability probe signed via `weft_signing` when keyed |
+| **JUDGE-1** | post-1.0 (med) | ✅ closed | `b36939d` | `MAX_JUDGE_REQUEST_CHARS` cap, reject-not-truncate |
+| **AUTH-1** | post-1.0 (low) | ✅ closed (uncommitted) | working tree | `api/app.py:103` comment now states the flag grants unscoped tokens operator authority; `legis-cbedf16dd9` |
+| **POLICY-2** | post-1.0 (low) | ✅ closed (uncommitted) | working tree | exemption-rescue mechanism **removed entirely** — `policy/exemptions.py` + `tests/policy/test_exemptions.py` deleted, `PolicyGrammar` exemptions param/branch dropped; regression guard `test_grammar_has_no_exemption_rescue_mechanism` pins it stays gone; `legis-e512e97bfc` |
+| **CRYPTO-THRESHOLD-001** | post-1.0 (low, doc) | ✅ closed (uncommitted) | working tree | README note scopes "cryptographic layer" to intra-suite HMAC tamper-evidence / self-asserted actor, not third-party proof; `legis-dfc5632033` |
+
+> Note: POLICY-2's exemption-rescue path was tested-but-unwired (a `VIOLATION→CLEAR` bypass surface reachable only by future wiring), not active dead code. Closed by **removing the mechanism outright** — the cleanest fix, since it eliminates the bypass surface rather than documenting around it; a regression test pins that it cannot be re-introduced by accident.
+
+---
+
+_Original audit (as generated on `4a254f2`) follows._
 
 legis 1.0 is GO-WITH-FIXES: 2 fail-closed honesty breaks must close first; crypto threshold is NOT crossed and judge-injection is fail-closed, so neither forces a NO-GO.
 

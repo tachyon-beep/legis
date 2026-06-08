@@ -102,6 +102,15 @@ def _token_actor_from_mapping(
         if hmac.compare_digest(credentials.credentials, token):
             actor, scope_sep, scope_raw = actor_spec.partition(":")
             scopes = {scope.strip() for scope in scope_raw.split("|") if scope.strip()}
+            # AUTH-1: an unscoped actor entry (no ``:scope`` segment) is rejected by
+            # default. The ``LEGIS_ALLOW_UNSCOPED_API_TOKENS=1`` escape hatch restores
+            # the pre-H7 compat behaviour where an unscoped token is accepted — and
+            # because the scope check below only fires when ``scope_sep`` is truthy, an
+            # unscoped token then satisfies *every* required_scope, **operator
+            # included**. The flag name does not say so: enabling it grants unscoped
+            # tokens full operator authority. It is a human-set env var (never
+            # agent-reachable, C-8); prefer explicit ``actor:writer=``/``actor:operator=``
+            # scoping and leave this off unless you intend that authority.
             if not scope_sep and os.environ.get("LEGIS_ALLOW_UNSCOPED_API_TOKENS") != "1":
                 raise HTTPException(
                     status_code=403,

@@ -92,6 +92,8 @@ Legis's enforcement surface is a **2×2**, and the base always stays weightless.
 - **Block + escalate** is also available here, with the added constraint that even a human sign-off produces a tamper-bound record.
 - **Audit lineage keyed on SEI.** Every verdict, override, and sign-off is recorded in an append-only trail keyed on Stable Entity Identity so the record survives rename/move.
 
+> **What "cryptographic layer" means here.** The HMAC signing is intra-suite *tamper-evidence* — it binds a governance record to SEI-stable code identity and detects after-the-fact edits by an actor who cannot recompute the keyed signature (e.g. a holder of raw DB-file access). The recorded actor is *self-asserted* (not a third-party-authenticated identity), and verification today is same-process Python over v1 canonical JSON. It is **not** a third-party-verifiable, cross-party authenticated cryptographic proof. RFC-8785 canonicalization is the named one-file upgrade for the day a non-Python verifier of a Legis attestation lands.
+
 The elspeth CI judge (`/home/john/elspeth`) is the working design ancestor of the protected cell — it is the "thick version" shipped inside elspeth's own codebase. Legis is where the same mechanisms land as a suite-level, opt-in layer.
 
 ### Graded enforcement
