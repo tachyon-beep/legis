@@ -5,17 +5,28 @@ import json
 from legis.cli import main as cli_main
 from legis.doctor import (
     DoctorCheck,
+    check_audit_chain,
+    check_db_overrides,
     check_filigree_binding_scope,
     check_gitignore,
+    check_hmac_key,
     check_hook,
     check_instruction_block,
+    check_legacy_stray_db,
     check_mcp_json,
+    check_policy_cells,
+    check_sibling_url,
     check_skill_pack,
+    check_store_dir,
+    check_wardline_routing,
+    check_weft_toml,
     collect_checks,
     render_json,
     render_text,
     run_doctor,
+    _store_url,
 )
+from legis.install import mcp_entry_is_current, register_mcp_json as _register_mcp_json
 from legis import install as legis_install
 
 
@@ -151,9 +162,6 @@ def test_mcp_json_stale_command_is_error_then_repaired(tmp_path):
 # ---------------------------------------------------------------------------
 # Direct unit tests for mcp_entry_is_current predicate
 # ---------------------------------------------------------------------------
-
-
-from legis.install import mcp_entry_is_current, register_mcp_json as _register_mcp_json
 
 
 def test_mcp_entry_is_current_absent_file(tmp_path):
@@ -348,9 +356,6 @@ def test_hook_absent_is_error_then_repaired(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-from legis.doctor import check_weft_toml, check_store_dir, check_db_overrides, check_legacy_stray_db
-
-
 def test_weft_toml_absent_is_ok(tmp_path):
     assert check_weft_toml(tmp_path).status == "ok"
 
@@ -393,9 +398,6 @@ def test_legacy_stray_db_is_warn(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-from legis.doctor import check_audit_chain, check_hmac_key, check_sibling_url
-
-
 def test_audit_chain_absent_db_is_ok(tmp_path):
     c = check_audit_chain("store.governance_chain", "sqlite:///" + str(tmp_path / "nope.db"))
     assert c.status == "ok"
@@ -433,7 +435,6 @@ def test_sibling_url_invalid_is_error(tmp_path, monkeypatch):
 
 
 # --- N3 (weft-df8d2ef454): report-only enablement checks (C-10(c)) ----------
-from legis.doctor import check_policy_cells, check_wardline_routing
 
 
 def test_policy_cells_warn_when_unconfigured_names_the_path(tmp_path, monkeypatch):
@@ -504,9 +505,6 @@ def test_n3_checks_never_write_files_or_render_keys(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Review follow-ups: root-anchored store_dir + empty-override precedence
 # ---------------------------------------------------------------------------
-
-
-from legis.doctor import _store_url
 
 
 def test_store_dir_root_anchored_via_weft_toml(tmp_path, monkeypatch):
