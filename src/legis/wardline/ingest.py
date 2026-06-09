@@ -24,6 +24,11 @@ SUPPRESSION_PROOF_KEYS: frozenset[str] = frozenset({
     "suppression_reason",
 })
 MAX_FINDINGS = 500
+# The batch key carrying the findings list. A shared constant (not a bare string
+# scattered across producer + consumer) is the cross-impl contract anchor: a
+# silent producer rename leaves this key ABSENT, which `active_defects` rejects
+# as malformed rather than reading as zero defects under a green status (G1).
+FINDINGS_KEY = "findings"
 ARTIFACT_SIGNATURE_FIELD = "artifact_signature"
 ARTIFACT_PROVENANCE_FIELDS: tuple[str, ...] = (
     "scanner_identity",
@@ -357,7 +362,16 @@ def active_defects(scan: Mapping[str, Any]) -> list[WardlineFinding]:
     """The gate population: active (non-suppressed) DEFECT findings."""
     if not isinstance(scan, Mapping):
         raise WardlinePayloadError("scan must be an object")
-    raw_findings = scan.get("findings", [])
+    # Presence is required, not defaulted: an ABSENT key is drift/tamper (e.g. a
+    # producer rename ``findings`` -> ``findings_list``, re-signed HMAC-clean) and
+    # must be loud, never a silent empty gate population under a green status (G1).
+    # A genuinely clean scan still carries ``findings: []`` (key present, empty).
+    if FINDINGS_KEY not in scan:
+        raise WardlinePayloadError(
+            f"scan is missing the required '{FINDINGS_KEY}' key "
+            "(a renamed or dropped findings key must not read as zero defects)"
+        )
+    raw_findings = scan[FINDINGS_KEY]
     if not isinstance(raw_findings, list):
         raise WardlinePayloadError("scan findings must be a list")
     if len(raw_findings) > MAX_FINDINGS:

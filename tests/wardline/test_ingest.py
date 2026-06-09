@@ -4,6 +4,7 @@ import pytest
 
 from legis.canonical import canonical_json, content_hash
 from legis.wardline.ingest import (
+    FINDINGS_KEY,
     TRUST_TIERS,
     ArtifactStatus,
     ScanOutcome,
@@ -145,6 +146,44 @@ def test_unknown_suppression_state_is_still_rejected():
     scan = {"findings": [_finding(fingerprint="x", suppression_state="haunted")]}
     with pytest.raises(WardlinePayloadError, match="unsupported suppression state"):
         active_defects(scan)
+
+
+# --- G1 (weft S8/GS-1+GS-7): the `findings` key must be PRESENT, not defaulted ---
+#
+# Producer + consumer agree the batch carries findings under the key ``findings``.
+# Nothing asserted its PRESENCE: ``scan.get("findings", [])`` read an ABSENT key as
+# zero defects. A silent producer rename (``findings`` -> ``findings_list``), re-
+# signed, then verifies HMAC-clean (the sig is recomputed over the new dict) and
+# routes ZERO defects under a green ``verified`` status — the whole defect flow
+# breaks silently. The fix distinguishes "key absent" (malformed -> red) from "key
+# present, empty list" (a genuinely clean scan -> []). A clean scan carries
+# ``findings: []``; an absent key is drift/tamper and must be loud.
+
+def test_absent_findings_key_is_rejected_not_read_as_zero_defects():
+    # The G1 core: no ``findings`` key at all must be a malformed payload, never a
+    # silent empty gate population. (A renamed key leaves ``findings`` absent.)
+    with pytest.raises(WardlinePayloadError, match="findings"):
+        active_defects({"scanner_identity": "wardline@1"})
+
+
+def test_renamed_findings_key_does_not_pass_as_clean():
+    # The exact silent-rename scenario: a real CRITICAL defect arrives under a
+    # renamed batch key. legis must reject the payload, not route zero defects.
+    renamed = {"findings_list": [_finding(severity="CRITICAL", fingerprint="sqli")]}
+    with pytest.raises(WardlinePayloadError, match="findings"):
+        active_defects(renamed)
+
+
+def test_present_empty_findings_list_is_a_clean_scan_not_an_error():
+    # The guard against over-correction: a genuinely clean scan carries
+    # ``findings: []`` (key PRESENT, list empty) and must still ingest cleanly.
+    assert active_defects({"findings": []}) == []
+
+
+def test_findings_key_is_a_shared_constant():
+    # G1 fix registers the batch key as a named constant (cross-impl contract
+    # anchor) rather than a bare string scattered across producer + consumer.
+    assert FINDINGS_KEY == "findings"
 
 
 # --- dirty-tree dev artifact (P0 dev path + P1 typed amber SKIPPED_DIRTY_TREE) ---
