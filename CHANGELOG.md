@@ -5,7 +5,7 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
-## [Unreleased]
+## [1.0.0] — 2026-06-09
 
 ### Security / honesty (second pre-1.0 adversarial review, 2026-06-09)
 
@@ -417,19 +417,8 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   `HTTPException`, so both HTTP and the forthcoming MCP adapter drive one code
   path. Behavior-preserving; FastAPI handlers are now thin adapters.
 
-### Known limitations
-- The agent-facing **MCP surface** is designed and decomposed
-  (`docs/superpowers/specs/2026-06-03-legis-mcp-surface-design.md`) with WP-M1
-  landed; WP-M2..M6 (registry + `legis_explain`, the MCP stdio server, the
-  write/governance tools, safety hardening, judge reason-classification) are not
-  yet built.
-- The git-rename provider to Loomweave is contract-locked but operatively gated on
-  Loomweave driving a committed rev-range.
-- `HttpLoomweave` runs loopback-unauthenticated; sibling-gated work packages
-  (Filigree signature column, live-Loomweave oracle + HMAC auth, operative
-  git-rename feed) remain.
-
-[1.0.0rc4]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc3...HEAD
+[1.0.0]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc4...v1.0.0
+[1.0.0rc4]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc3...v1.0.0rc4
 [1.0.0rc3]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc2...v1.0.0rc3
 [1.0.0rc2]: https://github.com/foundryside-dev/legis/releases/tag/v1.0.0rc2
 [1.0.0rc1]: https://github.com/foundryside-dev/legis/releases/tag/v1.0.0rc1

@@ -355,7 +355,7 @@ wheels = [
 
 [[package]]
 name = "legis"
-version = "1.0.0rc4"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
