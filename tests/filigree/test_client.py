@@ -275,3 +275,22 @@ def test_decode_rejects_oversized_response():
 
     with pytest.raises(FiligreeError, match="response too large"):
         client_mod._decode_json_response(_BigResp(), "GET /api/x")
+
+
+def test_insecure_remote_http_warns_when_flag_bypasses_https(monkeypatch, caplog):
+    import logging
+
+    # ID-SEI-1: plaintext to a remote Filigree leaves responses forgeable (no TLS);
+    # the flag must warn loudly rather than bypass silently.
+    monkeypatch.setenv("LEGIS_ALLOW_INSECURE_REMOTE_HTTP", "1")
+    with caplog.at_level(logging.WARNING):
+        HttpFiligreeClient("http://remote.example:9000")
+    assert any(
+        "LEGIS_ALLOW_INSECURE_REMOTE_HTTP" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_remote_http_without_flag_still_raises(monkeypatch):
+    monkeypatch.delenv("LEGIS_ALLOW_INSECURE_REMOTE_HTTP", raising=False)
+    with pytest.raises(FiligreeError):
+        HttpFiligreeClient("http://remote.example")

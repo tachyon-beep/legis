@@ -102,6 +102,15 @@ def _token_actor_from_mapping(
         if hmac.compare_digest(credentials.credentials, token):
             actor, scope_sep, scope_raw = actor_spec.partition(":")
             scopes = {scope.strip() for scope in scope_raw.split("|") if scope.strip()}
+            # AUTH-1: an unscoped actor entry (no ``:scope`` segment) is rejected by
+            # default. The ``LEGIS_ALLOW_UNSCOPED_API_TOKENS=1`` escape hatch restores
+            # the pre-H7 compat behaviour where an unscoped token is accepted — and
+            # because the scope check below only fires when ``scope_sep`` is truthy, an
+            # unscoped token then satisfies *every* required_scope, **operator
+            # included**. The flag name does not say so: enabling it grants unscoped
+            # tokens full operator authority. It is a human-set env var (never
+            # agent-reachable, C-8); prefer explicit ``actor:writer=``/``actor:operator=``
+            # scoping and leave this off unless you intend that authority.
             if not scope_sep and os.environ.get("LEGIS_ALLOW_UNSCOPED_API_TOKENS") != "1":
                 raise HTTPException(
                     status_code=403,
@@ -723,11 +732,25 @@ def create_app(
     # When no client is wired there is nothing stable to probe.
 
     @app.get("/governance/identity-gaps")
-    def identity_gaps() -> list[dict]:
+    def identity_gaps() -> dict:
+        # GOV-2: distinguish "could not check" from "checked, zero gaps". A bare
+        # [] when Loomweave is unwired reads as an all-clear on the exact
+        # condition this endpoint exists to catch — the same false-green shape as
+        # GOV-1, which the sibling lineage-integrity endpoint already avoids.
         if identity is None or identity.client is None:
-            return []
+            return {
+                "status": "unavailable",
+                "gaps": [],
+                "unavailable": [{"reason": "loomweave client not configured"}],
+            }
         gaps = find_orphan_gaps(verified_governance_records(), identity.client)
-        return [{"sei": g.sei, "reason": g.reason, "lineage": g.lineage} for g in gaps]
+        return {
+            "status": "checked",
+            "gaps": [
+                {"sei": g.sei, "reason": g.reason, "lineage": g.lineage}
+                for g in gaps
+            ],
+        }
 
     @app.get("/governance/lineage-integrity")
     def lineage_integrity() -> dict:
@@ -739,7 +762,11 @@ def create_app(
             }
         integrity = find_lineage_integrity(verified_governance_records(), identity.client)
         return {
-            "status": "unverified" if integrity.unavailable else "verified",
+            "status": (
+                "diverged" if integrity.divergences
+                else "unverified" if integrity.unavailable
+                else "verified"
+            ),
             "divergences": [
                 {"sei": d.sei, "recorded_length": d.recorded_length,
                  "current_length": d.current_length} for d in integrity.divergences
@@ -792,7 +819,7 @@ def create_app(
         needs_engine = bool(routing.cells & {WardlineCellPolicy.SURFACE_OVERRIDE,
                                              WardlineCellPolicy.SURFACE_ONLY})
         try:
-            routed = _route_wardline_scan(
+            result = _route_wardline_scan(
                 body.scan,
                 agent_id=_recorded_actor(actor, body.agent_id),
                 identity=identity,
@@ -810,17 +837,22 @@ def create_app(
             )
         except WardlineDirtyTreeError as exc:
             # Amber, not red: a dirty dev tree is "environment not ready", not a
-            # broken/tampered scan. 200 with a typed skip so a harness can tell
-            # it apart from the 422 generic failure and nothing is governed.
-            return {
-                "outcome": exc.reason,
-                "routed": [],
-                "detail": str(exc),
-            }
+            # broken/tampered scan. 200 with the typed, structured skip payload
+            # (single-sourced on the exception, field-for-field identical to the
+            # MCP structuredContent) so a harness can tell it apart from the 422
+            # generic failure; nothing is governed.
+            return exc.to_payload()
         except WardlinePayloadError as exc:
             raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"outcome": ScanOutcome.ROUTED, "routed": routed}
+        # Echo the scan-level posture at the root (opp #6), identical contract to
+        # the MCP scan_route surface, so an HTTP caller can likewise distinguish a
+        # keyless dev pass from a CI-signed verified pass.
+        return {
+            "outcome": ScanOutcome.ROUTED,
+            "routed": result.routed,
+            "artifact_status": result.artifact_status,
+        }
 
     return app

@@ -189,9 +189,12 @@ class IdentityResolver:
             return degraded
         if not isinstance(res, dict):
             return degraded
-        if not res.get("alive"):
+        if res.get("alive") is not True:
             # Capability present but this locator has no alive SEI — honest: no
             # stable identity, and we know it (alive recorded False, not None).
+            # ID-SEI-2: require a real boolean True — a non-bool truthy value
+            # (e.g. the string "false", or 1) from a buggy/hostile Loomweave must
+            # NOT be read as alive and promoted to a stable identity. Fail closed.
             return IdentityResolution(
                 EntityKey.from_locator(locator),
                 False,

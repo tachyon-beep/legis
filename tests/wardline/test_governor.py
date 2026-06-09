@@ -13,7 +13,7 @@ def _scan():
         {"rule_id": "PY-WL-101", "message": "untrusted reaches trusted",
          "severity": "ERROR", "kind": "defect", "fingerprint": "fp1",
          "qualname": "m.f", "properties": {"actual_return": "UNKNOWN_RAW"},
-         "suppressed": "active"},
+         "suppression_state": "active"},
     ]}
 
 
@@ -61,7 +61,7 @@ def test_suppressed_defect_without_proof_is_rejected():
     import pytest
 
     scan = _scan()
-    scan["findings"][0]["suppressed"] = "waived"
+    scan["findings"][0]["suppression_state"] = "waived"
     with pytest.raises(WardlinePayloadError, match="suppression proof"):
         active_defects(scan)
 
@@ -175,7 +175,7 @@ def test_surface_only_needs_no_signoff_gate(tmp_path):
 def _mixed_scan():
     def fnd(rule, sev, fp):
         return {"rule_id": rule, "message": "m", "severity": sev, "kind": "defect",
-                "fingerprint": fp, "qualname": "m.f", "properties": {}, "suppressed": "active"}
+                "fingerprint": fp, "qualname": "m.f", "properties": {}, "suppression_state": "active"}
     return {"findings": [fnd("R-CRIT", "CRITICAL", "c"),
                          fnd("R-WARN", "WARN", "w"),
                          fnd("R-INFO", "INFO", "i")]}
@@ -283,7 +283,7 @@ def _multi_scan(*fingerprints):
     return {"findings": [
         {"rule_id": "PY-WL-101", "message": f"finding {fp}",
          "severity": "ERROR", "kind": "defect", "fingerprint": fp,
-         "qualname": f"m.{fp}", "properties": {}, "suppressed": "active"}
+         "qualname": f"m.{fp}", "properties": {}, "suppression_state": "active"}
         for fp in fingerprints
     ]}
 

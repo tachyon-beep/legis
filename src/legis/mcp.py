@@ -45,7 +45,7 @@ from legis.service.errors import (
     ServiceError,
     WardlineRoutingError,
 )
-from legis.service.explain import explain_policy
+from legis.service.explain import explain_cell, explain_policy
 from legis.service.governance import (
     compute_override_rate,
     evaluate_policy,
@@ -62,6 +62,7 @@ from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError
 _AGENT_TOOLS = frozenset(
     {
         "policy_explain",
+        "policy_list",
         "override_submit",
         "signoff_status_get",
         "policy_evaluate",
@@ -183,9 +184,12 @@ def build_runtime(agent_id: str) -> McpRuntime:
         protected = protected_policies()
         trail_verifier = TrailVerifier(key, protected)
 
-        # Protected policies: the LLM judge is advisory only (Q-H3). With no
-        # deterministic validator wired, a judge ACCEPTED is downgraded and the
-        # agent must escalate to operator sign-off.
+        # Protected cell: the LLM judge is advisory only (Q-H3). With no
+        # deterministic validator wired, ANY judge ACCEPTED in this cell is
+        # downgraded fail-closed and the agent must escalate to operator sign-off
+        # — unconditionally, regardless of protected_policies membership (the set
+        # drives only a config-hygiene warning + the read-side signature
+        # requirement). See ProtectedGate (finding JUDGE-3).
         protected_gate = ProtectedGate(
             store, clock, build_judge_from_env("MCP"), key,
             protected_policies=protected,
@@ -250,6 +254,17 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
         },
         {
+            "name": "policy_list",
+            "description": (
+                "List the policy-to-cell routing table (default_cell plus the "
+                "configured pattern rules) and each governance cell's real "
+                "enabled state on this server. enabled reflects actual "
+                "enablement: the complex tier (structured/protected) reports "
+                "enabled:false without LEGIS_HMAC_KEY."
+            ),
+            "inputSchema": _schema([], {}),
+        },
+        {
             "name": "override_submit",
             "description": (
                 "Submit an override as the launch-bound agent. The server "
@@ -297,9 +312,32 @@ def tool_definitions() -> list[dict[str, Any]]:
                 ["scan"],
                 {
                     "scan": object_schema,
-                    "cell": string,
-                    "severity_map": object_schema,
-                    "fail_on": string,
+                    "cell": {
+                        "type": "string",
+                        "description": (
+                            "Request-side routing cell. Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing "
+                            "(LEGIS_WARDLINE_CELL / LEGIS_WARDLINE_CELL_BY_SEVERITY)."
+                        ),
+                    },
+                    "severity_map": {
+                        "type": "object",
+                        "description": (
+                            "Request-side per-severity routing map. Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing."
+                        ),
+                    },
+                    "fail_on": {
+                        "type": "string",
+                        "description": (
+                            "Request-side fail-on severity threshold (used with "
+                            "cell). Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing."
+                        ),
+                    },
                 },
             ),
         },
@@ -373,13 +411,23 @@ def _recovery_for(code: str) -> dict[str, Any]:
     recoverable = code not in {"AUDIT_INTEGRITY_FAILURE", "INTERNAL_ERROR"}
     next_actions = {
         "INVALID_ARGUMENT": "Correct the tool arguments and retry.",
-        "INVALID_CELL_SPEC": "Use server-owned routing or a valid cell configuration.",
+        "INVALID_CELL_SPEC": (
+            "scan_route routing is server-owned and unconfigured by default. The "
+            "operator sets LEGIS_WARDLINE_CELL (e.g. =surface_only) or "
+            "LEGIS_WARDLINE_CELL_BY_SEVERITY out-of-band, then relaunches. "
+            "(Request-side routing requires the LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING "
+            "opt-in — discouraged.) The error message names which kind of cell "
+            "spec was rejected."
+        ),
         "CELL_NOT_ENABLED": (
-            "Enable the cell by wiring its backing store: set LEGIS_HMAC_KEY "
-            "(enables the binding ledger + protected/structured gates), and "
-            "configure the policy cells via LEGIS_POLICY_CELLS or policy/cells.toml "
-            "(LEGIS_DEV_DEFAULT_CELLS=1 for the dev posture). The error message "
-            "names which cell is unenabled."
+            "Two enablement tiers, by cell — both operator-enabled, out-of-band. "
+            "Simple tier (chill/coached) is reachable WITHOUT a key: the operator "
+            "maps the policy to a cell via policy/cells.toml or LEGIS_POLICY_CELLS "
+            "(LEGIS_DEV_DEFAULT_CELLS=1 selects the chill dev default), then "
+            "relaunches. Complex tier (structured/protected and the binding "
+            "ledger) additionally needs LEGIS_HMAC_KEY set by the operator "
+            "out-of-band, then a relaunch. The error message names which cell is "
+            "unenabled."
         ),
         "NO_SUCH_REQUEST": "Poll a known sign-off sequence returned by override_submit.",
         "NOT_FOUND": "Refresh the target identifier and retry.",
@@ -746,6 +794,46 @@ def _tool_policy_explain(runtime: McpRuntime, args: dict[str, Any]) -> dict[str,
     return _tool_result(_explanation_payload(explanation))
 
 
+# Explicit tier order (simple → complex) for the policy_list cells block; do not
+# iterate VALID_CELLS (a frozenset has no stable order).
+_CELL_TIER_ORDER = ("chill", "coached", "structured", "protected")
+
+
+def _tool_policy_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    registry = _registry(runtime)
+    cells = []
+    for cell in _CELL_TIER_ORDER:
+        # Same source explain_policy uses for the per-cell fields, fed the SAME
+        # raw runtime gates _tool_policy_explain passes — so policy_list and
+        # policy_explain can never disagree, and the complex tier honestly
+        # reports enabled:false without LEGIS_HMAC_KEY (no false-green).
+        explanation = explain_cell(
+            cell,
+            engine=runtime.engine,
+            protected_gate=runtime.protected_gate,
+            signoff_gate=runtime.signoff_gate,
+        )
+        cells.append(
+            {
+                "cell": explanation.cell,
+                "enabled": explanation.enabled,
+                "judge_inline": explanation.judge_inline,
+                "self_clearable": explanation.self_clearable,
+                "human_in_loop": explanation.human_in_loop,
+            }
+        )
+    return _tool_result(
+        {
+            "default_cell": registry.default_cell,
+            "rules": [
+                {"pattern": rule.pattern, "cell": rule.cell}
+                for rule in registry.rules
+            ],
+            "cells": cells,
+        }
+    )
+
+
 def _tool_override_submit(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     policy = _require(args, "policy")
     entity = _require(args, "entity")
@@ -941,7 +1029,7 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
     )
     scan = _require_object(args, "scan")
     try:
-        routed = route_wardline_scan(
+        result = route_wardline_scan(
             scan,
             agent_id=runtime.agent_id,
             identity=runtime.identity,
@@ -965,13 +1053,21 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
         )
     except WardlineDirtyTreeError as exc:
         # Amber, not red (INVALID_ARGUMENT): a dirty dev tree is "environment
-        # not ready", not a broken/tampered scan. A typed outcome lets a harness
-        # tell "commit first" apart from a genuine legis/scan fault; nothing is
-        # governed.
-        return _tool_result(
-            {"outcome": exc.reason, "routed": [], "detail": str(exc)}
-        )
-    return _tool_result({"outcome": ScanOutcome.ROUTED, "routed": routed})
+        # not ready", not a broken/tampered scan. The typed, structured payload
+        # (single-sourced on the exception) lets a harness tell "commit first"
+        # apart from a genuine legis/scan fault and names what to do; nothing is
+        # governed (routed == []).
+        return _tool_result(exc.to_payload())
+    # Echo the scan-level posture at the root (opp #6): a keyless dev pass
+    # (`unverified`/`dirty`) is distinguishable from a CI-signed `verified` pass,
+    # even when nothing routed.
+    return _tool_result(
+        {
+            "outcome": ScanOutcome.ROUTED,
+            "routed": result.routed,
+            "artifact_status": result.artifact_status,
+        }
+    )
 
 
 def _tool_git_branch_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
@@ -1083,6 +1179,7 @@ def _tool_override_rate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[s
 
 _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any]]] = {
     "policy_explain": _tool_policy_explain,
+    "policy_list": _tool_policy_list,
     "override_submit": _tool_override_submit,
     "signoff_status_get": _tool_signoff_status_get,
     "policy_evaluate": _tool_policy_evaluate,

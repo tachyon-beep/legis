@@ -49,7 +49,7 @@ def _finding(**over):
     base = {"rule_id": "PY-WL-101", "message": "m", "severity": "ERROR",
             "kind": "defect", "fingerprint": "fp1", "qualname": "m.f",
             "properties": {"actual_return": "UNKNOWN_RAW", "declared_return": "ASSURED"},
-            "suppressed": "active"}
+            "suppression_state": "active"}
     base.update(over)
     return base
 
@@ -67,7 +67,7 @@ def test_active_defects_excludes_suppressed_and_non_defects():
         _finding(fingerprint="a"),                              # active defect → in
         _finding(
             fingerprint="b",
-            suppressed="waived",
+            suppression_state="waived",
             properties={
                 "actual_return": "UNKNOWN_RAW",
                 "declared_return": "ASSURED",
@@ -111,8 +111,8 @@ def test_baselined_and_judged_defects_are_non_active_without_proof():
     # active gate population, and (unlike an agent waiver) they carry no proof.
     scan = {"findings": [
         _finding(fingerprint="a"),                              # active → in
-        _finding(fingerprint="b", suppressed="baselined"),      # non-active → out
-        _finding(fingerprint="c", suppressed="judged"),         # non-active → out
+        _finding(fingerprint="b", suppression_state="baselined"),      # non-active → out
+        _finding(fingerprint="c", suppression_state="judged"),         # non-active → out
     ]}
     assert [f.fingerprint for f in active_defects(scan)] == ["a"]
 
@@ -122,7 +122,7 @@ def test_waived_defect_accepts_top_level_suppression_proof():
     # properties; legis must accept proof in either location.
     scan = {"findings": [_finding(
         fingerprint="b",
-        suppressed="waived",
+        suppression_state="waived",
         suppression_reason="ISSUE-9",
         properties={"actual_return": "UNKNOWN_RAW"},            # no proof key here
     )]}
@@ -134,7 +134,7 @@ def test_waived_defect_without_any_proof_is_still_rejected():
     # (neither top-level nor in properties) is rejected.
     scan = {"findings": [_finding(
         fingerprint="b",
-        suppressed="waived",
+        suppression_state="waived",
         properties={"actual_return": "UNKNOWN_RAW"},
     )]}
     with pytest.raises(WardlinePayloadError, match="suppression proof"):
@@ -142,7 +142,7 @@ def test_waived_defect_without_any_proof_is_still_rejected():
 
 
 def test_unknown_suppression_state_is_still_rejected():
-    scan = {"findings": [_finding(fingerprint="x", suppressed="haunted")]}
+    scan = {"findings": [_finding(fingerprint="x", suppression_state="haunted")]}
     with pytest.raises(WardlinePayloadError, match="unsupported suppression state"):
         active_defects(scan)
 
@@ -215,6 +215,30 @@ def test_ci_dirty_without_devmode_is_typed_amber_skip_not_red():
     assert exc.value.reason == SKIPPED_DIRTY_TREE
 
 
+def test_dirty_skip_payload_is_structured_and_actionable():
+    # N4 (weft-a7a92a40dd) / C-10(d): the skip must not be a prose-only blob.
+    # to_payload() is the single source both transports serialize, so the MCP
+    # structuredContent and the HTTP body cannot drift.
+    with pytest.raises(WardlineDirtyTreeError) as exc:
+        verify_wardline_artifact(_artifact(dirty=True), _KEY, allow_dirty=False)
+    payload = exc.value.to_payload()
+    assert payload["outcome"] == "SKIPPED_DIRTY_TREE"
+    assert payload["reason"] == "SKIPPED_DIRTY_TREE"
+    assert payload["routed"] == []
+    assert payload["posture"] == "ci_artifact_key_configured"
+    assert payload["cause"] == "dirty_unsigned_artifact"
+    remediation = payload["remediation"]
+    assert isinstance(remediation, list) and remediation
+    joined = " ".join(remediation)
+    # Names BOTH the clean-tree path and the operator opt-in (out-of-band).
+    assert "commit" in joined.lower()
+    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in joined
+    # The instance still resolves reason as the bare-string ScanOutcome, and the
+    # class attribute access used by existing tests/boundaries keeps working.
+    assert exc.value.reason == SKIPPED_DIRTY_TREE
+    assert WardlineDirtyTreeError.reason == SKIPPED_DIRTY_TREE
+
+
 def test_ci_dirty_with_devmode_governs_unsigned_as_dirty():
     # P0: key configured, dirty + unsigned, dev-mode ON -> govern unsigned,
     # recorded honestly as dirty (never "verified").
@@ -270,3 +294,79 @@ def test_ci_posture_missing_provenance_field_is_red():
     del scan["tree_sha"]
     with pytest.raises(WardlinePayloadError, match="missing required field"):
         verify_wardline_artifact(scan, _KEY)
+
+
+# --- Cross-impl golden mirror + the W3 clean-break (weft-ef79348eb2) ----------
+#
+# legis is the CONSUMER + co-signer of Wardline's signed scan artifact. Wardline
+# pins the byte-exact signature in wardline/tests/unit/core/test_legis_artifact.py;
+# legis had no matching pin. This mirror is the legis-side half of that contract:
+# the SAME key + fields must hash to the SAME signature, or the signed hop silently
+# stops verifying. The literal hex is copied verbatim from Wardline's golden so a
+# shared misreading of the canonical-JSON+HMAC formula cannot pass both sides.
+#
+# W3 renamed the per-finding wire key ``suppressed`` -> ``suppression_state``; the
+# golden FIELDS carry ``suppression_state`` (VALUE "active" unchanged). legis's
+# signer canonicalizes the literal payload, so it reproduces the rekeyed signature
+# byte-for-byte with NO signing change.
+_GOLDEN_KEY = b"test-shared-secret-key"
+_GOLDEN_FIELDS = {
+    "scanner_identity": "wardline@1.0.0rc1",
+    "rule_set_version": "sha256:deadbeef",
+    "commit_sha": "c" * 40,
+    "tree_sha": "t" * 40,
+    "findings": [
+        {
+            "rule_id": "PY-WL-101",
+            "message": "leak",
+            "severity": "ERROR",
+            "kind": "defect",
+            "fingerprint": "a" * 64,
+            "qualname": "svc.leaky",
+            "properties": {"declared_return": "INTEGRAL", "actual_return": "EXTERNAL_RAW"},
+            "suppression_state": "active",
+        }
+    ],
+}
+_GOLDEN_SIG = "hmac-sha256:v2:2b2cf09548572b58fd01c359d1b6a16c3c1181f1cbfe8e4f5ada6fcd21f35ac4"
+
+
+def test_golden_signature_matches_wardline_byte_for_byte():
+    # The authoritative cross-impl pin: legis's signer MUST reproduce Wardline's
+    # byte-exact signature over the same key + fields. If this ever diverges, the
+    # signed Wardline->legis hop stops verifying — catch it here, not in prod.
+    assert sign(wardline_artifact_fields(_GOLDEN_FIELDS), _GOLDEN_KEY) == _GOLDEN_SIG
+
+
+def test_golden_signature_is_stable_when_a_stale_signature_is_present():
+    # legis verifies over scan-MINUS-artifact_signature; wardline_artifact_fields
+    # strips the sig key, so signing is identical whether or not a stale sig present.
+    with_sig = {**_GOLDEN_FIELDS, "artifact_signature": "hmac-sha256:v2:stale"}
+    assert sign(wardline_artifact_fields(with_sig), _GOLDEN_KEY) == _GOLDEN_SIG
+
+
+def test_golden_artifact_finding_ingests_as_active_defect():
+    # The same golden artifact ingests cleanly: its single defect is active
+    # (suppression_state == "active"), so active_defects selects exactly it.
+    got = active_defects(_GOLDEN_FIELDS)
+    assert [f.fingerprint for f in got] == ["a" * 64]
+    assert got[0].kind == "defect"
+    assert got[0].suppression_state == "active"
+
+
+def test_legacy_suppressed_key_is_ignored_clean_break():
+    # W3 clean break (weft-ef79348eb2): legis reads ``suppression_state`` ONLY.
+    # A finding carrying the LEGACY ``suppressed`` key (and no suppression_state)
+    # is NOT read as suppressed — it defaults to "active" and OVER-gates. This
+    # pins the fail-safe direction (a stale producer over-surfaces; it can never
+    # silently drop a real defect) and proves the old key is no longer consulted.
+    stale = {
+        "rule_id": "PY-WL-101", "message": "m", "severity": "ERROR",
+        "kind": "defect", "fingerprint": "stale", "qualname": "m.f",
+        "properties": {"actual_return": "UNKNOWN_RAW"},
+        "suppressed": "waived",            # legacy key — must be ignored
+        "suppression_reason": "ISSUE-1",   # even with proof, it is not consulted
+    }
+    got = active_defects({"findings": [stale]})
+    assert [f.fingerprint for f in got] == ["stale"]   # treated as ACTIVE
+    assert got[0].suppression_state == "active"

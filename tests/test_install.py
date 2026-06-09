@@ -584,7 +584,7 @@ def test_hook_cmd_matches(command, expected):
 
 
 def test_register_mcp_json_creates_file_with_legis_entry(tmp_path):
-    from legis.install import register_mcp_json, _legis_mcp_entry
+    from legis.install import register_mcp_json
 
     ok, msg = register_mcp_json(tmp_path)
     assert ok, msg

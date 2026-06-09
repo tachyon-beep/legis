@@ -200,6 +200,20 @@ def test_locator_with_no_alive_sei_degrades_but_records_alive_false():
     assert res.alive is False        # capability present, but no stable identity → honest
 
 
+def test_non_bool_alive_does_not_promote_to_stable_identity():
+    # ID-SEI-2: a buggy/hostile Loomweave returning a non-bool truthy `alive`
+    # (the string "false", or 1) must NOT be read as alive and promoted to a
+    # stable SEI binding — `alive` is checked with `is True`, fail-closed.
+    for bad_alive in ("false", "true", 1, "yes"):
+        r = IdentityResolver(
+            FakeClient(resolve={"alive": bad_alive, "sei": "loomweave:eid:x",
+                                "content_hash": "h"})
+        )
+        res = r.resolve("python:function:m.f")
+        assert res.entity_key.identity_stable is False, bad_alive
+        assert res.alive is False, bad_alive
+
+
 def test_transport_error_degrades_never_raises():
     r = IdentityResolver(FakeClient(boom=True))
     res = r.resolve("python:function:m.f")

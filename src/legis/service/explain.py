@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from legis.enforcement.engine import EnforcementEngine
@@ -27,6 +27,10 @@ class PolicyExplanation:
     enabled: bool
     available_moves: tuple[str, ...]
     required_inputs: tuple[RequiredInput, ...]
+    # The registry rule pattern that routed this policy, or None when the policy
+    # fell through to default_cell. Distinguishes a configured-but-disabled cell
+    # from a hallucinated/unconfigured policy name (matched_rule is None).
+    matched_rule: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -39,6 +43,7 @@ class PolicyExplanation:
             "required_inputs": [
                 item.to_payload() for item in self.required_inputs
             ],
+            "matched_rule": self.matched_rule,
         }
 
 
@@ -69,7 +74,35 @@ def explain_policy(
     The v1 registry routes by policy only, so the value is not used for routing.
     """
     del entity
-    cell = registry.cell_for(policy)
+    rule = registry.rule_for(policy)
+    cell = rule.cell if rule is not None else registry.default_cell
+    explanation = explain_cell(
+        cell,
+        engine=engine,
+        protected_gate=protected_gate,
+        signoff_gate=signoff_gate,
+    )
+    # matched_rule distinguishes a configured policy (reports its pattern) from an
+    # unconfigured name routed by default_cell (None) — closing "real-but-disabled
+    # vs hallucinated". It never affects cell/enabled.
+    return replace(explanation, matched_rule=rule.pattern if rule is not None else None)
+
+
+def explain_cell(
+    cell: str,
+    *,
+    engine: EnforcementEngine | None,
+    protected_gate: object | None,
+    signoff_gate: object | None,
+) -> PolicyExplanation:
+    """Explain a governance cell's posture and enablement on this deployment.
+
+    The single source of truth for per-cell ``enabled`` / ``judge_inline`` /
+    ``self_clearable`` / ``human_in_loop`` and the legal moves. ``policy_list``
+    and ``policy_explain`` both route through here so they can never disagree.
+    The returned ``matched_rule`` is always ``None`` here; ``explain_policy``
+    fills it after routing.
+    """
     if cell == "chill":
         enabled = engine is not None and not engine.has_judge
         return PolicyExplanation(

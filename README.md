@@ -6,7 +6,7 @@ Legis is the fourth Weft product: the git/CI and governance side of the suite's 
 
 ## Status
 
-Legis is at **`1.0.0rc4`** — the fourth release candidate. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--repair]` provides an operator health view and safe repair for the install + config layer. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
+Legis is at **`1.0.0`**. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--fix]` provides an operator health view and safe repair for the install + config layer, tagging each problem `[auto-fixable]` or `[operator]` so it is clear what `--fix` will and will not touch, including report-only checks that name the enablement path when the governance surface is unwired (policy cells, Wardline routing) — it reports, it never auto-enables or touches a signing key. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
 
 ## The Weft suite
 
@@ -92,7 +92,25 @@ Legis's enforcement surface is a **2×2**, and the base always stays weightless.
 - **Block + escalate** is also available here, with the added constraint that even a human sign-off produces a tamper-bound record.
 - **Audit lineage keyed on SEI.** Every verdict, override, and sign-off is recorded in an append-only trail keyed on Stable Entity Identity so the record survives rename/move.
 
+> **What "cryptographic layer" means here.** The HMAC signing is intra-suite *tamper-evidence* — it binds a governance record to SEI-stable code identity and detects after-the-fact edits by an actor who cannot recompute the keyed signature (e.g. a holder of raw DB-file access). The recorded actor is *self-asserted* (not a third-party-authenticated identity), and verification today is same-process Python over v1 canonical JSON. It is **not** a third-party-verifiable, cross-party authenticated cryptographic proof. RFC-8785 canonicalization is the named one-file upgrade for the day a non-Python verifier of a Legis attestation lands.
+
 The elspeth CI judge (`/home/john/elspeth`) is the working design ancestor of the protected cell — it is the "thick version" shipped inside elspeth's own codebase. Legis is where the same mechanisms land as a suite-level, opt-in layer.
+
+### Known security limitations
+
+Legis is a governance-*honesty* tool, so it states its own residual limits plainly rather than leaving them in source comments:
+
+- **The coached cell is a model-robustness wall, not a cryptographic one.** A blocked agent clears the coached gate by convincing the LLM judge; a *malicious prompt injection* that persuades the model will likewise clear it. Structural injection (forging a verdict key) is closed and any transport/parse failure is fail-closed to `BLOCKED`, but the coached cell has no defense-in-depth against a model that is genuinely fooled. For verdicts that must not rest on the model's word, use the **protected** cell, where a judge `ACCEPTED` is advisory only and is downgraded to require operator sign-off (unless a deterministic, non-LLM validator confirms it).
+- **Tamper-evidence assumes the signing key is out of the attacker's reach, and is not absolute against raw DB-file writes.** v3 signing binds each record's chain position, so in-place edits, reordering, and renumbering are detected. A holder of raw write access to the governance `.db` can still *delete* a record and re-chain, or rewrite a record's policy to a non-protected value and strip its protected markers ("modify-to-unsigned"), or truncate the tail — these are residuals of the conceded raw-file-write threat tier. The opt-in `HeadAnchor` mitigates truncation/rewind (with a documented anchor-replay caveat). Keep the governance store on storage only the operator controls.
+- **Durability tier.** The audit store runs `synchronous=FULL`, but a power loss can still drop the most recent un-checkpointed appends; the trail stays internally consistent (a shortened-but-valid tail), it does not corrupt.
+- **SEI binding integrity rests on TLS by design.** The Weft request HMAC authenticates legis's *requests* to Loomweave/Filigree; it does not sign their *responses*. Response integrity is TLS's job. `LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1` permits plaintext to a remote sibling and therefore **voids that custody seal** (an on-path attacker could forge a stable identity binding) — it now logs a warning and is for dev/loopback use only.
+
+**The full adversarial threat model is published — attack recipes and all.** Legis holds itself to the honesty bar it enforces, so both pre-1.0 adversarial reviews ship in the open, including the *reproduced* attack recipes for every residual above:
+
+- [`docs/release-1.0-risk-audit.md`](docs/release-1.0-risk-audit.md) — the multi-lane pre-release risk audit.
+- [`docs/release-1.0-pre-ship-review.md`](docs/release-1.0-pre-ship-review.md) — the independent second pass that re-attacked the audit's own fixes (and caught a real fail-open the self-verified pass had missed).
+
+This is deliberate. Legis is a *"forced me to do the right thing"* discipline, not a hardened security boundary — its worth is the effort the threat model forces and the residual tiers it names honestly (raw DB-file write, model-robustness, response-integrity-rests-on-TLS), not a claim to withstand an attacker who already holds those capabilities. **The system is only as load-bearing as the effort put into it.**
 
 ### Graded enforcement
 
@@ -164,6 +182,7 @@ Legis is complete when:
 
 ## Repository layout
 
+- `docs/guide/` — operator guides: configuration reference and output interpretation
 - `docs/federation/` — Weft-facing contracts and participation notes
 - `docs/design/` — product intent and design notes
 - `docs/superpowers/specs/` — approved design specs
@@ -171,10 +190,18 @@ Legis is complete when:
 
 ## Documents
 
+**Operator guides (how to configure and read Legis):**
+- `docs/guide/configuration.md` — what to set, what each cell costs to enable, the full env-var/flag reference, and the dev-only escape hatches
+- `docs/guide/reading-legis-output.md` — what you're seeing when an agent acts: the verdict/outcome/status vocabulary and which signals need a human
+
 **Design and federation:**
 - `docs/design/legis-charter.md` — authority boundary, operating modes, near-term scope
 - `docs/federation/README.md` — Weft participation overview
 - `docs/federation/sei-conformance.md` — Legis-specific SEI posture and obligations
+
+**Security & threat model (published in full, by design):**
+- `docs/release-1.0-risk-audit.md` — the pre-1.0 adversarial risk audit (multi-lane), with reproduced attack recipes for every residual
+- `docs/release-1.0-pre-ship-review.md` — the independent second-pass review that re-attacked the audit's own fixes
 
 **Planning:**
 - `docs/superpowers/specs/2026-06-01-legis-federation-repo-design.md` — federation repo design spec

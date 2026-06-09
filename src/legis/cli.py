@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="View and repair legis install/config health",
     )
     doctor.add_argument("--root", default=".", help="Project root to inspect (default: cwd)")
-    doctor.add_argument("--repair", action="store_true", help="Apply safe repairs, then re-check")
+    doctor.add_argument("--fix", "--repair", action="store_true", help="Apply safe repairs, then re-check")
     doctor.add_argument(
         "--format", choices=("text", "json"), default="text",
         help="Output format: human text (default) or machine-readable json",
@@ -264,7 +264,7 @@ def _check_override_rate(db_url: str) -> int:
 def _run_doctor(args) -> int:
     from legis.doctor import run_doctor
 
-    return run_doctor(Path(args.root), repair=args.repair, fmt=args.format)
+    return run_doctor(Path(args.root), repair=args.fix, fmt=args.format)
 
 
 def _run_install(args) -> int:

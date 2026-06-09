@@ -13,7 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy.engine import make_url
 
@@ -27,13 +27,19 @@ class DoctorCheck:
     status: str  # "ok" | "warn" | "error"
     fixed: bool = False
     message: str | None = None
+    repairable: bool = False
 
     @property
     def ok(self) -> bool:
         return self.status != "error"
 
     def to_dict(self) -> dict[str, Any]:
-        data: dict[str, Any] = {"id": self.id, "status": self.status, "fixed": self.fixed}
+        data: dict[str, Any] = {
+            "id": self.id,
+            "status": self.status,
+            "fixed": self.fixed,
+            "repairable": self.repairable,
+        }
         if self.message:
             data["message"] = self.message
         return data
@@ -65,8 +71,26 @@ def render_text(checks: list[DoctorCheck]) -> str:
             return "legis doctor: ok"
     else:
         lines = ["legis doctor:"]
+    has_auto_fixable = False
+    has_operator = False
     for c in problems:
-        lines.append(f"  {c.id}: {c.status} — {c.message}" if c.message else f"  {c.id}: {c.status}")
+        if c.fixed:
+            tag = "[fixed]"
+        elif c.repairable:
+            tag = "[auto-fixable]"
+            has_auto_fixable = True
+        else:
+            tag = "[operator]"
+            has_operator = True
+        body = f"{c.status} — {c.message}" if c.message else c.status
+        lines.append(f"  {c.id}: {body} {tag}")
+    if has_auto_fixable:
+        lines.append("  -> Run `legis doctor --fix` to repair auto-fixable items.")
+    if has_operator:
+        lines.append(
+            "  -> [operator] items are not auto-fixable by `legis doctor --fix`; they need "
+            "out-of-band config (env var or file) and a relaunch (see each line)."
+        )
     return "\n".join(lines)
 
 
@@ -80,16 +104,16 @@ def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
     """
     cid = "install.mcp_json"
     if _install.mcp_entry_is_current(root):
-        return DoctorCheck(cid, "ok")
+        return DoctorCheck(cid, "ok", repairable=True)
     if repair:
         from legis.install import register_mcp_json
 
         ok, msg = register_mcp_json(root)
         if ok and _install.mcp_entry_is_current(root):
-            return DoctorCheck(cid, "ok", fixed=True)
-        return DoctorCheck(cid, "error", message=msg)
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
+        return DoctorCheck(cid, "error", message=msg, repairable=True)
     return DoctorCheck(
-        cid, "error", message="legis server missing or stale (run: legis install --mcp)"
+        cid, "error", message="legis server missing or stale (run: legis install --mcp)", repairable=True
     )
 
 
@@ -98,32 +122,67 @@ def check_mcp_json(root: Path, *, repair: bool) -> DoctorCheck:
 # ---------------------------------------------------------------------------
 
 
-def _block_fresh(root: Path, filename: str) -> bool:
-    """True iff <root>/<filename> has the legis block at the current token."""
+def _block_tokens(root: Path, filename: str) -> list[str | None] | None:
+    """Tokens of every legis block in <root>/<filename>, or None if unreadable.
+
+    ``[]`` means the file exists but carries no legis block. More than one entry
+    is a split brain (two divergent copies of the guidance)."""
     path = root / filename
     if not path.exists():
-        return False
+        return None
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return False
-    if _install.INSTRUCTIONS_MARKER not in content:
-        return False
-    return _install._extract_marker_token(content) == _install._marker_token()
+        return None
+    return _install._own_open_marker_tokens(content)
+
+
+def _block_fresh(root: Path, filename: str) -> bool:
+    """True iff <root>/<filename> has EXACTLY ONE legis block at the current token.
+
+    A second (stale) block is a split brain the injector tolerates but cannot
+    canonicalise across a sibling — reading freshness off the first marker alone
+    would report "healthy" while conflicting guidance sits in the file
+    (INSTALL-1). Requiring a singleton list at the current token closes that.
+    """
+    tokens = _block_tokens(root, filename)
+    return tokens == [_install._marker_token()]
 
 
 def check_instruction_block(root: Path, filename: str, *, repair: bool) -> DoctorCheck:
     """Check that <root>/<filename> has the legis instruction block at the current token."""
     cid = "install.claude_md" if filename == "CLAUDE.md" else "install.agents_md"
     if _block_fresh(root, filename):
-        return DoctorCheck(cid, "ok")
+        return DoctorCheck(cid, "ok", repairable=True)
+    # A split brain (>1 legis block) cannot be auto-collapsed: the injector
+    # bounds its rewrite at its own first close and will not splice across a
+    # sibling's block or delete inter-block user content, so re-running install
+    # canonicalises the first block but leaves the stale copy. Surface it for
+    # hand-resolution instead of churning or, worse, reporting healthy.
+    tokens = _block_tokens(root, filename)
+    if tokens is not None and len(tokens) > 1:
+        return DoctorCheck(
+            cid,
+            "error",
+            message=(
+                f"{filename} has {len(tokens)} legis instruction blocks (split "
+                "brain); the stale copy cannot be auto-collapsed across another "
+                "tool's block — resolve it by hand"
+            ),
+            # NOT auto-fixable: --fix returns before the repair branch for this
+            # split-brain case (the injector won't splice across a sibling's
+            # block), so tag it [operator] to match its own "resolve it by hand"
+            # message — tagging [auto-fixable] would re-create the --fix loop the
+            # plan eliminates (false signal in a codebase that blocks on those).
+            repairable=False,
+        )
     if repair:
         ok, msg = _install.inject_instructions(root / filename)
         if ok and _block_fresh(root, filename):
-            return DoctorCheck(cid, "ok", fixed=True)
-        return DoctorCheck(cid, "error", message=msg)
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
+        return DoctorCheck(cid, "error", message=msg, repairable=True)
     missing = "missing" if not (root / filename).exists() else "block missing or drifted"
-    return DoctorCheck(cid, "error", message=f"{filename} {missing} (run: legis install)")
+    return DoctorCheck(cid, "error", message=f"{filename} {missing} (run: legis install)", repairable=True)
 
 
 def _skill_fresh(root: Path, base: str) -> bool:
@@ -140,16 +199,17 @@ def check_skill_pack(root: Path, base: str, *, repair: bool) -> DoctorCheck:
     cid = "install.claude_skill" if base == ".claude" else "install.agents_skill"
     installer = _install.install_skills if base == ".claude" else _install.install_codex_skills
     if _skill_fresh(root, base):
-        return DoctorCheck(cid, "ok")
+        return DoctorCheck(cid, "ok", repairable=True)
     if repair:
         ok, msg = installer(root)
         if ok and _skill_fresh(root, base):
-            return DoctorCheck(cid, "ok", fixed=True)
-        return DoctorCheck(cid, "error", message=msg)
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
+        return DoctorCheck(cid, "error", message=msg, repairable=True)
     return DoctorCheck(
         cid,
         "error",
         message=f"{base}/skills/{_install.SKILL_NAME} missing or drifted (run: legis install)",
+        repairable=True,
     )
 
 
@@ -169,26 +229,30 @@ def check_hook(root: Path, *, repair: bool) -> DoctorCheck:
     """Check that the legis SessionStart hook is registered."""
     cid = "install.hook"
     if _hook_present(root):
-        return DoctorCheck(cid, "ok")
+        return DoctorCheck(cid, "ok", repairable=True)
     if repair:
         ok, msg = _install.install_claude_code_hooks(root)
         if ok and _hook_present(root):
-            return DoctorCheck(cid, "ok", fixed=True)
-        return DoctorCheck(cid, "error", message=msg)
-    return DoctorCheck(cid, "error", message="SessionStart hook not registered (run: legis install)")
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
+        return DoctorCheck(cid, "error", message=msg, repairable=True)
+    return DoctorCheck(
+        cid, "error", message="SessionStart hook not registered (run: legis install)", repairable=True
+    )
 
 
 def check_gitignore(root: Path, *, repair: bool) -> DoctorCheck:
     """Check that legis .gitignore rules are present."""
     cid = "install.gitignore"
     if _install.gitignore_rules_present(root):
-        return DoctorCheck(cid, "ok")
+        return DoctorCheck(cid, "ok", repairable=True)
     if repair:
         ok, msg = _install.ensure_gitignore(root)
         if ok and _install.gitignore_rules_present(root):
-            return DoctorCheck(cid, "ok", fixed=True)
-        return DoctorCheck(cid, "error", message=msg)
-    return DoctorCheck(cid, "error", message=".weft/legis/ not in .gitignore (run: legis install)")
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
+        return DoctorCheck(cid, "error", message=msg, repairable=True)
+    return DoctorCheck(
+        cid, "error", message=".weft/legis/ not in .gitignore (run: legis install)", repairable=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -253,23 +317,25 @@ def _nearest_existing(path: Path) -> Path:
 
 def check_store_dir(root: Path, *, repair: bool = False) -> DoctorCheck:
     """An absent .weft/legis/ is ok (created lazily). A present-but-unwritable
-    dir is an error. --repair ensures the dir exists (explicit operator action)."""
+    dir is an error. --fix ensures the dir exists (explicit operator action)."""
     cid = "store.dir"
     store_dir = _store_dir_for(root)
     if store_dir.exists():
         if not os.access(store_dir, os.W_OK):
-            return DoctorCheck(cid, "error", message=f"{store_dir} not writable")
-        return DoctorCheck(cid, "ok")
+            return DoctorCheck(cid, "error", message=f"{store_dir} not writable", repairable=True)
+        return DoctorCheck(cid, "ok", repairable=True)
     if repair:
         try:
             store_dir.mkdir(parents=True, exist_ok=True)
-            return DoctorCheck(cid, "ok", fixed=True)
+            return DoctorCheck(cid, "ok", fixed=True, repairable=True)
         except OSError as exc:
-            return DoctorCheck(cid, "error", message=f"cannot create {store_dir}: {exc}")
+            return DoctorCheck(cid, "error", message=f"cannot create {store_dir}: {exc}", repairable=True)
     anchor = _nearest_existing(store_dir)
     if not os.access(anchor, os.W_OK):
-        return DoctorCheck(cid, "error", message=f"{store_dir} not creatable ({anchor} not writable)")
-    return DoctorCheck(cid, "ok", message="absent (created on first store open)")
+        return DoctorCheck(
+            cid, "error", message=f"{store_dir} not creatable ({anchor} not writable)", repairable=True
+        )
+    return DoctorCheck(cid, "ok", message="absent (created on first store open)", repairable=True)
 
 
 def check_db_overrides(root: Path) -> DoctorCheck:  # noqa: ARG001
@@ -355,6 +421,61 @@ def check_hmac_key(root: Path) -> DoctorCheck:  # noqa: ARG001
     )
 
 
+def check_policy_cells(root: Path) -> DoctorCheck:
+    """Report-only (N3 / C-10(c)): is the policy-cell registry discoverable?
+
+    Mirrors ``mcp._load_policy_cell_registry``'s precedence (LEGIS_POLICY_CELLS >
+    policy/cells.toml > LEGIS_DEV_DEFAULT_CELLS > fail-closed), but resolves the
+    root from the doctor target (``root``) where the server falls back to
+    ``os.getcwd()`` — these coincide when doctor runs from the server's launch
+    CWD. Never writes a file, never auto-opens — when nothing resolves it reports
+    the fail-closed ``structured`` default is in effect and NAMES the enablement
+    path. Cell DEFINITIONS are non-secret; this check never touches a key (C-8)."""
+    cid = "runtime.policy_cells"
+    configured = os.environ.get("LEGIS_POLICY_CELLS")
+    if configured:
+        return DoctorCheck(cid, "ok", message=f"LEGIS_POLICY_CELLS={configured}")
+    source_root = Path(os.environ.get("LEGIS_SOURCE_ROOT") or root)
+    default_path = source_root / "policy" / "cells.toml"
+    if default_path.exists():
+        return DoctorCheck(cid, "ok", message=f"{default_path}")
+    if os.environ.get("LEGIS_DEV_DEFAULT_CELLS") == "1":
+        return DoctorCheck(cid, "ok", message="chill dev default (LEGIS_DEV_DEFAULT_CELLS=1)")
+    return DoctorCheck(
+        cid,
+        "warn",
+        message=(
+            "no policy cells configured — fail-closed (unlisted policies escalate "
+            "to structured). The operator maps policies via policy/cells.toml or "
+            "LEGIS_POLICY_CELLS (out-of-band, takes effect on relaunch; chill/coached "
+            "are reachable keyless); LEGIS_DEV_DEFAULT_CELLS=1 for the chill dev posture"
+        ),
+    )
+
+
+def check_wardline_routing(root: Path) -> DoctorCheck:  # noqa: ARG001
+    """Report-only (N3 / C-10(c)): is scan_route's server-owned cell wired?
+
+    Presence-only; never sets env or renders a value. When unset it reports that
+    scan_route is server-owned and inert until configured, and names the key."""
+    cid = "runtime.wardline_routing"
+    cell = os.environ.get("LEGIS_WARDLINE_CELL")
+    by_severity = os.environ.get("LEGIS_WARDLINE_CELL_BY_SEVERITY")
+    if cell:
+        return DoctorCheck(cid, "ok", message=f"LEGIS_WARDLINE_CELL={cell}")
+    if by_severity:
+        return DoctorCheck(cid, "ok", message="LEGIS_WARDLINE_CELL_BY_SEVERITY set")
+    return DoctorCheck(
+        cid,
+        "warn",
+        message=(
+            "scan_route routing is server-owned and unconfigured — inert until set. "
+            "Set LEGIS_WARDLINE_CELL (e.g. =surface_only) or "
+            "LEGIS_WARDLINE_CELL_BY_SEVERITY"
+        ),
+    )
+
+
 def check_sibling_url(cid: str, env: str) -> DoctorCheck:
     url = os.environ.get(env)
     if not url:
@@ -363,6 +484,118 @@ def check_sibling_url(cid: str, env: str) -> DoctorCheck:
     if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
         return DoctorCheck(cid, "ok")
     return DoctorCheck(cid, "error", message=f"{env} invalid URL: {url!r}")
+
+
+# The federation-WRITE paths filigree's ProjectMiddleware fail-closes in
+# server-mode when unscoped (dashboard.py protected_paths + the 400 "scope to a
+# project — use /api/p/{key}/… or ?project={key}"). An unscoped binding to one of
+# these silently NON-emits under a multi-project daemon (N1). A path is project-
+# scoped iff it is mounted under /api/p/<key>/ OR carries a ?project= query.
+_FEDERATION_WRITE_PATHS = frozenset(
+    {"/api/scan-results", "/api/observations", "/api/v1/scan-results", "/api/v1/observations"}
+)
+
+
+def _filigree_binding_urls(root: Path) -> list[str]:
+    """Every ``--filigree-url`` value across the .mcp.json server entries.
+
+    This widens doctor past its own legis entry into the scanner (wardline) entry
+    that actually emits scan-results — deliberately, because that is the binding
+    subject to filigree's N1 fail-closed server-mode write."""
+    path = root / ".mcp.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return []
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    urls: list[str] = []
+    for entry in servers.values():
+        args = entry.get("args") if isinstance(entry, dict) else None
+        if not isinstance(args, list):
+            continue
+        for i, arg in enumerate(args):
+            if arg == "--filigree-url" and i + 1 < len(args) and isinstance(args[i + 1], str):
+                urls.append(args[i + 1])
+    return urls
+
+
+def _is_unscoped_federation_write(url: str) -> bool:
+    """True iff *url* targets a federation-write path WITHOUT a project scope."""
+    parsed = urlsplit(url)
+    path = parsed.path
+    if path.startswith("/api/p/") or "project" in parse_qs(parsed.query):
+        return False  # scoped (path mount or ?project=)
+    norm = path.rstrip("/")
+    return path.startswith("/api/weft/") or norm in _FEDERATION_WRITE_PATHS
+
+
+def _filigree_installed(root: Path) -> bool:
+    """True iff filigree is set up in *root*, by FILE-EXISTENCE ONLY (no import of
+    filigree, no JSON parse — staying decoupled from filigree's moved schema).
+
+    Mirrors filigree's authoritative install predicate ``find_filigree_anchor``
+    (filigree core.py:1046-1064), which treats a project as installed if ANY ONE
+    of three markers is present — never AND:
+
+      - ``.filigree.conf`` is a file (the v2.0 root anchor; resolves on conf alone,
+        no ``config.json`` required), OR
+      - ``.weft/filigree/`` is a dir (federation-layout, confless install), OR
+      - ``.filigree/`` is a dir (legacy, confless install).
+
+    The OR is load-bearing and errs toward "installed" (warning shown): an
+    AND-with-mandatory-conf gate would return "not installed" for confless /
+    legacy / conf-only installs and SILENTLY DROP a real unscoped-binding warning
+    in a project where filigree genuinely IS installed — the false-green
+    governance forbids. The store/legacy checks are ``.is_dir()`` on the
+    directories (matching filigree exactly), NOT a ``config.json`` ``.is_file()``:
+    ``config.json`` presence is filigree's narrower worktree-local check, not its
+    install predicate."""
+    return (
+        (root / ".filigree.conf").is_file()
+        or (root / ".weft" / "filigree").is_dir()
+        or (root / ".filigree").is_dir()
+    )
+
+
+def check_filigree_binding_scope(root: Path) -> DoctorCheck:
+    """Report-only: is the .mcp.json filigree scan-results binding project-scoped?
+
+    Gated on filigree actually being installed in *root* (``_filigree_installed``):
+    an unscoped binding only fail-closes when a filigree server-mode daemon is in
+    play, so the warning is suppressed when filigree isn't set up here.
+
+    When installed, an unscoped federation write (``/api/weft/…`` etc.) is
+    fail-closed with a 400 by a filigree server-mode daemon (N1), so the scan
+    silently never lands. The binding is operator-owned: this ``--filigree-url`` is
+    operator-pinned in wardline's ``.mcp.json`` entry — legis never writes it — so
+    the check stays report-only (``repairable=False``) and names the operator action
+    rather than auto-fixing."""
+    cid = "install.filigree_scope"
+    if not _filigree_installed(root):
+        return DoctorCheck(cid, "ok", message="filigree not installed in this project")
+    urls = _filigree_binding_urls(root)
+    if not urls:
+        return DoctorCheck(cid, "ok", message="no filigree scan-results binding in .mcp.json")
+    unscoped = [u for u in urls if _is_unscoped_federation_write(u)]
+    if unscoped:
+        return DoctorCheck(
+            cid,
+            "warn",
+            message=(
+                "filigree binding not project-scoped: "
+                + ", ".join(unscoped)
+                + " — this --filigree-url is operator-pinned in wardline's .mcp.json entry "
+                "(legis never writes it; filigree doctor doesn't manage it). A server-mode "
+                "filigree daemon fail-closes unscoped federation writes (HTTP 400), so scans "
+                "silently non-emit. Operator action: scope it to "
+                "/api/p/<project>/weft/scan-results (or add ?project=<project>)"
+            ),
+        )
+    return DoctorCheck(cid, "ok", message="project-scoped: " + ", ".join(urls))
 
 
 def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
@@ -376,6 +609,7 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_hook(root, repair=repair))
     checks.append(check_gitignore(root, repair=repair))
     checks.append(check_mcp_json(root, repair=repair))
+    checks.append(check_filigree_binding_scope(root))
     checks.append(check_weft_toml(root))
     checks.append(check_store_dir(root, repair=repair))
     checks.append(check_db_overrides(root))
@@ -383,6 +617,8 @@ def collect_checks(root: Path, *, repair: bool) -> list[DoctorCheck]:
     checks.append(check_audit_chain("store.governance_chain", _store_url(root, "legis-governance.db", "LEGIS_GOVERNANCE_DB")))
     checks.append(check_audit_chain("store.binding_chain", _store_url(root, "legis-binding.db", "LEGIS_BINDING_DB")))
     checks.append(check_hmac_key(root))
+    checks.append(check_policy_cells(root))
+    checks.append(check_wardline_routing(root))
     checks.append(check_sibling_url("runtime.loomweave_url", "LOOMWEAVE_API_URL"))
     checks.append(check_sibling_url("runtime.filigree_url", "FILIGREE_API_URL"))
     return checks

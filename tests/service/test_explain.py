@@ -43,6 +43,7 @@ def test_explain_chill_policy_reports_enabled_self_clearable_cell(tmp_path):
         "enabled": True,
         "available_moves": ["override_submit"],
         "required_inputs": [],
+        "matched_rule": None,
     }
 
 
@@ -71,6 +72,7 @@ def test_explain_coached_policy_reports_disabled_without_judge_and_enabled_with_
         "enabled": False,
         "available_moves": [],
         "required_inputs": [],
+        "matched_rule": "review.*",
     }
 
     enabled = explain_policy(
@@ -120,6 +122,7 @@ def test_explain_protected_policy_reports_required_inputs_even_when_gate_disable
                 "how": "dotted path to the AST node",
             },
         ],
+        "matched_rule": "protected.*",
     }
 
 
@@ -148,4 +151,5 @@ def test_explain_structured_policy_reports_human_loop_when_signoff_gate_wired(
         "enabled": True,
         "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
+        "matched_rule": "human.*",
     }

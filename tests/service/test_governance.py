@@ -358,12 +358,13 @@ def test_source_binding_status_is_bound_into_the_signature(tmp_path):
         source_root=tmp_path,
     )
 
-    payload = store.read_all()[0].payload
-    fields = signing_fields(payload)
+    rec = store.read_all()[0]
+    payload = rec.payload
+    fields = signing_fields(payload, seq=rec.seq)
     assert fields["source_binding_status"] == "unverified"
     assert verify(fields, result.signature, key) is True
 
     # Flipping the recorded status to "verified" must break verification.
     payload["extensions"]["source_binding"]["status"] = "verified"
-    tampered = signing_fields(payload)
+    tampered = signing_fields(payload, seq=rec.seq)
     assert verify(tampered, result.signature, key) is False
