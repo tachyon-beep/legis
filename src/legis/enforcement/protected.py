@@ -288,7 +288,7 @@ class ProtectedGate:
             self._anchor.update(*self._store.get_latest_sequence_and_hash())
         signature = captured["signature"]
         return ProtectedResult(
-            accepted=verdict in (Verdict.ACCEPTED, Verdict.OVERRIDDEN_BY_OPERATOR),
+            accepted=verdict in Verdict.accepting(),
             seq=seq,
             verdict=verdict,
             judge_model=model,

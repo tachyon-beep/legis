@@ -104,7 +104,7 @@ def _parse_structured_response(raw: str) -> tuple[Verdict, str] | None:
     # ``{"verdict": "OVERRIDDEN_BY_OPERATOR"}`` would otherwise clear a protected
     # gate, since that verdict counts as accepted). Anything outside the allowed
     # set is treated as unparseable → the caller fail-closes to BLOCKED.
-    if parsed not in (Verdict.ACCEPTED, Verdict.BLOCKED):
+    if parsed not in Verdict.model_emittable():
         return None
     return parsed, rationale
 

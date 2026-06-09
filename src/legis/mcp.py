@@ -30,6 +30,7 @@ from legis.enforcement.verdict import SignoffState, Verdict
 from legis.git.surface import GitError, GitSurface
 from legis.governance.binding_ledger import BindingError
 from legis.policy.cells import (
+    CELL_TIER_ORDER,
     PolicyCellRegistry,
     default_policy_cells,
     fail_closed_policy_cells,
@@ -794,15 +795,13 @@ def _tool_policy_explain(runtime: McpRuntime, args: dict[str, Any]) -> dict[str,
     return _tool_result(_explanation_payload(explanation))
 
 
-# Explicit tier order (simple → complex) for the policy_list cells block; do not
-# iterate VALID_CELLS (a frozenset has no stable order).
-_CELL_TIER_ORDER = ("chill", "coached", "structured", "protected")
-
-
 def _tool_policy_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     registry = _registry(runtime)
     cells = []
-    for cell in _CELL_TIER_ORDER:
+    # CELL_TIER_ORDER is the canonical cell membership in tier order (it backs
+    # VALID_CELLS), so the cells block always covers every governance cell — a
+    # new cell cannot be silently omitted from policy_list.
+    for cell in CELL_TIER_ORDER:
         # Same source explain_policy uses for the per-cell fields, fed the SAME
         # raw runtime gates _tool_policy_explain passes — so policy_list and
         # policy_explain can never disagree, and the complex tier honestly

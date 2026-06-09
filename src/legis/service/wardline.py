@@ -97,16 +97,15 @@ def resolve_scan_routing(
         if value is not None
     ]
     request_routing = bool(supplied_request_args)
-    if server_routing:
-        if request_routing:
-            raise WardlineRoutingError(
-                WardlineRoutingError.SERVER_OWNED,
-                "Wardline routing is server-owned; the server already pins the "
-                "cell, so request-side routing arg(s) "
-                f"{', '.join(supplied_request_args)} were rejected. (Request-side "
-                "routing requires the LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING opt-in.)",
-            )
-    else:
+    if server_routing and request_routing:
+        raise WardlineRoutingError(
+            WardlineRoutingError.SERVER_OWNED,
+            "Wardline routing is server-owned; the server already pins the "
+            "cell, so request-side routing arg(s) "
+            f"{', '.join(supplied_request_args)} were rejected. (Request-side "
+            "routing requires the LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING opt-in.)",
+        )
+    elif not server_routing:
         if not allow_request_routing:
             supplied_note = (
                 " supplied request-side arg(s) "

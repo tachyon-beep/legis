@@ -366,6 +366,19 @@ def test_policy_list_reports_routing_table_and_cells(tmp_path):
     ]
 
 
+def test_policy_list_cells_cover_every_valid_cell(tmp_path):
+    # legis-a50c000052: the cells block must list EVERY governance cell, so a
+    # cell added to VALID_CELLS cannot be silently omitted from policy_list
+    # (re-opening the discoverability gap). Guards against re-hardcoding a
+    # membership tuple that drifts from VALID_CELLS.
+    from legis.policy.cells import VALID_CELLS
+
+    runtime, _store = _runtime(tmp_path)
+    payload = _policy_list(runtime)["structuredContent"]
+
+    assert {c["cell"] for c in payload["cells"]} == set(VALID_CELLS)
+
+
 def test_policy_list_keyless_runtime_reports_complex_tier_disabled(tmp_path):
     # Cardinal governance/false-green guard: without LEGIS_HMAC_KEY the complex
     # tier (structured/protected) is NOT wired, so policy_list must report

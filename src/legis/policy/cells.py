@@ -14,7 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-VALID_CELLS = frozenset({"chill", "coached", "structured", "protected"})
+# Canonical governance cells in tier order (simple → complex). This ordered
+# sequence is the single source of truth for cell *membership*; ``VALID_CELLS``
+# is derived from it so the two cannot desync. Consumers that need a stable
+# display/iteration order (e.g. the MCP ``policy_list`` cells block) import
+# ``CELL_TIER_ORDER`` rather than re-hardcoding the membership.
+CELL_TIER_ORDER = ("chill", "coached", "structured", "protected")
+VALID_CELLS = frozenset(CELL_TIER_ORDER)
 
 
 @dataclass(frozen=True)
