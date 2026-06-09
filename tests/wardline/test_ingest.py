@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from legis.canonical import canonical_json, content_hash
 from legis.wardline.ingest import (
+    DEFECT_KIND,
     FINDINGS_KEY,
+    KNOWN_KINDS,
     TRUST_TIERS,
     ArtifactStatus,
     ScanOutcome,
@@ -186,6 +189,44 @@ def test_findings_key_is_a_shared_constant():
     assert FINDINGS_KEY == "findings"
 
 
+# --- G1 twin (value axis): the `kind` VALUE must be a KNOWN vocabulary token ----
+#
+# G1 was the absent-`findings`-KEY false-green. This is the same class on the
+# `kind` VALUE axis: active_defects selects the gate population with `kind ==
+# "defect"`. A defect whose kind token drifts out of Wardline's vocabulary (e.g. a
+# producer renames the value "defect" -> "vulnerability", re-signs HMAC-clean)
+# would fall through the `!= defect` skip and silently vanish from the gate
+# population under a green status. The signature proves authenticity, not that the
+# kind token still means "defect". The structural defense is a shared KNOWN_KINDS
+# vocabulary (carried verbatim from Wardline core/finding.py Kind): an unknown kind
+# is rejected loudly; KNOWN non-defect kinds stay legitimately excluded.
+
+def test_known_kinds_carries_the_wardline_vocabulary_verbatim():
+    # The cross-impl anchor: legis's KNOWN_KINDS must equal Wardline's Kind enum
+    # values (core/finding.py). If Wardline adds a kind, this set must be updated
+    # in lockstep (and the shared conformance vector regenerated).
+    assert KNOWN_KINDS == {"defect", "fact", "classification", "metric", "suggestion"}
+    assert DEFECT_KIND == "defect"
+    assert DEFECT_KIND in KNOWN_KINDS
+
+
+def test_drifted_defect_kind_is_rejected_not_silently_skipped():
+    # The exact silent-drop scenario: a real CRITICAL defect arrives with a kind
+    # token that drifted out of the vocabulary. legis must reject the payload, not
+    # skip it to an empty gate population under a green status.
+    drifted = {"findings": [_finding(kind="vulnerability", severity="CRITICAL", fingerprint="rce")]}
+    with pytest.raises(WardlinePayloadError, match="unknown kind"):
+        active_defects(drifted)
+
+
+def test_known_non_defect_kinds_are_excluded_not_rejected():
+    # The over-correction guard: every OTHER known Wardline kind is legitimately
+    # not a defect — skipped, never rejected. (Only out-of-vocabulary kinds raise.)
+    for kind in KNOWN_KINDS - {DEFECT_KIND}:
+        scan = {"findings": [_finding(kind=kind, severity="NONE", fingerprint=kind)]}
+        assert active_defects(scan) == [], f"known non-defect kind {kind!r} must be skipped, not raise"
+
+
 # --- dirty-tree dev artifact (P0 dev path + P1 typed amber SKIPPED_DIRTY_TREE) ---
 #
 # wardline `scan --format legis --allow-dirty` emits an UNSIGNED dev artifact
@@ -339,35 +380,30 @@ def test_ci_posture_missing_provenance_field_is_red():
 #
 # legis is the CONSUMER + co-signer of Wardline's signed scan artifact. Wardline
 # pins the byte-exact signature in wardline/tests/unit/core/test_legis_artifact.py;
-# legis had no matching pin. This mirror is the legis-side half of that contract:
 # the SAME key + fields must hash to the SAME signature, or the signed hop silently
-# stops verifying. The literal hex is copied verbatim from Wardline's golden so a
-# shared misreading of the canonical-JSON+HMAC formula cannot pass both sides.
+# stops verifying.
+#
+# These three names are now SINGLE-SOURCED from the shared cross-member conformance
+# vector (tests/contract/weft/vectors/) instead of being a second hand-copied
+# literal — that hand-copying on both sides with no shared test was root cause #2 of
+# the Weft incident (2026-06-10). The vector is the canonical bytes wardline's CI
+# loads too; tests/contract/weft drives the full positive+negative case set. The
+# golden tests below stay pointed at the same bytes via these aliases.
 #
 # W3 renamed the per-finding wire key ``suppressed`` -> ``suppression_state``; the
 # golden FIELDS carry ``suppression_state`` (VALUE "active" unchanged). legis's
 # signer canonicalizes the literal payload, so it reproduces the rekeyed signature
 # byte-for-byte with NO signing change.
-_GOLDEN_KEY = b"test-shared-secret-key"
-_GOLDEN_FIELDS = {
-    "scanner_identity": "wardline@1.0.0rc1",
-    "rule_set_version": "sha256:deadbeef",
-    "commit_sha": "c" * 40,
-    "tree_sha": "t" * 40,
-    "findings": [
-        {
-            "rule_id": "PY-WL-101",
-            "message": "leak",
-            "severity": "ERROR",
-            "kind": "defect",
-            "fingerprint": "a" * 64,
-            "qualname": "svc.leaky",
-            "properties": {"declared_return": "INTEGRAL", "actual_return": "EXTERNAL_RAW"},
-            "suppression_state": "active",
-        }
-    ],
-}
-_GOLDEN_SIG = "hmac-sha256:v2:2b2cf09548572b58fd01c359d1b6a16c3c1181f1cbfe8e4f5ada6fcd21f35ac4"
+_VECTOR = json.loads(
+    (Path(__file__).resolve().parents[1] / "contract" / "weft" / "vectors"
+     / "wardline_scan_artifact.v1.json").read_text(encoding="utf-8")
+)
+_GOLDEN_CASE = next(
+    c for c in _VECTOR["valid"] if c["name"] == "golden_single_active_defect"
+)
+_GOLDEN_KEY = _VECTOR["signing"]["key_utf8"].encode("utf-8")
+_GOLDEN_FIELDS = _GOLDEN_CASE["artifact"]
+_GOLDEN_SIG = _GOLDEN_CASE["expected_signature"]
 
 
 def test_golden_signature_matches_wardline_byte_for_byte():

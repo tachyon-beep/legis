@@ -16,6 +16,22 @@ whose ``ensure_ascii=False`` is the byte-for-byte HMAC contract shared with
 Wardline; routing a transport body through it would change every signed
 request's bytes. The wire transport MUST send exactly ``weft_body_bytes(body)``
 and a verifier MUST recanonicalize identically before hashing.
+
+Verification posture (G11, weft-c7e3486246) — stated plainly so the emitted
+headers are never mistaken for an enforced control: legis EMITS these
+``X-Weft-*`` headers on every signed Filigree/Loomweave request, but the current
+Filigree *classic* route does NOT verify them — it stores the app-level
+``binding_signature`` verbatim and ignores the transport HMAC (issue
+legis-d5783eacff). So today the bind is **transport-open**: integrity rests on
+the loopback transport and on legis's own ``BindingLedger`` (the authoritative,
+locally-verifiable record), NOT on a sibling checking this signature. The headers
+are kept deliberately — the scheme is shared with the Loomweave channel, the HMAC
+is cheap, and the emit is *forward-compatible*: the moment a verifier checks them
+they become live with no producer change. Whether to verify, or to formally
+declare the route transport-open and stop emitting, is **Filigree's decision to
+make** (it owns the verifying end); legis emits honestly-labelled rather than
+ripping out a cross-component contract unilaterally. The live evidence behind this
+posture is asserted in ``tests/governance/test_signoff_binding_real_filigree.py``.
 """
 
 from __future__ import annotations

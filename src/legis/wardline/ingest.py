@@ -29,6 +29,20 @@ MAX_FINDINGS = 500
 # silent producer rename leaves this key ABSENT, which `active_defects` rejects
 # as malformed rather than reading as zero defects under a green status (G1).
 FINDINGS_KEY = "findings"
+# The defect-class kind token: the gate population is exactly the findings whose
+# ``kind`` equals this value.
+DEFECT_KIND = "defect"
+# Wardline's finding-kind vocabulary (wardline core/finding.py ``Kind``), carried
+# verbatim like ``TRUST_TIERS`` — never re-derived. ``active_defects`` gates on
+# ``DEFECT_KIND``; the OTHER known kinds are legitimately not-a-defect and skipped.
+# A kind OUTSIDE this set is drift/tamper — e.g. a producer rename of the
+# ``"defect"`` token (``defect`` -> ``vulnerability``), re-signed HMAC-clean — and
+# is rejected LOUDLY, never silently skipped out of the gate population under a
+# green status (G1 twin, the value axis of the absent-``findings``-key G1; the
+# signature proves authenticity, not vocabulary conformance).
+KNOWN_KINDS: frozenset[str] = frozenset({
+    "defect", "fact", "classification", "metric", "suggestion",
+})
 ARTIFACT_SIGNATURE_FIELD = "artifact_signature"
 ARTIFACT_PROVENANCE_FIELDS: tuple[str, ...] = (
     "scanner_identity",
@@ -381,7 +395,19 @@ def active_defects(scan: Mapping[str, Any]) -> list[WardlineFinding]:
         if not isinstance(raw, Mapping):
             raise WardlinePayloadError("each finding must be an object")
         f = WardlineFinding.from_wire(raw)
-        if f.kind != "defect":
+        # G1 twin (value axis): an unknown kind is drift/tamper, not a finding to
+        # silently skip. A defect whose kind token drifted out of Wardline's
+        # vocabulary (re-signed HMAC-clean) would otherwise fall through the
+        # ``!= DEFECT_KIND`` skip and vanish from the gate population under a green
+        # status. Reject it loudly; only then treat KNOWN non-defect kinds as the
+        # legitimately-excluded population.
+        if f.kind not in KNOWN_KINDS:
+            raise WardlinePayloadError(
+                f"finding has unknown kind {f.kind!r} "
+                "(not in the Wardline kind vocabulary; a renamed or unknown kind "
+                "must not silently drop a defect from the gate population)"
+            )
+        if f.kind != DEFECT_KIND:
             continue
         if f.suppression_state == Suppressed.ACTIVE:
             out.append(f)
