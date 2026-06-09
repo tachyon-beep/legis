@@ -45,7 +45,7 @@ from legis.service.errors import (
     ServiceError,
     WardlineRoutingError,
 )
-from legis.service.explain import explain_policy
+from legis.service.explain import explain_cell, explain_policy
 from legis.service.governance import (
     compute_override_rate,
     evaluate_policy,
@@ -62,6 +62,7 @@ from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError
 _AGENT_TOOLS = frozenset(
     {
         "policy_explain",
+        "policy_list",
         "override_submit",
         "signoff_status_get",
         "policy_evaluate",
@@ -253,6 +254,17 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
         },
         {
+            "name": "policy_list",
+            "description": (
+                "List the policy-to-cell routing table (default_cell plus the "
+                "configured pattern rules) and each governance cell's real "
+                "enabled state on this server. enabled reflects actual "
+                "enablement: the complex tier (structured/protected) reports "
+                "enabled:false without LEGIS_HMAC_KEY."
+            ),
+            "inputSchema": _schema([], {}),
+        },
+        {
             "name": "override_submit",
             "description": (
                 "Submit an override as the launch-bound agent. The server "
@@ -300,9 +312,32 @@ def tool_definitions() -> list[dict[str, Any]]:
                 ["scan"],
                 {
                     "scan": object_schema,
-                    "cell": string,
-                    "severity_map": object_schema,
-                    "fail_on": string,
+                    "cell": {
+                        "type": "string",
+                        "description": (
+                            "Request-side routing cell. Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing "
+                            "(LEGIS_WARDLINE_CELL / LEGIS_WARDLINE_CELL_BY_SEVERITY)."
+                        ),
+                    },
+                    "severity_map": {
+                        "type": "object",
+                        "description": (
+                            "Request-side per-severity routing map. Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing."
+                        ),
+                    },
+                    "fail_on": {
+                        "type": "string",
+                        "description": (
+                            "Request-side fail-on severity threshold (used with "
+                            "cell). Gated behind "
+                            "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING and rejected "
+                            "(INVALID_CELL_SPEC) when the server owns routing."
+                        ),
+                    },
                 },
             ),
         },
@@ -759,6 +794,46 @@ def _tool_policy_explain(runtime: McpRuntime, args: dict[str, Any]) -> dict[str,
     return _tool_result(_explanation_payload(explanation))
 
 
+# Explicit tier order (simple → complex) for the policy_list cells block; do not
+# iterate VALID_CELLS (a frozenset has no stable order).
+_CELL_TIER_ORDER = ("chill", "coached", "structured", "protected")
+
+
+def _tool_policy_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    registry = _registry(runtime)
+    cells = []
+    for cell in _CELL_TIER_ORDER:
+        # Same source explain_policy uses for the per-cell fields, fed the SAME
+        # raw runtime gates _tool_policy_explain passes — so policy_list and
+        # policy_explain can never disagree, and the complex tier honestly
+        # reports enabled:false without LEGIS_HMAC_KEY (no false-green).
+        explanation = explain_cell(
+            cell,
+            engine=runtime.engine,
+            protected_gate=runtime.protected_gate,
+            signoff_gate=runtime.signoff_gate,
+        )
+        cells.append(
+            {
+                "cell": explanation.cell,
+                "enabled": explanation.enabled,
+                "judge_inline": explanation.judge_inline,
+                "self_clearable": explanation.self_clearable,
+                "human_in_loop": explanation.human_in_loop,
+            }
+        )
+    return _tool_result(
+        {
+            "default_cell": registry.default_cell,
+            "rules": [
+                {"pattern": rule.pattern, "cell": rule.cell}
+                for rule in registry.rules
+            ],
+            "cells": cells,
+        }
+    )
+
+
 def _tool_override_submit(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     policy = _require(args, "policy")
     entity = _require(args, "entity")
@@ -1104,6 +1179,7 @@ def _tool_override_rate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[s
 
 _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any]]] = {
     "policy_explain": _tool_policy_explain,
+    "policy_list": _tool_policy_list,
     "override_submit": _tool_override_submit,
     "signoff_status_get": _tool_signoff_status_get,
     "policy_evaluate": _tool_policy_evaluate,

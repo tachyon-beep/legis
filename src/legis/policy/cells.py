@@ -30,14 +30,29 @@ class PolicyCellRegistry:
         self.default_cell = _validate_cell(default_cell, "default_cell")
         self._rules = tuple(_validate_rule(i, rule) for i, rule in enumerate(rules))
 
-    def cell_for(self, policy: str) -> str:
+    @property
+    def rules(self) -> tuple[PolicyCellRule, ...]:
+        """Read-only view of the configured rules, in declared order."""
+        return self._rules
+
+    def rule_for(self, policy: str) -> PolicyCellRule | None:
+        """Return the rule that governs ``policy``, or ``None`` on fall-through.
+
+        Precedence matches ``cell_for``: an exact (non-glob) pattern wins over a
+        glob. ``None`` means no rule matched and the policy is routed by
+        ``default_cell``.
+        """
         for rule in self._rules:
             if not _has_glob(rule.pattern) and rule.pattern == policy:
-                return rule.cell
+                return rule
         for rule in self._rules:
             if _has_glob(rule.pattern) and fnmatch.fnmatchcase(policy, rule.pattern):
-                return rule.cell
-        return self.default_cell
+                return rule
+        return None
+
+    def cell_for(self, policy: str) -> str:
+        rule = self.rule_for(policy)
+        return rule.cell if rule is not None else self.default_cell
 
 
 def default_policy_cells() -> PolicyCellRegistry:

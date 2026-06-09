@@ -168,6 +168,7 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
 
     assert set(by_name) == {
         "policy_explain",
+        "policy_list",
         "override_submit",
         "signoff_status_get",
         "policy_evaluate",
@@ -293,7 +294,144 @@ def test_policy_explain_returns_service_explanation_payload(tmp_path):
         "enabled": True,
         "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
+        "matched_rule": "human.*",
     }
+
+
+def test_policy_explain_reports_null_matched_rule_for_unconfigured_policy(tmp_path):
+    # LEG-1(c): an unconfigured policy name is routed by default_cell and reports
+    # matched_rule:null — distinguishing "real-but-disabled" from "hallucinated".
+    runtime, _store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="chill",
+        rules=(PolicyCellRule(pattern="human.*", cell="structured"),),
+    )
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "policy_explain",
+                    "arguments": {"policy": "no.such.policy", "entity": "src/x.py:f"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["structuredContent"]["cell"] == "chill"
+    assert result["structuredContent"]["matched_rule"] is None
+
+
+def _policy_list(runtime):
+    return _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "policy_list", "arguments": {}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+
+def test_policy_list_reports_routing_table_and_cells(tmp_path):
+    # LEG-1(b): default_cell + rules + per-cell metadata in tier order.
+    runtime, _store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="structured",
+        rules=(
+            PolicyCellRule(pattern="secure.source", cell="protected"),
+            PolicyCellRule(pattern="review.*", cell="coached"),
+        ),
+    )
+
+    payload = _policy_list(runtime)["structuredContent"]
+
+    assert payload["default_cell"] == "structured"
+    assert payload["rules"] == [
+        {"pattern": "secure.source", "cell": "protected"},
+        {"pattern": "review.*", "cell": "coached"},
+    ]
+    assert [c["cell"] for c in payload["cells"]] == [
+        "chill",
+        "coached",
+        "structured",
+        "protected",
+    ]
+
+
+def test_policy_list_keyless_runtime_reports_complex_tier_disabled(tmp_path):
+    # Cardinal governance/false-green guard: without LEGIS_HMAC_KEY the complex
+    # tier (structured/protected) is NOT wired, so policy_list must report
+    # enabled:false for those cells — never enabled:true to look complete.
+    runtime, _store = _runtime(tmp_path)  # no signoff_gate / protected_gate
+    assert runtime.signoff_gate is None
+    assert runtime.protected_gate is None
+
+    payload = _policy_list(runtime)["structuredContent"]
+    by_cell = {c["cell"]: c for c in payload["cells"]}
+
+    assert by_cell["structured"]["enabled"] is False
+    assert by_cell["protected"]["enabled"] is False
+
+
+def test_policy_list_complex_tier_enabled_when_gates_wired(tmp_path):
+    runtime, store = _runtime(tmp_path)
+    runtime.signoff_gate = SignoffGate(
+        store, FixedClock("2026-06-02T12:00:00+00:00")
+    )
+    runtime.protected_gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        _ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@protected", "ok")),
+        b"secret",
+    )
+
+    payload = _policy_list(runtime)["structuredContent"]
+    by_cell = {c["cell"]: c for c in payload["cells"]}
+
+    assert by_cell["structured"]["enabled"] is True
+    assert by_cell["protected"]["enabled"] is True
+
+
+def test_policy_list_and_policy_explain_never_disagree(tmp_path):
+    # Locks the cardinal invariant: per-cell fields in policy_list match what
+    # policy_explain reports for a policy routed to that cell (same source).
+    runtime, _store = _runtime(tmp_path)
+    runtime.cell_registry = PolicyCellRegistry(
+        default_cell="chill",
+        rules=(PolicyCellRule(pattern="review.*", cell="coached"),),
+    )
+
+    list_by_cell = {
+        c["cell"]: c for c in _policy_list(runtime)["structuredContent"]["cells"]
+    }
+
+    explain = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "policy_explain",
+                    "arguments": {"policy": "review.rationale", "entity": "src/x.py:f"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]["structuredContent"]
+
+    assert explain["cell"] == "coached"
+    coached = list_by_cell["coached"]
+    for field in ("enabled", "judge_inline", "self_clearable", "human_in_loop"):
+        assert coached[field] == explain[field]
 
 
 def test_override_submit_chill_records_launch_agent_and_returns_accepted_self(tmp_path):
@@ -980,6 +1118,39 @@ def test_scan_route_rejects_request_routing_when_server_owned(tmp_path, monkeypa
     assert store.read_all() == []
 
 
+def test_scan_route_server_owned_error_names_supplied_cell(tmp_path, monkeypatch):
+    # LEG-3(c): the SERVER_OWNED rejection must name the supplied request-side
+    # "cell" (the cell trap), not just say "server-owned".
+    monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
+    runtime, store = _runtime(tmp_path)
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "scan_route",
+                    "arguments": {"scan": _active_scan(), "cell": "surface_override"},
+                },
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "INVALID_CELL_SPEC"
+    message = result["structuredContent"]["message"]
+    assert "server-owned" in message
+    # Pin the echo CLAUSE, not the bare token: "cell" also appears in the static
+    # prose "pins the cell", so `"cell" in message` would still pass on a generic
+    # message with the supplied-args echo stripped. This phrase comes only from
+    # the supplied_request_args echo.
+    assert "arg(s) cell were rejected" in message
+    assert store.read_all() == []
+
+
 def test_scan_route_defaults_to_server_owned_routing(tmp_path, monkeypatch):
     monkeypatch.delenv("LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING", raising=False)
     runtime, store = _runtime(tmp_path)
@@ -1611,6 +1782,32 @@ def test_tool_registries_are_in_sync():
 
     defined = {t["name"] for t in tool_definitions()}
     assert defined == set(_TOOL_HANDLERS) == set(_AGENT_TOOLS)
+
+
+def test_every_emitted_error_code_yields_a_nonempty_next_action():
+    # LEG-2(b): _tool_error must emit a non-empty next_action string for every
+    # error_code legis actually emits — locks the recovery hints against drift.
+    # The code set is the runtime source of truth (_recovery_for + the default
+    # fall-through codes from _service_error); update this list when codes change.
+    from legis.mcp import _tool_error
+
+    emitted_codes = (
+        # codes in _recovery_for's explicit map
+        "INVALID_ARGUMENT",
+        "INVALID_CELL_SPEC",
+        "CELL_NOT_ENABLED",
+        "NO_SUCH_REQUEST",
+        "NOT_FOUND",
+        "UNKNOWN_TOOL",
+        "AUDIT_INTEGRITY_FAILURE",
+        "GIT_ERROR",
+        # codes that hit the default next_action (still must be non-empty)
+        "SERVICE_ERROR",
+        "INTERNAL_ERROR",
+    )
+    for code in emitted_codes:
+        next_action = _tool_error(code, "msg")["structuredContent"]["next_action"]
+        assert isinstance(next_action, str) and next_action, code
 
 
 def test_c8_no_agent_reachable_enablement_or_signing_surface():

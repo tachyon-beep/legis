@@ -84,21 +84,40 @@ def resolve_scan_routing(
             "server Wardline routing is misconfigured",
         )
     server_routing = server_cell is not None or server_cell_by_severity is not None
-    request_routing = (
-        request_cell is not None
-        or request_severity_map is not None
-        or request_fail_on is not None
-    )
+    # Name the request-side routing args the caller actually supplied so the
+    # rejection points at the concrete offending knob (the "cell trap"), not a
+    # generic "routing is server-owned". Order is the schema order.
+    supplied_request_args = [
+        name
+        for name, value in (
+            ("cell", request_cell),
+            ("severity_map", request_severity_map),
+            ("fail_on", request_fail_on),
+        )
+        if value is not None
+    ]
+    request_routing = bool(supplied_request_args)
     if server_routing:
         if request_routing:
             raise WardlineRoutingError(
-                WardlineRoutingError.SERVER_OWNED, "Wardline routing is server-owned"
+                WardlineRoutingError.SERVER_OWNED,
+                "Wardline routing is server-owned; the server already pins the "
+                "cell, so request-side routing arg(s) "
+                f"{', '.join(supplied_request_args)} were rejected. (Request-side "
+                "routing requires the LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING opt-in.)",
             )
     else:
         if not allow_request_routing:
+            supplied_note = (
+                " supplied request-side arg(s) "
+                f"{', '.join(supplied_request_args)} were rejected;"
+                if supplied_request_args
+                else ""
+            )
             raise WardlineRoutingError(
                 WardlineRoutingError.SERVER_OWNED,
-                "Wardline routing is server-owned; configure LEGIS_WARDLINE_CELL "
+                "Wardline routing is server-owned;"
+                f"{supplied_note} configure LEGIS_WARDLINE_CELL "
                 "or LEGIS_WARDLINE_CELL_BY_SEVERITY",
             )
         if request_fail_on is not None:
