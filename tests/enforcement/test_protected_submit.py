@@ -233,6 +233,25 @@ def test_validator_veto_downgrades_accepted_on_protected(tmp_path):
     assert result.verdict is Verdict.BLOCKED
 
 
+def test_raising_validator_is_treated_as_veto_not_500(tmp_path):
+    # A validator is operator-supplied and may choke on an unexpected record shape
+    # (KeyError/AttributeError). In a fail-CLOSED gate, a raising validator must be
+    # treated as a veto -> BLOCKED, never allowed to propagate as an unhandled 500
+    # (a fail-open-shaped error). The judge ACCEPTED here would clear only with a
+    # confirming validator; a raising one does not confirm.
+    def boom(record):
+        raise KeyError("validator did not expect this record shape")
+
+    g, store = _protected_gate(
+        tmp_path,
+        JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok"),
+        validator=boom,
+    )
+    result = submit(g)  # must not raise
+    assert result.accepted is False
+    assert result.verdict is Verdict.BLOCKED
+
+
 def test_undeclared_protected_cell_policy_is_also_fail_closed(tmp_path):
     # JUDGE-3 (was test_non_protected_policy_accepted_still_clears): the protected
     # cell is now fail-closed UNCONDITIONALLY. A policy routed here but absent from

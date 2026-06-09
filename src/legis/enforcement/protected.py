@@ -336,7 +336,25 @@ class ProtectedGate:
         # accepted) must not clear the gate either. OVERRIDDEN_BY_OPERATOR is
         # produced only by operator_override(), which bypasses this method; the
         # judge parser additionally rejects it at the source.
-        validator_confirms = self._validator is not None and self._validator(proposed)
+        # The validator only changes the outcome on the ACCEPTED path — every other
+        # verdict is downgraded to BLOCKED regardless — so it runs ONLY there. This
+        # also keeps an operator-supplied validator off submits it was never written
+        # to handle (e.g. ones the judge already BLOCKED). It is fail-CLOSED: if the
+        # validator raises on an unexpected record shape, that exception is a veto
+        # (-> BLOCKED), never an unhandled error that would surface as a
+        # fail-open-shaped 500 in a gate whose premise is fail-closed.
+        validator_confirms = False
+        if verdict is Verdict.ACCEPTED and self._validator is not None:
+            try:
+                validator_confirms = bool(self._validator(proposed))
+            except Exception:
+                logger.warning(
+                    "protected-cell validator raised for policy %r; treating as a "
+                    "veto (fail-closed -> BLOCKED).",
+                    policy,
+                    exc_info=True,
+                )
+                validator_confirms = False
         if not (verdict is Verdict.ACCEPTED and validator_confirms):
             if verdict is not Verdict.BLOCKED:
                 # Record the model's advisory opinion for audit, then block.

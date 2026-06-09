@@ -108,6 +108,24 @@ def test_render_text_tags_fixed():
     assert "Run `legis doctor --fix` to repair auto-fixable items." not in out
 
 
+def test_render_text_surfaces_realistic_fixed_check():
+    # A real `--fix` run constructs each repaired check with status "ok" (e.g.
+    # DoctorCheck(cid, "ok", fixed=True, repairable=True)), NOT "warn". The
+    # problems-only filter (status != "ok") therefore dropped every fixed check,
+    # the [fixed] branch was dead, and an all-repaired run rendered the bare
+    # "legis doctor: ok" with no record of what was fixed. render_text must surface
+    # fixed checks even when their post-repair status is "ok".
+    out = render_text(
+        [
+            DoctorCheck("a", "ok"),
+            DoctorCheck("install.x", "ok", message="re-registered", fixed=True, repairable=True),
+        ]
+    )
+    assert "install.x:" in out and "[fixed]" in out  # the repaired item is listed
+    assert "fixed 1 item(s)" in out  # and the banner records that a repair happened
+    assert out != "legis doctor: ok"  # not the silent all-ok banner
+
+
 def test_render_text_both_footers_when_mixed():
     out = render_text(
         [
@@ -739,13 +757,20 @@ def test_filigree_scope_warns_on_unscoped_federation_write(tmp_path):
     assert "Operator action" in c.message
 
 
-def test_filigree_scope_suppressed_when_filigree_not_installed(tmp_path):
-    # An unscoped binding but NO filigree markers => the warning is suppressed
-    # (nothing can fail-close it). Must NOT be a real unscoped warning.
-    _write_mcp_with_filigree_url(tmp_path, "http://127.0.0.1:8749/api/weft/scan-results")
+def test_filigree_scope_warns_on_unscoped_remote_binding_without_local_install(tmp_path):
+    # The federation-consumer case: a pure scan-results emitter with NO local
+    # filigree marker, pinning an unscoped --filigree-url at a REMOTE server-mode
+    # daemon. That remote daemon fail-closes the unscoped federation write (N1,
+    # HTTP 400) so scans silently non-emit — the harm is driven by the binding URL
+    # targeting a server-mode daemon, NOT by whether filigree is installed locally.
+    # The old local-install gate reported all-clear here (the false-green the
+    # governance forbids); the binding URL itself is the operative signal, so this
+    # MUST warn even with no local install marker present.
+    _write_mcp_with_filigree_url(tmp_path, "https://central-host/api/weft/scan-results")
     c = check_filigree_binding_scope(tmp_path)
-    assert c.status == "ok"
-    assert c.message == "filigree not installed in this project"
+    assert c.status == "warn"
+    assert "central-host/api/weft/scan-results" in c.message
+    assert "/api/p/<project>" in c.message  # operator action named
 
 
 def test_filigree_scope_conf_only_is_installed_and_warns(tmp_path):

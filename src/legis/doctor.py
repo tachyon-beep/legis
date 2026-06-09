@@ -61,19 +61,29 @@ def render_json(checks: list[DoctorCheck]) -> str:
 def render_text(checks: list[DoctorCheck]) -> str:
     has_error = any(c.status == "error" for c in checks)
     has_warn = any(c.status == "warn" for c in checks)
-    problems = [c for c in checks if c.status != "ok"]
+    fixed = [c for c in checks if c.fixed]
+    # Render anything that is not a clean pass: problems AND repaired items. A
+    # repaired check carries status "ok" + fixed=True, so a problems-only filter
+    # (status != "ok") would drop it — leaving the operator no record of what
+    # `--fix` repaired and the [fixed] tag below unreachable.
+    rendered = [c for c in checks if c.status != "ok" or c.fixed]
     if not has_error:
-        # warn-only or all-ok: the project is healthy; surface any warns below
+        # warn-only / all-ok / repaired: the project is healthy; surface any warns
+        # and repairs below.
+        notes = []
         if has_warn:
-            warn_count = sum(1 for c in checks if c.status == "warn")
-            lines = [f"legis doctor: ok ({warn_count} warning(s))"]
-        else:
-            return "legis doctor: ok"
+            notes.append(f"{sum(1 for c in checks if c.status == 'warn')} warning(s)")
+        if fixed:
+            notes.append(f"fixed {len(fixed)} item(s)")
+        header = "legis doctor: ok" + (f" ({', '.join(notes)})" if notes else "")
+        if not rendered:
+            return header
+        lines = [header]
     else:
         lines = ["legis doctor:"]
     has_auto_fixable = False
     has_operator = False
-    for c in problems:
+    for c in rendered:
         if c.fixed:
             tag = "[fixed]"
         elif c.repairable:
@@ -533,50 +543,25 @@ def _is_unscoped_federation_write(url: str) -> bool:
     return path.startswith("/api/weft/") or norm in _FEDERATION_WRITE_PATHS
 
 
-def _filigree_installed(root: Path) -> bool:
-    """True iff filigree is set up in *root*, by FILE-EXISTENCE ONLY (no import of
-    filigree, no JSON parse — staying decoupled from filigree's moved schema).
-
-    Mirrors filigree's authoritative install predicate ``find_filigree_anchor``
-    (filigree core.py:1046-1064), which treats a project as installed if ANY ONE
-    of three markers is present — never AND:
-
-      - ``.filigree.conf`` is a file (the v2.0 root anchor; resolves on conf alone,
-        no ``config.json`` required), OR
-      - ``.weft/filigree/`` is a dir (federation-layout, confless install), OR
-      - ``.filigree/`` is a dir (legacy, confless install).
-
-    The OR is load-bearing and errs toward "installed" (warning shown): an
-    AND-with-mandatory-conf gate would return "not installed" for confless /
-    legacy / conf-only installs and SILENTLY DROP a real unscoped-binding warning
-    in a project where filigree genuinely IS installed — the false-green
-    governance forbids. The store/legacy checks are ``.is_dir()`` on the
-    directories (matching filigree exactly), NOT a ``config.json`` ``.is_file()``:
-    ``config.json`` presence is filigree's narrower worktree-local check, not its
-    install predicate."""
-    return (
-        (root / ".filigree.conf").is_file()
-        or (root / ".weft" / "filigree").is_dir()
-        or (root / ".filigree").is_dir()
-    )
-
-
 def check_filigree_binding_scope(root: Path) -> DoctorCheck:
     """Report-only: is the .mcp.json filigree scan-results binding project-scoped?
 
-    Gated on filigree actually being installed in *root* (``_filigree_installed``):
-    an unscoped binding only fail-closes when a filigree server-mode daemon is in
-    play, so the warning is suppressed when filigree isn't set up here.
+    Triggered by the PRESENCE of an unscoped filigree scan-results binding URL, not
+    by a local filigree install. The harm — a server-mode filigree daemon
+    fail-closing an unscoped federation write (``/api/weft/…`` etc.) with a 400 (N1)
+    so the scan silently never lands — is driven by the binding URL targeting a
+    server-mode daemon, which may be REMOTE. A local-install gate false-greens the
+    federation-consumer case (a pure scan-results emitter with no local marker that
+    pins an unscoped remote ``--filigree-url``): doctor stays green while the remote
+    daemon fail-closes and scans silently non-emit — the false-green the governance
+    forbids. So the unscoped binding URL itself is the signal: if one is present,
+    warn regardless of whether filigree is installed in *root*.
 
-    When installed, an unscoped federation write (``/api/weft/…`` etc.) is
-    fail-closed with a 400 by a filigree server-mode daemon (N1), so the scan
-    silently never lands. The binding is operator-owned: this ``--filigree-url`` is
-    operator-pinned in wardline's ``.mcp.json`` entry — legis never writes it — so
-    the check stays report-only (``repairable=False``) and names the operator action
-    rather than auto-fixing."""
+    The binding is operator-owned: this ``--filigree-url`` is operator-pinned in
+    wardline's ``.mcp.json`` entry — legis never writes it — so the check stays
+    report-only (``repairable=False``) and names the operator action rather than
+    auto-fixing."""
     cid = "install.filigree_scope"
-    if not _filigree_installed(root):
-        return DoctorCheck(cid, "ok", message="filigree not installed in this project")
     urls = _filigree_binding_urls(root)
     if not urls:
         return DoctorCheck(cid, "ok", message="no filigree scan-results binding in .mcp.json")
