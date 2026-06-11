@@ -935,7 +935,7 @@ def test_register_mcp_json_keeps_usable_command(tmp_path, monkeypatch):
     # state, not drift — the entry must be left alone.
     from legis.install import register_mcp_json
 
-    exe = _touch_exe(tmp_path / "tools" / "legis")
+    exe = _touch_exe(tmp_path.parent / f"{tmp_path.name}-external" / "legis")
     _write_legis_mcp_entry(tmp_path, exe)
     monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/elsewhere/legis"])
     ok, msg = register_mcp_json(tmp_path)
@@ -957,10 +957,32 @@ def test_register_mcp_json_refreshes_dead_command_but_keeps_env(tmp_path, monkey
     assert entry["env"] == {"LEGIS_WARDLINE_CELL": "surface_override"}
 
 
-def test_register_mcp_json_explicit_agent_id_updates_usable_entry_in_place(tmp_path, monkeypatch):
+def test_register_mcp_json_drops_unsafe_or_secret_env(tmp_path, monkeypatch):
     from legis.install import register_mcp_json
 
     exe = _touch_exe(tmp_path / "tools" / "legis")
+    _write_legis_mcp_entry(
+        tmp_path,
+        exe,
+        env={
+            "LEGIS_WARDLINE_CELL": "surface_override",
+            "LEGIS_UNSAFE_DEV_AUTH": "1",
+            "LEGIS_HMAC_KEY": "secret",
+            "OPENROUTER_API_KEY": "secret",
+        },
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, _ = register_mcp_json(tmp_path)
+    assert ok
+    entry = _read_legis_mcp_entry(tmp_path)
+    assert entry["command"] == "/opt/bin/legis"
+    assert entry["env"] == {"LEGIS_WARDLINE_CELL": "surface_override"}
+
+
+def test_register_mcp_json_explicit_agent_id_updates_usable_entry_in_place(tmp_path, monkeypatch):
+    from legis.install import register_mcp_json
+
+    exe = _touch_exe(tmp_path.parent / f"{tmp_path.name}-external" / "legis")
     _write_legis_mcp_entry(tmp_path, exe, env={"K": "V"}, agent_id="claude-code")
     monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/elsewhere/legis"])
     ok, _ = register_mcp_json(tmp_path, "new-bot")

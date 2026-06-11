@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from legis.cli import main as cli_main
 from legis.doctor import (
@@ -28,6 +29,10 @@ from legis.doctor import (
 )
 from legis.install import mcp_entry_is_current, register_mcp_json as _register_mcp_json
 from legis import install as legis_install
+
+
+def _write_mcp_entry(tmp_path, entry):
+    (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {"legis": entry}}))
 
 
 def test_doctorcheck_to_dict_omits_empty_message():
@@ -326,6 +331,53 @@ def test_mcp_entry_is_current_args_without_mcp(tmp_path):
     entry = {"mcpServers": {"legis": {"command": "legis", "args": ["serve"]}}}
     (tmp_path / ".mcp.json").write_text(json.dumps(entry))
     assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_rejects_non_stdio_type(tmp_path):
+    _write_mcp_entry(
+        tmp_path,
+        {"type": "sse", "command": sys.executable, "args": ["-P", "-m", "legis", "mcp", "--agent-id", "a"]},
+    )
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_requires_mcp_subcommand_and_agent_id(tmp_path):
+    _write_mcp_entry(
+        tmp_path,
+        {"type": "stdio", "command": sys.executable, "args": ["mcp"]},
+    )
+    assert mcp_entry_is_current(tmp_path) is False
+
+    _write_mcp_entry(
+        tmp_path,
+        {"type": "stdio", "command": sys.executable, "args": ["serve", "mcp", "--agent-id", "a"]},
+    )
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_rejects_repo_local_command(tmp_path):
+    local = tmp_path / "legis"
+    local.write_text("#!/bin/sh\n")
+    local.chmod(0o755)
+    _write_mcp_entry(
+        tmp_path,
+        {"type": "stdio", "command": str(local), "args": ["mcp", "--agent-id", "a"]},
+    )
+    assert mcp_entry_is_current(tmp_path) is False
+
+
+def test_mcp_entry_is_current_rejects_unsafe_or_secret_env(tmp_path):
+    for env in (
+        {"LEGIS_UNSAFE_DEV_AUTH": "1"},
+        {"LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING": "1"},
+        {"LEGIS_HMAC_KEY": "secret"},
+        {"OPENROUTER_API_KEY": "secret"},
+    ):
+        _write_mcp_entry(
+            tmp_path,
+            {"type": "stdio", "command": sys.executable, "args": ["mcp", "--agent-id", "a"], "env": env},
+        )
+        assert mcp_entry_is_current(tmp_path) is False
 
 
 def test_mcp_entry_is_current_empty_command(tmp_path):

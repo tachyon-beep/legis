@@ -830,14 +830,14 @@ def mcp_entry_is_current(project_root: Path) -> bool:
     entry = servers.get("legis") if isinstance(servers, dict) else None
     if not isinstance(entry, dict):
         return False
-    args = entry.get("args")
-    if not (isinstance(args, list) and "mcp" in args):
+    if entry.get("type") != "stdio":
         return False
-    command = entry.get("command")
-    if not isinstance(command, str) or not command:
+    if not _mcp_args_are_current(entry.get("args")):
         return False
-    # command resolves: absolute/relative existing file OR found on PATH
-    return bool(shutil.which(command)) or Path(command).is_file()
+    if not _mcp_command_resolves_safely(entry.get("command"), project_root):
+        return False
+    env = _safe_mcp_env(entry.get("env"))
+    return env is not None and env == entry.get("env", {})
 
 
 def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
@@ -873,6 +873,74 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_AGENT_ID = "claude-code"
+
+_UNSAFE_MCP_ENV_KEYS = frozenset({
+    "LEGIS_UNSAFE_DEV_AUTH",
+    "LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING",
+    "LEGIS_ALLOW_INSECURE_REMOTE_HTTP",
+    "LEGIS_ALLOW_UNSCOPED_API_TOKENS",
+    "LEGIS_ALLOW_MISSING_GOVERNANCE_DB",
+    "LEGIS_WARDLINE_ALLOW_DIRTY",
+})
+
+_SECRET_MCP_ENV_KEYS = frozenset({
+    "LEGIS_API_SECRET",
+    "LEGIS_API_TOKEN_ACTORS",
+    "LEGIS_HMAC_KEY",
+    "LEGIS_WARDLINE_ARTIFACT_KEY",
+    "LEGIS_LOOMWEAVE_HMAC_KEY",
+    "LEGIS_FILIGREE_HMAC_KEY",
+    "OPENROUTER_API_KEY",
+})
+
+_REJECTED_MCP_ENV_KEYS = _UNSAFE_MCP_ENV_KEYS | _SECRET_MCP_ENV_KEYS
+
+
+def _mcp_args_are_current(args: Any) -> bool:
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        return False
+    if args[:1] == ["mcp"]:
+        tail = args
+    elif args[:2] == ["-m", "legis"]:
+        tail = args[2:]
+    elif args[:3] == ["-P", "-m", "legis"]:
+        tail = args[3:]
+    else:
+        return False
+    if tail[:1] != ["mcp"]:
+        return False
+    try:
+        agent_idx = tail.index("--agent-id")
+    except ValueError:
+        return False
+    return agent_idx + 1 < len(tail) and bool(tail[agent_idx + 1])
+
+
+def _mcp_command_resolves_safely(command: Any, project_root: Path) -> bool:
+    if not isinstance(command, str) or not command:
+        return False
+    if _path_head_is_project_local(command, project_root):
+        return False
+    resolved = shutil.which(command)
+    if resolved is not None:
+        return not _path_head_is_project_local(resolved, project_root)
+    path = Path(command)
+    return path.is_absolute() and path.is_file()
+
+
+def _safe_mcp_env(env: Any) -> dict[str, str] | None:
+    if env is None:
+        return {}
+    if not isinstance(env, dict):
+        return None
+    safe: dict[str, str] = {}
+    for key, value in env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            return None
+        if key in _REJECTED_MCP_ENV_KEYS:
+            continue
+        safe[key] = value
+    return safe
 
 
 def _legis_mcp_entry(agent_id: str = _DEFAULT_AGENT_ID) -> dict[str, Any]:
@@ -944,14 +1012,11 @@ def register_mcp_json(
 
     usable = False
     if isinstance(existing, dict):
-        args = existing.get("args")
-        command = existing.get("command")
         usable = (
-            isinstance(args, list)
-            and "mcp" in args
-            and isinstance(command, str)
-            and bool(command)
-            and bool(shutil.which(command) or Path(command).is_file())
+            existing.get("type") == "stdio"
+            and _mcp_args_are_current(existing.get("args"))
+            and _mcp_command_resolves_safely(existing.get("command"), project_root)
+            and _safe_mcp_env(existing.get("env")) == existing.get("env", {})
         )
 
     if usable:
@@ -973,8 +1038,10 @@ def register_mcp_json(
         return True, f"Updated legis agent-id to {keep_agent} in .mcp.json"
 
     desired = _legis_mcp_entry(keep_agent)
-    if isinstance(existing, dict) and isinstance(existing.get("env"), dict):
-        desired["env"] = existing["env"]  # operator-owned; never clobber
+    if isinstance(existing, dict):
+        safe_env = _safe_mcp_env(existing.get("env"))
+        if safe_env is not None:
+            desired["env"] = safe_env  # preserve safe operator-owned env
     if existing == desired:
         return True, "legis already registered in .mcp.json"
     servers["legis"] = desired
