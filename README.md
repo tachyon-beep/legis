@@ -6,7 +6,9 @@ Legis is the fourth Weft product: the git/CI and governance side of the suite's 
 
 ## Status
 
-Legis is at **`1.0.0`**. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--fix]` provides an operator health view and safe repair for the install + config layer, tagging each problem `[auto-fixable]` or `[operator]` so it is clear what `--fix` will and will not touch, including report-only checks that name the enablement path when the governance surface is unwired (policy cells, Wardline routing) — it reports, it never auto-enables or touches a signing key. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the release notes.
+Legis is at **`1.0.0`** — the gold release. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--fix]` provides an operator health view and safe repair for the install + config layer, tagging each problem `[auto-fixable]` or `[operator]` so it is clear what `--fix` will and will not touch, including report-only checks that name the enablement path when the governance surface is unwired (policy cells, Wardline routing) — it reports, it never auto-enables or touches a signing key.
+
+Gold was earned, not declared: 1.0.0 was first cut on 2026-06-09, then re-opened when a P0 governance-honesty false-green (G1 — an absent Wardline `findings` key routing zero defects under a green status) was caught *after* the cut. The fix, the cross-member conformance vector that makes it real, and a small batch of follow-through hardening shipped before final. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the full release notes.
 
 ## The Weft suite
 
@@ -168,17 +170,17 @@ See `docs/federation/sei-conformance.md` for Legis's specific conformance obliga
 
 Legis is complete when:
 
-- [ ] Legis ships as opt-in: invisible to a solo project, complete for a regulated one — all four 2×2 cells work end-to-end
-- [ ] Governance attestations key on SEI and survive rename/move
-- [ ] `lineage(sei)` is consumed as the audit spine for governance records
-- [ ] Chill cell (simple, judge off): surface+override is live; agent overrides produce attributable audit events; human reviews async
-- [ ] Coached cell (simple, judge on): LLM wall on overrides behind a single config flag (ACCEPTED / BLOCKED); no HMAC keys, no decay sweep; agent must correct or convince
-- [ ] Protected cell (complex, judge on): judge gate adds OVERRIDDEN_BY_OPERATOR; verdicts HMAC-signed and SEI-keyed; decay sweep and override-rate gate wired into CI
-- [ ] Structured cell (complex, judge off): human sign-off gate available for high-stakes policies, no model in the critical path
-- [ ] Wardline + Legis: Wardline's `--fail-on` / exit codes governed by Legis's policy layer; trust-vocabulary converged to one grammar across the suite
-- [ ] Legis governs trust while Wardline analyses it — one judge, not two
-- [ ] Filigree + Legis: verification sign-offs and governed issue lifecycle work end-to-end
-- [ ] Git-rename / history signal available for Loomweave's SEI matcher (if/when the git interface ships)
+- [x] Legis ships as opt-in: invisible to a solo project, complete for a regulated one — all four 2×2 cells work end-to-end
+- [x] Governance attestations key on SEI and survive rename/move
+- [x] `lineage(sei)` is consumed as the audit spine for governance records
+- [x] Chill cell (simple, judge off): surface+override is live; agent overrides produce attributable audit events; human reviews async
+- [x] Coached cell (simple, judge on): LLM wall on overrides behind a single config flag (ACCEPTED / BLOCKED); no HMAC keys, no decay sweep; agent must correct or convince
+- [x] Protected cell (complex, judge on): judge gate adds OVERRIDDEN_BY_OPERATOR; verdicts HMAC-signed and SEI-keyed; decay sweep and override-rate gate wired into CI
+- [x] Structured cell (complex, judge off): human sign-off gate available for high-stakes policies, no model in the critical path
+- [x] Wardline + Legis: Wardline's `--fail-on` / exit codes governed by Legis's policy layer; trust-vocabulary converged to one grammar across the suite
+- [x] Legis governs trust while Wardline analyses it — one judge, not two
+- [x] Filigree + Legis: verification sign-offs and governed issue lifecycle work end-to-end
+- [ ] Git-rename / history signal available for Loomweave's SEI matcher — the git interface and rename-feed are **built and contract-locked**; operative once Loomweave drives a committed rev-range (the one cross-tool gate that remains)
 
 ## Repository layout
 

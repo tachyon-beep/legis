@@ -52,14 +52,14 @@ preloaded fonts resolve under a normal origin.
   four cells are simply always shown — nothing is hidden behind the toggle.
 - **Version string — dated snapshot, not a bare version.** The page is shown at
   the **`1.0.0`** release line, which is Legis's own authoritative
-  self-description (`README.md`: "Legis is at 1.0.0") and matches the hub's
-  member card. It is stamped **"snapshot 2026-06-10 — see repo/CHANGELOG for the
-  live state."** That qualifier is load-bearing: git HEAD is "release: cut
-  1.0.0rc5" (cut 2026-06-10, re-opening the rc for a fix), unpushed at the time
-  of writing — so the live build state is precisely what the date-stamp points
-  to. Mirrors how every federation doc dates its snapshots and how the hub README
-  documented its own 1.0.0-vs-rc choice. The page never asserts a bare,
-  unqualified version.
+  self-description (`README.md`: "Legis is at 1.0.0 — the gold release") and
+  matches the hub's member card. It is stamped **"snapshot 2026-06-11 — see
+  repo/CHANGELOG for the live state."** That qualifier is load-bearing: the gold
+  `1.0.0` was cut after a P0 honesty false-green (G1) re-opened the release on
+  2026-06-10, so the date-stamp points at the build state the CHANGELOG records
+  rather than asserting a frozen claim. Mirrors how every federation doc dates
+  its snapshots and how the hub README documented its own 1.0.0-vs-rc choice. The
+  page never asserts a bare, unqualified version.
 - **Honesty guardrails kept intact.** "Tamper-*evident*," never "tamper-proof" —
   with the README's exact framing that the HMAC layer is intra-suite
   tamper-evidence (self-asserted actor, same-process Python verification), not

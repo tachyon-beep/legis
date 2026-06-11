@@ -5,7 +5,86 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
-## [1.0.0] — 2026-06-09
+## [1.0.0] — 2026-06-11
+
+This is the gold release. It aggregates everything since the last published
+candidate (`1.0.0rc4`). 1.0.0 was first cut on 2026-06-09; a P0 governance-honesty
+false-green (G1) was found *after* that cut, so the release was re-opened as an
+internal `1.0.0rc5` to close it (and a small batch of post-cut hardening) before
+shipping final. The "federation cross-member hardening" and "post-first-cut code
+review" sections below record that work; rc5 itself was never published.
+
+### Security / honesty (federation cross-member hardening, 2026-06-10/11)
+
+A P0 false-green found after the first 1.0.0 cut, plus the incident follow-through
+that made the fix *real* rather than locally tested. Legis re-opened the release
+rather than ship final with a governance-honesty blocker open.
+
+- **G1 — an absent `findings` key is now a red, not a vacuous green.** The
+  Wardline→legis scan contract carries defects under the key `findings`, but
+  `active_defects` did `scan.get("findings", [])` — so a silent producer rename
+  (`findings` → `findings_list`), re-signed HMAC-clean, *verified* cleanly and read
+  as **zero** active defects: the entire defect flow breaking silently under a green
+  `verified` status. The HMAC does not defend against this — it proves authenticity,
+  not schema conformance. `active_defects()` now raises `WardlinePayloadError` when
+  the key is absent, distinguishing "key absent" (drift/tamper → red) from "key
+  present, empty list" (a genuinely clean scan → `[]`). The guard sits at
+  `active_defects()` — the single choke every posture (keyed *and* keyless) routes
+  through — not at `verify_wardline_artifact()`, which returns early in the keyless
+  posture before any field check. Verified closed by adversarial replay across both
+  postures.
+- **G1, made real — shared cross-member conformance vector.** The G1 fix initially
+  had only a local test, but root cause #2 of the incident was "hand-transcribed
+  contracts with no shared test". The producer (Wardline `core/legis.py`) and every
+  consumer (legis ingest) now load the *same* canonical wire-contract bytes
+  (`tests/contract/weft/vectors/wardline_scan_artifact.v1.json`); the byte-exact
+  `expected_signature` doubles as the canonical-JSON + HMAC drift detector. The
+  second hand-copied golden literal in `test_ingest.py` is single-sourced from the
+  vector.
+- **G1 twin (value axis) — an unknown `kind` token is rejected loudly.**
+  `active_defects` selected the gate population with a bare `kind == "defect"`, so a
+  defect whose kind token drifted out of Wardline's vocabulary (re-signed HMAC-clean)
+  fell through the skip and vanished under a green status — the same false-green
+  class on the value axis. `KNOWN_KINDS` / `DEFECT_KIND` are now carried verbatim
+  from Wardline `core/finding.py::Kind`; an unknown kind is rejected, known
+  non-defect kinds stay legitimately excluded.
+- **JUDGE-3 vocabulary hygiene — the judge-emittable and gate-clearing verdict sets
+  are single-sourced.** `Verdict.model_emittable()` / `Verdict.accepting()` are now
+  the sole source of truth for "an LLM judge may emit this" and "this verdict cleared
+  a gate"; `judge.py`, `lifecycle.py`, and `protected.py` consume them instead of
+  re-inlining the member tuples, so the JUDGE-3 guard (a model must never emit
+  `OVERRIDDEN_BY_OPERATOR`) and the accepting set cannot drift apart. `CELL_TIER_ORDER`
+  becomes the canonical ordered cell membership; `VALID_CELLS` and `policy_list`
+  derive from it, so a new cell can no longer be silently omitted from `policy_list`.
+- **G11 — verification posture stated plainly.** The `weft_signing` docstring now
+  names the transport-open reality: legis *emits* the `X-Weft-*` request HMAC and the
+  app-level `binding_signature`; the classic Filigree route stores them without
+  verifying. Integrity rests on the loopback transport and legis's own
+  `BindingLedger`, not on a sibling checking the signature. The headers are kept (a
+  shared, cheap, forward-compatible seam); verify-or-declare is Filigree's call.
+- **G12 — real-Filigree bind + closure-gate test scaffold.** A live-daemon
+  integration test (skipped unless `LEGIS_FILIGREE_TEST_URL` + `LEGIS_FILIGREE_TEST_ISSUE`
+  are set) asserts the bind *persists* (reads the association back — something the
+  `FakeFiligree` echo structurally cannot prove), all bound fields round-trip, the
+  closure-gate clears over real HTTP, and the keyless bind is accepted.
+
+### Fixed (post-first-cut code review, 2026-06-10)
+
+Three bugs from the 2026-06-10 review, closed in the re-opened candidate:
+
+- **doctor: `check_filigree_binding_scope` triggers on an unscoped binding URL, not a
+  local install.** The install-parity gate false-greened the federation-consumer case
+  (no local marker + an unscoped remote `--filigree-url`): a remote server-mode
+  daemon fail-closes the unscoped write (N1) while doctor read all-clear. Binding-
+  presence strictly subsumes the old gate; the dead `_filigree_installed` helper is
+  dropped. (Reverses the rc4-era install-parity check.)
+- **doctor: `render_text` reports repaired checks.** `--fix` now includes repaired
+  checks (status `ok` + `fixed=True`) in the rendered set with a "fixed N item(s)"
+  banner, so the text view reports what it repaired and the `[fixed]` tag is reachable.
+- **enforcement: a raising operator-supplied validator is a veto, not a fail-open.**
+  `ProtectedGate.submit` now gates the validator on the `ACCEPTED` path and wraps it
+  in `try/except` — a validator that raises is treated as a veto (→ `BLOCKED`) instead
+  of an unhandled 500, and no longer runs on an already-`BLOCKED` submit.
 
 ### Security / honesty (second pre-1.0 adversarial review, 2026-06-09)
 
