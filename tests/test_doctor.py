@@ -598,6 +598,41 @@ def test_audit_chain_intact_db_is_ok(tmp_path):
     assert check_audit_chain("store.governance_chain", url).status == "ok"
 
 
+def test_audit_chain_zero_byte_db_is_error_without_mutation(tmp_path):
+    db = tmp_path / "gov.db"
+    db.write_bytes(b"")
+    c = check_audit_chain("store.governance_chain", "sqlite:///" + str(db))
+    assert c.status == "error"
+    assert "audit_log" in (c.message or "")
+    assert db.read_bytes() == b""
+
+
+def test_audit_chain_missing_table_is_error_without_creating_schema(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "gov.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE unrelated(id INTEGER PRIMARY KEY)")
+    con.commit()
+    con.close()
+
+    c = check_audit_chain("store.governance_chain", "sqlite:///" + str(db))
+
+    assert c.status == "error"
+    assert "audit_log" in (c.message or "")
+    con = sqlite3.connect(db)
+    try:
+        tables = {
+            row[0]
+            for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        con.close()
+    assert tables == {"unrelated"}
+
+
 def test_hmac_key_warn_when_protected_set_without_key(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGIS_PROTECTED_POLICIES", "secrets.read")
     monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)

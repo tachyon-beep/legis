@@ -114,12 +114,19 @@ def _chain(prev_hash: str, c_hash: str) -> str:
 
 
 class AuditStore:
-    def __init__(self, url: str) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        initialize: bool = True,
+        apply_pragmas: bool = True,
+    ) -> None:
         # The federated store subtree (.weft/legis) is created lazily, here at
         # open time — SQLite makes the .db file but never its parent directory.
         from legis.config import ensure_sqlite_parent
 
-        ensure_sqlite_parent(url)
+        if initialize:
+            ensure_sqlite_parent(url)
         # NullPool: hold no connection between operations — an append-only
         # audit store wants no lingering locks and clean resource lifecycle.
         self._engine = create_engine(url, future=True, poolclass=NullPool)
@@ -130,10 +137,11 @@ class AuditStore:
         self._txn = threading.local()
 
         from sqlalchemy import event
-        @event.listens_for(self._engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            if "sqlite" in url:
-                _apply_sqlite_pragmas(dbapi_connection, url)
+        if apply_pragmas:
+            @event.listens_for(self._engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                if "sqlite" in url:
+                    _apply_sqlite_pragmas(dbapi_connection, url)
 
         self._md = MetaData()
         self._log = Table(
@@ -145,8 +153,9 @@ class AuditStore:
             Column("prev_hash", Text, nullable=False),
             Column("chain_hash", Text, nullable=False),
         )
-        self._md.create_all(self._engine)
-        self._install_append_only_triggers()
+        if initialize:
+            self._md.create_all(self._engine)
+            self._install_append_only_triggers()
 
     def _install_append_only_triggers(self) -> None:
         if self._engine.dialect.name == "sqlite":

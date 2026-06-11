@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -394,6 +395,32 @@ def _store_url(root: Path, db_name: str, env: str) -> str:
     return "sqlite:///" + (_store_dir_for(root) / db_name).as_posix()
 
 
+_AUDIT_LOG_COLUMNS = {"seq", "payload", "content_hash", "prev_hash", "chain_hash"}
+
+
+def _sqlite_audit_schema_error(db: Path) -> str | None:
+    """Return a report-only schema error for an existing SQLite audit DB."""
+    try:
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return f"cannot open audit DB read-only: {exc}"
+    try:
+        row = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_log'"
+        ).fetchone()
+        if row is None:
+            return "audit_log table missing (store may be truncated or erased)"
+        columns = {row[1] for row in con.execute("PRAGMA table_info(audit_log)").fetchall()}
+    except sqlite3.Error as exc:
+        return f"cannot inspect audit_log schema: {exc}"
+    finally:
+        con.close()
+    missing = sorted(_AUDIT_LOG_COLUMNS - columns)
+    if missing:
+        return "audit_log schema missing columns: " + ", ".join(missing)
+    return None
+
+
 def check_audit_chain(cid: str, url: str) -> DoctorCheck:
     """Report-only. Absent file store => ok (nothing to verify; must NOT create
     the DB). A tampered chain => error (cannot/must not be auto-repaired)."""
@@ -404,12 +431,16 @@ def check_audit_chain(cid: str, url: str) -> DoctorCheck:
     db = parsed.database
     if parsed.get_backend_name() != "sqlite" or not db or db == ":memory:":
         return DoctorCheck(cid, "ok", message="not a file store")
-    if not Path(db).exists():
+    db_path = Path(db)
+    if not db_path.exists():
         return DoctorCheck(cid, "ok", message="no store yet")
+    schema_error = _sqlite_audit_schema_error(db_path)
+    if schema_error is not None:
+        return DoctorCheck(cid, "error", message=schema_error)
     from legis.store.audit_store import AuditStore
 
     try:
-        intact = AuditStore(url).verify_integrity()
+        intact = AuditStore(url, initialize=False, apply_pragmas=False).verify_integrity()
     except Exception as exc:  # noqa: BLE001 — surface any verify failure, never raise from doctor
         return DoctorCheck(cid, "error", message=f"integrity check failed: {exc}")
     if intact:
