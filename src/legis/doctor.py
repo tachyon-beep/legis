@@ -289,24 +289,13 @@ _LEGACY_DB_NAMES = tuple(name for _, name in config.STORE_DB_SPECS)
 
 
 def _store_dir_for(root: Path) -> Path:
-    """legis's store dir resolved from root/weft.toml (root-anchored, never cwd).
-    Returns an absolute path: an operator-set absolute store_dir is honored as-is;
-    otherwise the (relative) store_dir / default is joined to root. Malformed
-    weft.toml falls back to the default (check_weft_toml reports the malformed file)."""
-    configured: Path | None = None
-    wt = root / "weft.toml"
-    if wt.exists():
-        try:
-            data = tomllib.loads(wt.read_text(encoding="utf-8"))
-        except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
-            data = {}
-        legis = data.get("legis")
-        if isinstance(legis, dict):
-            sd = legis.get("store_dir")
-            if isinstance(sd, str) and sd:
-                configured = Path(sd)
-    store_dir = configured if configured is not None else Path(".weft") / "legis"
-    return store_dir if store_dir.is_absolute() else (root / store_dir)
+    """legis's built-in store dir anchored at *root*.
+
+    Repo-local ``weft.toml`` is report-only for doctor and must not redirect
+    governance checks. Operators relocate stores with explicit ``LEGIS_*_DB``
+    env vars, which ``_store_url`` handles before calling this helper.
+    """
+    return root / ".weft" / "legis"
 
 
 def check_weft_toml(root: Path) -> DoctorCheck:
@@ -396,10 +385,10 @@ def check_legacy_stray_db(root: Path) -> DoctorCheck:
 
 
 def _store_url(root: Path, db_name: str, env: str) -> str:
-    """Resolve a store URL anchored at *root* via ``root/weft.toml`` (never cwd).
+    """Resolve a store URL anchored at *root* (never cwd).
     The LEGIS_*_DB override wins when set (present-but-empty included, matching
     config's verbatim-override precedence); otherwise a file URL is built under
-    the root-anchored store_dir."""
+    the built-in root-anchored store dir."""
     if env in os.environ:
         return os.environ[env]
     return "sqlite:///" + (_store_dir_for(root) / db_name).as_posix()

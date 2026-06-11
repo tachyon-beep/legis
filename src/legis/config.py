@@ -15,13 +15,10 @@ keeps them in agreement. The default URLs are therefore cwd-relative
 (``sqlite:///.weft/legis/...``), preserving the historical resolution semantics.
 
 **weft.toml is enrich-only, never load-bearing.** The operator-authored
-``weft.toml`` may carry a ``[legis]`` table; we read it but never write it.
-The single enrichment knob is ``store_dir`` (relocate the subtree; relative to
-the project root, or absolute). Per-DB overrides remain the ``LEGIS_*_DB`` env
-vars, which take precedence over weft.toml — a precedence the ``*_db_url()``
-resolvers below implement directly (via ``_resolve_db_url``), so every consumer
-gets it by calling the resolver, not by re-wrapping it. An absent file, an
-absent ``[legis]`` section, or even a malformed weft.toml must still boot on the
+``weft.toml`` may carry a ``[legis]`` table, but repo-local data must not decide
+where governance stores live. Per-DB relocation is deliberately limited to
+operator environment overrides (``LEGIS_*_DB``). An absent file, an absent
+``[legis]`` section, or even a malformed weft.toml must still boot on the
 built-in defaults — legis never *depends* on weft.toml (Doctrine §5 deletion
 test).
 
@@ -37,14 +34,10 @@ storage.
 
 from __future__ import annotations
 
-import logging
 import os
-import tomllib
 from pathlib import Path
 
 from sqlalchemy.engine import make_url
-
-logger = logging.getLogger(__name__)
 
 WEFT_MEMBER = "legis"
 
@@ -83,42 +76,12 @@ def project_root() -> Path:
     return Path.cwd()
 
 
-def _weft_legis_config() -> dict:
-    """Read the operator-authored ``[legis]`` table from ``weft.toml``.
-
-    Returns an empty enrichment ({}) when the file is absent, has no ``[legis]``
-    table, or cannot be parsed — weft.toml is never load-bearing, so a missing
-    or broken operator file degrades to built-in defaults rather than failing
-    boot. We are READ-ONLY here; this function never writes weft.toml.
-    """
-    path = project_root() / "weft.toml"
-    try:
-        with path.open("rb") as fh:
-            data = tomllib.load(fh)
-    except FileNotFoundError:
-        return {}
-    except (OSError, tomllib.TOMLDecodeError):
-        # A broken operator file must not be load-bearing. Surface it on the log
-        # (so a fat-fingered weft.toml is diagnosable) but boot on defaults.
-        logger.warning(
-            "weft.toml present but unreadable (%s); legis booting on built-in "
-            "store defaults",
-            path,
-            exc_info=True,
-        )
-        return {}
-    section = data.get(WEFT_MEMBER)
-    return section if isinstance(section, dict) else {}
-
-
 def _store_dir() -> Path:
-    """The runtime-state subtree: ``.weft/legis`` by default, or the operator's
-    ``[legis] store_dir`` if set. Relative paths resolve against cwd at connect
-    time (three-slash URL); an absolute store_dir yields an absolute URL.
+    """The built-in runtime-state subtree.
+
+    Repo-local ``weft.toml`` is intentionally ignored here. Load-bearing store
+    relocation must come from explicit ``LEGIS_*_DB`` operator env vars.
     """
-    configured = _weft_legis_config().get("store_dir")
-    if isinstance(configured, str) and configured:
-        return Path(configured)
     return Path(".weft") / WEFT_MEMBER
 
 
@@ -135,8 +98,7 @@ def _sqlite_url(path: Path) -> str:
 def _resolve_db_url(env_var: str, db_name: str) -> str:
     """Resolve a store URL with the documented precedence (module docstring):
     the per-DB ``LEGIS_*_DB`` override wins; otherwise the URL is composed from
-    the weft.toml ``store_dir`` (or the built-in ``.weft/legis`` default) under
-    the canonical filename.
+    the built-in ``.weft/legis`` default under the canonical filename.
 
     This is THE single resolution point — callers invoke the ``*_db_url()``
     function directly and never re-implement the env layering, so changing

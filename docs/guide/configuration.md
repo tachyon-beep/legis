@@ -96,10 +96,11 @@ not touch these — they default sensibly and the directory is created on first 
 | `LEGIS_BINDING_DB` | `.weft/legis/legis-binding.db` | Sign-off binding ledger (required to gate Filigree closures). |
 | `LEGIS_PULL_DB` | `.weft/legis/legis-pulls.db` | Recorded pull-request metadata. |
 
-To relocate the whole subtree at once, set `store_dir` in a `[legis]` table in
-`weft.toml` (read-only enrichment; legis never writes `weft.toml`). A per-DB
-`LEGIS_*_DB` override wins over `store_dir`. A missing or malformed `weft.toml`
-boots on defaults — it is never load-bearing.
+To relocate stores, set the relevant `LEGIS_*_DB` variable in the operator
+environment. Repo `weft.toml` is read-only/report-only for legis and is not used
+for database placement, so committed project config cannot redirect governance
+stores. A missing or malformed `weft.toml` boots on defaults — it is never
+load-bearing.
 
 ### Cell routing
 

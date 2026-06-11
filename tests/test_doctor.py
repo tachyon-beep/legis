@@ -688,15 +688,16 @@ def test_n3_checks_never_write_files_or_render_keys(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Review follow-ups: root-anchored store_dir + empty-override precedence
+# Review follow-ups: store placement + empty-override precedence
 # ---------------------------------------------------------------------------
 
 
-def test_store_dir_root_anchored_via_weft_toml(tmp_path, monkeypatch):
-    # --root != cwd, with a weft.toml that relocates the store. Resolution must
-    # honor root/weft.toml, not cwd's, and stay under root (review #1).
+def test_store_dir_ignores_repo_weft_toml_store_dir(tmp_path, monkeypatch):
+    # --root != cwd, with a repo weft.toml that attempts to relocate the store.
+    # Doctor must keep governance checks on the built-in store unless an
+    # explicit LEGIS_*_DB override is set by the operator environment.
     monkeypatch.chdir(tmp_path)  # cwd has no weft.toml
-    # Clear the conftest store override so weft.toml resolution is exercised.
+    # Clear the conftest store override so default resolution is exercised.
     monkeypatch.delenv("LEGIS_GOVERNANCE_DB", raising=False)
     root = tmp_path / "proj"
     (root / "custom_store").mkdir(parents=True)
@@ -705,10 +706,10 @@ def test_store_dir_root_anchored_via_weft_toml(tmp_path, monkeypatch):
     c = check_store_dir(root)
     assert c.status == "ok"
 
-    # The audit-chain URL must point under root/custom_store, not cwd/.weft.
+    # The audit-chain URL must point under root/.weft, not repo weft.toml.
     url = _store_url(root, "legis-governance.db", "LEGIS_GOVERNANCE_DB")
-    assert (root / "custom_store" / "legis-governance.db").as_posix() in url
-    assert ".weft" not in url
+    assert url == "sqlite:///" + (root / ".weft" / "legis" / "legis-governance.db").as_posix()
+    assert "custom_store" not in url
 
 
 def test_db_override_empty_string_is_error(tmp_path, monkeypatch):
