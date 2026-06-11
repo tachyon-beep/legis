@@ -2977,3 +2977,75 @@ def test_policy_boundary_check_resolves_relative_roots_against_repo_root(tmp_pat
     payload = result["structuredContent"]
     assert payload["outcome"] == "FINDINGS"
     assert payload["findings"][0]["file_path"] == "lib/x.py"
+
+
+# --- legis-1611d1673f: pull_request_get number schema/handler type agreement ---
+# --- legis-40a0ff7799: check_list.target_type enum discoverability ---
+
+
+def test_pull_request_get_number_schema_is_integer_like_seq():
+    # Schema/impl agreement: the handler runs _require_int, so the advertised
+    # schema must say integer (minimum 1) — exactly like signoff_status_get.seq.
+    from legis.mcp import tool_definitions
+
+    by_name = {t["name"]: t for t in tool_definitions()}
+    number = by_name["pull_request_get"]["inputSchema"]["properties"]["number"]
+    seq = by_name["signoff_status_get"]["inputSchema"]["properties"]["seq"]
+    assert number == seq == {"type": "integer", "minimum": 1}
+
+
+def test_pull_request_get_accepts_schema_faithful_integer(tmp_path):
+    # A schema-faithful client sends an int; the legacy "7" string coercion is
+    # covered by test_read_tools_return_git_pull_checks_and_override_rate.
+    from legis.mcp import call_tool
+
+    pulls = PullSurface(f"sqlite:///{tmp_path / 'pulls.db'}")
+    pulls.record(
+        PullRequest(
+            number=7,
+            title="Feature",
+            base="main",
+            head="feature",
+            state=PullRequestState.OPEN,
+        )
+    )
+    runtime, _store = _runtime(
+        tmp_path, check_surface=CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    )
+    runtime.pull_surface = pulls
+
+    result = call_tool(runtime, "pull_request_get", {"number": 7})
+
+    assert not result.get("isError")
+    assert result["structuredContent"]["number"] == 7
+
+
+def test_check_list_target_type_schema_declares_enum_matching_handler(tmp_path):
+    # The valid values must be discoverable from tools/list, not by triggering
+    # INVALID_ARGUMENT — and the schema enum must agree with what the handler
+    # actually accepts (single-sourced constant).
+    from legis.mcp import _CHECK_TARGET_TYPES, call_tool, tool_definitions
+
+    tool = next(t for t in tool_definitions() if t["name"] == "check_list")
+    prop = tool["inputSchema"]["properties"]["target_type"]
+    assert prop["enum"] == list(_CHECK_TARGET_TYPES) == ["commit", "branch", "pr"]
+    # target_type=pr needs an integer-coercible target — said in the schema, not
+    # discovered by failing.
+    assert "integer" in prop.get("description", "")
+
+    # Handler agreement: every advertised value is accepted...
+    runtime, _store = _runtime(
+        tmp_path, check_surface=CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    )
+    for target_type, target in (("commit", "abc"), ("branch", "main"), ("pr", "7")):
+        result = call_tool(
+            runtime, "check_list", {"target_type": target_type, "target": target}
+        )
+        assert not result.get("isError"), target_type
+    # ...and the rejection message names the same set.
+    rejected = call_tool(
+        runtime, "check_list", {"target_type": "tag", "target": "v1"}
+    )
+    assert rejected["isError"] is True
+    for value in _CHECK_TARGET_TYPES:
+        assert value in rejected["structuredContent"]["message"]

@@ -27,6 +27,24 @@ surface (18 → 21 tools):
   `PASS` / `FINDINGS` outcome (`root` defaults to `<repo_root>/src`,
   `repo_root` to the server's source root).
 
+### Changed (MCP schema discoverability, 2026-06-11)
+
+- **Every MCP tool now declares an `outputSchema`.** All 21 tools advertise
+  their success-payload shape in `tools/list` (discriminated `oneOf` envelopes
+  for `override_submit` and `scan_route`); the uniform error envelope
+  (`error_code` / `message` / `recoverable` / `next_action`) is a shared
+  definition (`ERROR_ENVELOPE_SCHEMA`), not a per-tool clause. A conformance
+  vector drives each tool per outcome variant and validates the emitted
+  payload against its declared schema, so payload/schema drift fails in CI,
+  not in a client.
+- **`pull_request_get.number` is declared `integer` (minimum 1)** — the schema
+  now agrees with the handler (`_require_int`), matching
+  `signoff_status_get.seq`; string coercion still tolerated server-side.
+- **`check_list.target_type` declares its enum** (`commit | branch | pr`,
+  single-sourced with the handler's dispatch) and notes that `pr` needs an
+  integer-coercible target — first-call success instead of a discover-by-
+  failing retry loop.
+
 ### Fixed (lacuna dogfood second pass, 2026-06-11)
 
 - **N-9 / LEG-1 — `policy_explain` now says when a policy name is unknown.**

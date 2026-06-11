@@ -24,6 +24,7 @@ from legis.checks.surface import CheckSurface
 from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
 from legis.enforcement.judge_factory import build_judge_from_env
+from legis.enforcement.lifecycle import GateStatus
 from legis.enforcement.protected import ProtectedGate, TrailVerifier, TamperError
 from legis.enforcement.signoff import SignoffGate
 from legis.enforcement.verdict import SignoffState, Verdict
@@ -37,8 +38,11 @@ from legis.policy.cells import (
     fail_closed_policy_cells,
     load_policy_cells,
 )
-from legis.policy.grammar import PolicyGrammar, default_grammar
+from legis.policy.grammar import PolicyGrammar, PolicyResult, default_grammar
+from legis.provenance import Provenance
+from legis.pulls.models import PullRequestState
 from legis.pulls.surface import PullSurface
+from legis.wardline.governor import WardlineCellPolicy
 from legis.service.errors import (
     AuditIntegrityError,
     BindingUnavailableError,
@@ -64,7 +68,7 @@ from legis.service.governance import (
 )
 from legis.service.wardline import resolve_scan_routing, route_wardline_scan
 from legis.store.audit_store import AuditStore
-from legis.wardline.ingest import ScanOutcome, WardlineDirtyTreeError
+from legis.wardline.ingest import ArtifactStatus, ScanOutcome, WardlineDirtyTreeError
 
 
 _AGENT_TOOLS = frozenset(
@@ -93,6 +97,10 @@ _AGENT_TOOLS = frozenset(
     }
 )
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
+# Single source for check_list's target_type: the schema enum and the handler's
+# dispatch/rejection both read this, so tools/list can never advertise a value
+# the handler rejects (legis-40a0ff7799).
+_CHECK_TARGET_TYPES = ("commit", "branch", "pr")
 _SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26")
 _DEFAULT_PROTOCOL_VERSION = _SUPPORTED_PROTOCOL_VERSIONS[-1]
 
@@ -266,10 +274,221 @@ def _schema(required: list[str], properties: dict[str, dict[str, Any]]) -> dict[
     }
 
 
+# The uniform error envelope (structuredContent of every isError:true result,
+# built by _tool_error). One shared definition rather than a per-tool clause:
+# tools' outputSchema declarations describe SUCCESS payloads only; clients
+# validate error results against this. The text content mirrors it as
+# "{code}: {message}\nnext_action: …" (LEG-2).
+ERROR_ENVELOPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["error_code", "message", "recoverable", "next_action"],
+    "properties": {
+        "error_code": {"type": "string"},
+        "message": {"type": "string"},
+        "recoverable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+    },
+}
+
+
 def tool_definitions() -> list[dict[str, Any]]:
     string = {"type": "string"}
     integer = {"type": "integer", "minimum": 1}
     object_schema = {"type": "object"}
+
+    # --- outputSchema fragments (legis-49b4ca4166) ---
+    # Every outputSchema describes the SUCCESS structuredContent; isError:true
+    # results carry the shared ERROR_ENVELOPE_SCHEMA instead. The conformance
+    # vector (tests/mcp/test_output_schema_conformance.py) drives each tool and
+    # validates the emitted payload against these — a payload/schema drift
+    # fails there, not in a client.
+    boolean = {"type": "boolean"}
+    plain_integer = {"type": "integer"}
+    nullable_string = {"type": ["string", "null"]}
+    nullable_integer = {"type": ["integer", "null"]}
+    string_array = {"type": "array", "items": string}
+    cell_enum = {"type": "string", "enum": list(CELL_TIER_ORDER)}
+    required_inputs_array = {
+        "type": "array",
+        "items": _schema(["field", "how"], {"field": string, "how": string}),
+    }
+    # The check-run read shape (_check_to_dict): recorded_by/provenance are NOT
+    # on the read payloads today (filed: legis-fa9c60c660); check_report's echo
+    # adds them on top.
+    check_run_properties: dict[str, Any] = {
+        "check_name": string,
+        "run_id": string,
+        "commit_sha": string,
+        "outcome": {"type": "string", "enum": [o.value for o in CheckOutcome]},
+        "branch": nullable_string,
+        "pr": nullable_integer,
+        "ran_against": nullable_string,
+        "rule_set": nullable_string,
+        "policy_version": nullable_string,
+        "started_at": nullable_string,
+        "finished_at": nullable_string,
+    }
+    checks_array = {
+        "type": "array",
+        "items": _schema(sorted(check_run_properties), check_run_properties),
+    }
+    # The policy/cell explanation payload (PolicyExplanation.to_payload):
+    # policy_explain always routes via explain_policy, so policy_known is
+    # always present there; the per-cell rows in policy_list never carry it.
+    explanation_out = _schema(
+        [
+            "cell", "judge_inline", "self_clearable", "human_in_loop",
+            "enabled", "available_moves", "required_inputs", "matched_rule",
+            "policy_known",
+        ],
+        {
+            "cell": cell_enum,
+            "judge_inline": boolean,
+            "self_clearable": boolean,
+            "human_in_loop": boolean,
+            "enabled": boolean,
+            "available_moves": string_array,
+            "required_inputs": required_inputs_array,
+            "matched_rule": nullable_string,
+            "policy_known": boolean,
+        },
+    )
+    judged_fields: dict[str, Any] = {
+        "judge_model": nullable_string,
+        "judge_rationale": nullable_string,
+    }
+    override_submit_out = {
+        "oneOf": [
+            _schema(
+                ["outcome", "cell", "seq", "note"],
+                {
+                    "outcome": {"const": "ACCEPTED_SELF"},
+                    "cell": {"const": "chill"},
+                    "seq": integer,
+                    "note": string,
+                },
+            ),
+            _schema(
+                ["outcome", "cell", "seq", "judge_model", "judge_rationale", "note"],
+                {
+                    "outcome": {"const": "ACCEPTED_BY_JUDGE"},
+                    "cell": {"type": "string", "enum": ["coached", "protected"]},
+                    "seq": integer,
+                    **judged_fields,
+                    "note": string,
+                },
+            ),
+            _schema(
+                [
+                    "outcome", "cell", "seq", "judge_model", "judge_rationale",
+                    "blocked_reason_code", "self_clearable", "next_actions", "note",
+                ],
+                {
+                    "outcome": {"const": "BLOCKED"},
+                    "cell": {"type": "string", "enum": ["coached", "protected"]},
+                    "seq": integer,
+                    **judged_fields,
+                    "blocked_reason_code": {
+                        "type": "string",
+                        "enum": [
+                            "RATIONALE_INSUFFICIENT",
+                            "CODE_VIOLATION",
+                            "POLICY_HARD_BLOCK",
+                            "UNCLASSIFIED",
+                        ],
+                    },
+                    "self_clearable": {"const": False},
+                    "next_actions": string_array,
+                    "note": string,
+                },
+            ),
+            _schema(
+                [
+                    "outcome", "cell", "seq", "cleared", "human_required",
+                    "operator_instruction", "poll_tool", "poll_handle",
+                ],
+                {
+                    "outcome": {"const": "ESCALATED_PENDING"},
+                    "cell": {"const": "structured"},
+                    "seq": integer,
+                    "cleared": boolean,
+                    "human_required": boolean,
+                    "operator_instruction": string,
+                    "poll_tool": {"const": "signoff_status_get"},
+                    "poll_handle": integer,
+                },
+            ),
+            _schema(
+                ["outcome", "cell", "required_inputs"],
+                {
+                    "outcome": {"const": "NEED_INPUTS"},
+                    "cell": {"const": "protected"},
+                    "required_inputs": required_inputs_array,
+                },
+            ),
+        ]
+    }
+    routed_item = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["mode", "fingerprint", "seq"],
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": [cell.value for cell in WardlineCellPolicy],
+            },
+            "fingerprint": string,
+            "seq": integer,
+            "cleared": boolean,
+            "accepted": boolean,
+            "surfaced": boolean,
+        },
+    }
+    scan_route_out = {
+        "oneOf": [
+            _schema(
+                ["outcome", "routed", "artifact_status"],
+                {
+                    "outcome": {"const": ScanOutcome.ROUTED.value},
+                    "routed": {"type": "array", "items": routed_item},
+                    "artifact_status": {
+                        "type": "string",
+                        "enum": [status.value for status in ArtifactStatus],
+                    },
+                },
+            ),
+            # WardlineDirtyTreeError.to_payload — the typed amber skip.
+            _schema(
+                [
+                    "outcome", "routed", "reason", "posture", "cause",
+                    "remediation", "detail",
+                ],
+                {
+                    "outcome": {"const": ScanOutcome.SKIPPED_DIRTY_TREE.value},
+                    "routed": {"type": "array", "maxItems": 0},
+                    "reason": {"const": ScanOutcome.SKIPPED_DIRTY_TREE.value},
+                    "posture": string,
+                    "cause": string,
+                    "remediation": string_array,
+                    "detail": string,
+                },
+            ),
+        ]
+    }
+    rename_item = _schema(
+        ["commit_sha", "old_path", "new_path", "similarity", "old_blob", "new_blob"],
+        {
+            "commit_sha": string,
+            "old_path": string,
+            "new_path": string,
+            "similarity": plain_integer,
+            "old_blob": string,
+            "new_blob": string,
+        },
+    )
+    rename_array = {"type": "array", "items": rename_item}
+
     return [
         {
             "name": "policy_explain",
@@ -284,6 +503,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 ["policy", "entity"],
                 {"policy": string, "entity": string},
             ),
+            "outputSchema": explanation_out,
         },
         {
             "name": "policy_list",
@@ -295,6 +515,35 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "enabled:false without LEGIS_HMAC_KEY."
             ),
             "inputSchema": _schema([], {}),
+            "outputSchema": _schema(
+                ["default_cell", "rules", "cells"],
+                {
+                    "default_cell": cell_enum,
+                    "rules": {
+                        "type": "array",
+                        "items": _schema(
+                            ["pattern", "cell"],
+                            {"pattern": string, "cell": cell_enum},
+                        ),
+                    },
+                    "cells": {
+                        "type": "array",
+                        "items": _schema(
+                            [
+                                "cell", "enabled", "judge_inline",
+                                "self_clearable", "human_in_loop",
+                            ],
+                            {
+                                "cell": cell_enum,
+                                "enabled": boolean,
+                                "judge_inline": boolean,
+                                "self_clearable": boolean,
+                                "human_in_loop": boolean,
+                            },
+                        ),
+                    },
+                },
+            ),
         },
         {
             "name": "override_submit",
@@ -314,6 +563,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "idempotency_key": string,
                 },
             ),
+            "outputSchema": override_submit_out,
         },
         {
             "name": "signoff_status_get",
@@ -324,6 +574,19 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "(binding: object, or null when not yet bound)."
             ),
             "inputSchema": _schema(["seq"], {"seq": integer}),
+            # signed_by/signed_at appear on cleared payloads with a signed
+            # record; binding appears only when the ledger is wired (null =
+            # wired but not yet bound — distinguishable from no-ledger).
+            "outputSchema": _schema(
+                ["cleared", "seq"],
+                {
+                    "cleared": boolean,
+                    "seq": integer,
+                    "signed_by": nullable_string,
+                    "signed_at": nullable_string,
+                    "binding": {"type": ["object", "null"]},
+                },
+            ),
         },
         {
             "name": "signoff_bind_issue",
@@ -339,6 +602,18 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": _schema(
                 ["seq", "issue_id"], {"seq": integer, "issue_id": string}
             ),
+            # Open object: the Filigree attach response is merged in verbatim
+            # (Filigree owns that shape); legis pins only its own keys.
+            "outputSchema": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": ["signoff_seq", "binding_signature"],
+                "properties": {
+                    "signoff_seq": integer,
+                    "binding_signature": nullable_string,
+                    "binding_seq": integer,
+                },
+            },
         },
         {
             "name": "policy_evaluate",
@@ -347,6 +622,17 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
             "inputSchema": _schema(
                 ["policy", "target"], {"policy": string, "target": object_schema}
+            ),
+            "outputSchema": _schema(
+                ["outcome", "detail", "provenance_gap"],
+                {
+                    "outcome": {
+                        "type": "string",
+                        "enum": [result.value for result in PolicyResult],
+                    },
+                    "detail": string,
+                    "provenance_gap": boolean,
+                },
             ),
         },
         {
@@ -392,21 +678,68 @@ def tool_definitions() -> list[dict[str, Any]]:
                     },
                 },
             ),
+            "outputSchema": scan_route_out,
         },
         {
             "name": "git_branch_list",
             "description": "List local git branches and upstream divergence facts.",
             "inputSchema": _schema([], {}),
+            "outputSchema": _schema(
+                ["branches"],
+                {
+                    "branches": {
+                        "type": "array",
+                        "items": _schema(
+                            [
+                                "name", "head_sha", "is_current",
+                                "upstream", "ahead", "behind",
+                            ],
+                            {
+                                "name": string,
+                                "head_sha": string,
+                                "is_current": boolean,
+                                "upstream": nullable_string,
+                                "ahead": nullable_integer,
+                                "behind": nullable_integer,
+                            },
+                        ),
+                    }
+                },
+            ),
         },
         {
             "name": "git_commit_get",
             "description": "Read one git commit by SHA or safe ref.",
             "inputSchema": _schema(["sha"], {"sha": string}),
+            "outputSchema": _schema(
+                ["commit"],
+                {
+                    "commit": _schema(
+                        [
+                            "sha", "author_name", "author_email", "message",
+                            "committed_at", "parents", "files_changed",
+                            "insertions", "deletions",
+                        ],
+                        {
+                            "sha": string,
+                            "author_name": string,
+                            "author_email": string,
+                            "message": string,
+                            "committed_at": string,
+                            "parents": string_array,
+                            "files_changed": plain_integer,
+                            "insertions": plain_integer,
+                            "deletions": plain_integer,
+                        },
+                    )
+                },
+            ),
         },
         {
             "name": "git_rename_list",
             "description": "List git rename evidence for a revision range.",
             "inputSchema": _schema(["rev_range"], {"rev_range": string}),
+            "outputSchema": _schema(["renames"], {"renames": rename_array}),
         },
         {
             "name": "git_rename_feed_get",
@@ -422,11 +755,46 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "include_worktree": {"type": "boolean"},
                 },
             ),
+            "outputSchema": _schema(
+                [
+                    "status", "worktree_checked", "base", "head",
+                    "committed", "working_tree",
+                ],
+                {
+                    "status": {
+                        "type": "string",
+                        "enum": ["committed_only", "committed_and_worktree"],
+                    },
+                    "worktree_checked": boolean,
+                    "base": string,
+                    "head": string,
+                    "committed": rename_array,
+                    "working_tree": rename_array,
+                },
+            ),
         },
         {
             "name": "filigree_closure_gate_get",
             "description": "Read whether legis holds verified binding evidence for closing a Filigree issue.",
             "inputSchema": _schema(["issue_id"], {"issue_id": string}),
+            "outputSchema": _schema(
+                ["allowed", "issue_id", "reason", "evidence"],
+                {
+                    "allowed": boolean,
+                    "issue_id": string,
+                    "reason": string,
+                    "evidence": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "required": ["signoff_seq", "content_hash", "recorded_at"],
+                        "properties": {
+                            "signoff_seq": nullable_integer,
+                            "content_hash": nullable_string,
+                            "recorded_at": nullable_string,
+                        },
+                    },
+                },
+            ),
         },
         {
             "name": "identity_gap_list",
@@ -438,6 +806,32 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "all-clear without status 'checked'."
             ),
             "inputSchema": _schema([], {}),
+            # "unavailable" (the reasons list) is present only on the
+            # could-not-check path — a checked payload carries status+gaps.
+            "outputSchema": _schema(
+                ["status", "gaps"],
+                {
+                    "status": {"type": "string", "enum": ["checked", "unavailable"]},
+                    "gaps": {
+                        "type": "array",
+                        "items": _schema(
+                            ["sei", "reason", "lineage"],
+                            {
+                                "sei": string,
+                                "reason": string,
+                                "lineage": {
+                                    "type": "array",
+                                    "items": {"type": "object"},
+                                },
+                            },
+                        ),
+                    },
+                    "unavailable": {
+                        "type": "array",
+                        "items": _schema(["reason"], {"reason": string}),
+                    },
+                },
+            ),
         },
         {
             "name": "lineage_integrity_get",
@@ -450,11 +844,63 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "event is divergence."
             ),
             "inputSchema": _schema([], {}),
+            "outputSchema": _schema(
+                ["status", "divergences", "unavailable"],
+                {
+                    "status": {
+                        "type": "string",
+                        "enum": ["diverged", "unverified", "verified", "unavailable"],
+                    },
+                    "divergences": {
+                        "type": "array",
+                        "items": _schema(
+                            ["sei", "recorded_length", "current_length"],
+                            {
+                                "sei": string,
+                                "recorded_length": plain_integer,
+                                "current_length": plain_integer,
+                            },
+                        ),
+                    },
+                    "unavailable": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["reason"],
+                            "properties": {"sei": string, "reason": string},
+                        },
+                    },
+                },
+            ),
         },
         {
             "name": "pull_request_get",
             "description": "Read recorded pull-request metadata with joined check outcomes.",
-            "inputSchema": _schema(["number"], {"number": string}),
+            "inputSchema": _schema(["number"], {"number": integer}),
+            "outputSchema": _schema(
+                [
+                    "number", "title", "base", "head", "state", "url",
+                    "recorded_by", "provenance", "checks",
+                ],
+                {
+                    "number": integer,
+                    "title": string,
+                    "base": string,
+                    "head": string,
+                    "state": {
+                        "type": "string",
+                        "enum": [state.value for state in PullRequestState],
+                    },
+                    "url": nullable_string,
+                    "recorded_by": nullable_string,
+                    "provenance": {
+                        "type": "string",
+                        "enum": [p.value for p in Provenance],
+                    },
+                    "checks": checks_array,
+                },
+            ),
         },
         {
             "name": "check_list",
@@ -464,13 +910,47 @@ def tool_definitions() -> list[dict[str, Any]]:
             ),
             "inputSchema": _schema(
                 ["target_type", "target"],
-                {"target_type": string, "target": string},
+                {
+                    "target_type": {
+                        "type": "string",
+                        "enum": list(_CHECK_TARGET_TYPES),
+                        "description": (
+                            "Target kind. target_type 'pr' requires an "
+                            "integer-coercible target (the PR number)."
+                        ),
+                    },
+                    "target": string,
+                },
+            ),
+            "outputSchema": _schema(
+                ["target_type", "target", "checks"],
+                {
+                    "target_type": {
+                        "type": "string",
+                        "enum": list(_CHECK_TARGET_TYPES),
+                    },
+                    # Echoed as given for commit/branch, coerced to int for pr.
+                    "target": {"type": ["string", "integer"]},
+                    "checks": checks_array,
+                },
             ),
         },
         {
             "name": "override_rate_get",
             "description": "Read the fixed operator force-past override-rate gate.",
             "inputSchema": _schema([], {}),
+            "outputSchema": _schema(
+                ["status", "rate", "sample_size", "note"],
+                {
+                    "status": {
+                        "type": "string",
+                        "enum": [status.value for status in GateStatus],
+                    },
+                    "rate": {"type": "number"},
+                    "sample_size": {"type": "integer", "minimum": 0},
+                    "note": {"const": _OVERRIDE_RATE_NOTE},
+                },
+            ),
         },
         {
             "name": "override_list",
@@ -489,6 +969,23 @@ def tool_definitions() -> list[dict[str, Any]]:
                 [],
                 {"policy": string, "entity": string, "submitted_by": string},
             ),
+            # Items are the recorded payloads plus seq — open objects: the
+            # trail carries heterogeneous record kinds (overrides, sign-off
+            # events, SEI_BACKFILL, …) whose shapes the records own.
+            "outputSchema": _schema(
+                ["overrides"],
+                {
+                    "overrides": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "required": ["seq"],
+                            "properties": {"seq": integer},
+                        },
+                    }
+                },
+            ),
         },
         {
             "name": "doctor_get",
@@ -501,6 +998,31 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "out-of-band config and a relaunch)."
             ),
             "inputSchema": _schema([], {}),
+            "outputSchema": _schema(
+                ["ok", "checks", "next_actions"],
+                {
+                    "ok": boolean,
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["id", "status", "fixed", "repairable"],
+                            "properties": {
+                                "id": string,
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "warn", "error"],
+                                },
+                                "fixed": boolean,
+                                "repairable": boolean,
+                                "message": string,
+                            },
+                        },
+                    },
+                    "next_actions": string_array,
+                },
+            ),
         },
         {
             "name": "policy_boundary_check",
@@ -516,6 +1038,25 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": _schema(
                 [],
                 {"root": string, "repo_root": string},
+            ),
+            "outputSchema": _schema(
+                ["outcome", "findings"],
+                {
+                    "outcome": {"type": "string", "enum": ["PASS", "FINDINGS"]},
+                    "findings": {
+                        "type": "array",
+                        "items": _schema(
+                            ["rule_id", "file_path", "line", "qualname", "reason"],
+                            {
+                                "rule_id": string,
+                                "file_path": string,
+                                "line": {"type": "integer", "minimum": 0},
+                                "qualname": string,
+                                "reason": string,
+                            },
+                        ),
+                    },
+                },
             ),
         },
         # Named decision (legis-e5c57dedd1): check recording IS on the agent
@@ -551,6 +1092,20 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "policy_version": string,
                     "started_at": string,
                     "finished_at": string,
+                },
+            ),
+            # The recorded check echoed back, plus the recorded posture: who
+            # the launch binding attributed the claim to and that it is
+            # unauthenticated (Q-M2).
+            "outputSchema": _schema(
+                [*sorted(check_run_properties), "recorded_by", "provenance"],
+                {
+                    **check_run_properties,
+                    "recorded_by": string,
+                    "provenance": {
+                        "type": "string",
+                        "enum": [p.value for p in Provenance],
+                    },
                 },
             ),
         },
@@ -1419,7 +1974,7 @@ def _tool_check_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
         response_target = pr_number
     else:
         raise InvalidArgumentError(
-            "target_type must be one of: commit, branch, pr"
+            "target_type must be one of: " + ", ".join(_CHECK_TARGET_TYPES)
         )
     return _tool_result(
         {
