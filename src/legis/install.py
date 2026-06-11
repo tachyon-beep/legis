@@ -478,15 +478,24 @@ def install_codex_skills(project_root: Path) -> tuple[bool, str]:
 def _find_legis_command() -> list[str]:
     """Resolve how to invoke legis for a hook command.
 
-    Prefer a ``legis`` binary on PATH; otherwise fall back to the safe-path
-    module form ``<python> -P -m legis`` so module resolution does not prepend
-    the project directory.
+    Prefer the legis entrypoint that is *running right now* (``sys.argv[0]``) —
+    resolution must be faithful to the binary the operator invoked, not to
+    whatever ``which legis`` happens to find first. A dev venv ahead of the
+    uv-tool shim on PATH would otherwise poison every consumer config written
+    by an explicitly-invoked stable binary (legis-788a85fac1). Falls back to
+    PATH lookup, then to the safe-path module form ``<python> -P -m legis`` so
+    module resolution does not prepend the project directory.
     """
+    import sys
+
+    argv0 = sys.argv[0] if sys.argv else ""
+    if Path(argv0).name.lower() in ("legis", "legis.exe"):
+        running = Path(os.path.abspath(argv0))
+        if running.is_file():
+            return [str(running)]
     found = shutil.which("legis")
     if found:
         return [found]
-    import sys
-
     return [sys.executable, "-P", "-m", "legis"]
 
 
@@ -545,8 +554,30 @@ def _has_unscoped_session_start_hook(settings: dict[str, Any], command: str) -> 
     return False
 
 
+def _hook_command_is_stale(cmd: str) -> bool:
+    """Whether a legis hook command can no longer run and needs re-pinning.
+
+    Stale means the executable token cannot be exec'd: a bare token (portable
+    form — pin it to the resolved binary) or a path that no longer exists. A
+    *working* absolute path that merely differs from our current resolution is
+    operator state, not drift — rewriting it would repoint a consumer at
+    whatever binary shadows PATH today (legis-788a85fac1). Same invariant as
+    ``mcp_entry_is_current``.
+    """
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    head = tokens[0]
+    if "/" not in head and "\\" not in head:
+        return True  # bare form — pin to the resolved binary
+    return not (Path(head).is_file() or shutil.which(head))
+
+
 def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_command: str) -> bool:
-    """Replace hook commands matching *bare_command* with *new_command*."""
+    """Re-pin stale hook commands matching *bare_command* to *new_command*."""
     changed = False
     hooks = settings.get("hooks", {})
     if not isinstance(hooks, dict):
@@ -569,7 +600,7 @@ def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_comm
             if not isinstance(hook, dict):
                 continue
             cmd = hook.get("command", "")
-            if _hook_cmd_matches(cmd, bare_command) and cmd != new_command:
+            if _hook_cmd_matches(cmd, bare_command) and cmd != new_command and _hook_command_is_stale(cmd):
                 hook["command"] = new_command
                 changed = True
     return changed
@@ -799,8 +830,15 @@ def register_mcp_json(
     Creates the file if absent; merges into mcpServers without disturbing
     sibling entries. An explicit *agent_id* always wins; when it is ``None``
     (the default), an existing legis entry's agent-id is preserved (operator
-    choice), falling back to ``_DEFAULT_AGENT_ID`` for a fresh entry. Refreshes
-    only the command/args shape otherwise.
+    choice), falling back to ``_DEFAULT_AGENT_ID`` for a fresh entry.
+
+    A *usable* existing entry (args invoke ``mcp``, command resolves to a real
+    executable — the ``mcp_entry_is_current`` invariant) is never regenerated:
+    a working binary that differs from our current resolution is operator
+    state, not drift, and at most the agent-id is retargeted in place. Only an
+    unusable entry (missing, malformed args, dead command) is rebuilt — and
+    even then the operator-owned ``env`` dict is carried over, never wiped
+    (legis-788a85fac1).
     """
     try:
         path = project_path(project_root, ".mcp.json")
@@ -834,7 +872,39 @@ def register_mcp_json(
                 if i + 1 < len(args) and isinstance(args[i + 1], str):
                     keep_agent = args[i + 1]
 
+    usable = False
+    if isinstance(existing, dict):
+        args = existing.get("args")
+        command = existing.get("command")
+        usable = (
+            isinstance(args, list)
+            and "mcp" in args
+            and isinstance(command, str)
+            and bool(command)
+            and bool(shutil.which(command) or Path(command).is_file())
+        )
+
+    if usable:
+        assert isinstance(existing, dict)  # narrowed by the usable check
+        args = list(existing.get("args", []))
+        if "--agent-id" in args and args.index("--agent-id") + 1 < len(args):
+            current_agent = args[args.index("--agent-id") + 1]
+        else:
+            current_agent = None
+        if agent_id is None or current_agent == keep_agent:
+            return True, "legis already registered in .mcp.json"
+        # Explicit agent-id retarget — in place, preserving command/env.
+        if current_agent is not None:
+            args[args.index("--agent-id") + 1] = keep_agent
+        else:
+            args += ["--agent-id", keep_agent]
+        existing["args"] = args
+        _atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return True, f"Updated legis agent-id to {keep_agent} in .mcp.json"
+
     desired = _legis_mcp_entry(keep_agent)
+    if isinstance(existing, dict) and isinstance(existing.get("env"), dict):
+        desired["env"] = existing["env"]  # operator-owned; never clobber
     if existing == desired:
         return True, "legis already registered in .mcp.json"
     servers["legis"] = desired

@@ -821,3 +821,148 @@ def test_ensure_gitignore_present_among_other_rules_not_duplicated(tmp_path):
     assert "already" in msg  # detected as present, not re-appended
     content = (tmp_path / ".gitignore").read_text()
     assert content.count(".weft/legis/") == 1  # not duplicated
+
+
+# ---------------------------------------------------------------------------
+# legis-788a85fac1 — faithful binary resolution + operator-state preservation.
+# `legis install` (and doctor --fix, which calls the same writers) must never
+# repoint a WORKING command at whatever `which legis` happens to find, and must
+# never wipe an operator-customized .mcp.json env. Staleness means "cannot
+# run" (bare token or dead path) — the same invariant mcp_entry_is_current
+# already encodes for the reader side.
+# ---------------------------------------------------------------------------
+
+
+def _touch_exe(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def _write_legis_mcp_entry(tmp_path, command, env=None, agent_id="claude-code"):
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "legis": {
+                        "args": ["mcp", "--agent-id", agent_id],
+                        "command": str(command),
+                        "env": dict(env or {}),
+                        "type": "stdio",
+                    }
+                }
+            }
+        )
+    )
+
+
+def _read_legis_mcp_entry(tmp_path):
+    return json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["legis"]
+
+
+def test_find_legis_command_prefers_running_executable(tmp_path, monkeypatch):
+    # A dev-venv legis shadows PATH, but the process was launched from the
+    # uv-tool binary — the running executable must win, not `which legis`.
+    import sys
+
+    running = _touch_exe(tmp_path / "uv-tools" / "legis")
+    shadow = _touch_exe(tmp_path / "dev-venv" / "legis")
+    monkeypatch.setenv("PATH", str(shadow.parent), prepend=os.pathsep)
+    monkeypatch.setattr(sys, "argv", [str(running), "install"])
+    assert install._find_legis_command() == [str(running)]
+
+
+def test_find_legis_command_path_fallback_when_argv0_is_not_legis(tmp_path, monkeypatch):
+    # Not running as the legis entrypoint (e.g. pytest) → PATH lookup stands.
+    import sys
+
+    shadow = _touch_exe(tmp_path / "bin" / "legis")
+    monkeypatch.setenv("PATH", str(shadow.parent))
+    monkeypatch.setattr(sys, "argv", ["/usr/bin/pytest"])
+    assert install._find_legis_command() == [str(shadow)]
+
+
+def test_register_mcp_json_preserves_customized_env(tmp_path, monkeypatch):
+    from legis.install import register_mcp_json
+
+    exe = _touch_exe(tmp_path / "tools" / "legis")
+    _write_legis_mcp_entry(tmp_path, exe, env={"LEGIS_WARDLINE_CELL": "surface_override"})
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, _ = register_mcp_json(tmp_path)
+    assert ok
+    assert _read_legis_mcp_entry(tmp_path)["env"] == {"LEGIS_WARDLINE_CELL": "surface_override"}
+
+
+def test_register_mcp_json_keeps_usable_command(tmp_path, monkeypatch):
+    # A working binary that differs from the current resolution is operator
+    # state, not drift — the entry must be left alone.
+    from legis.install import register_mcp_json
+
+    exe = _touch_exe(tmp_path / "tools" / "legis")
+    _write_legis_mcp_entry(tmp_path, exe)
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/elsewhere/legis"])
+    ok, msg = register_mcp_json(tmp_path)
+    assert ok
+    assert "already" in msg
+    assert _read_legis_mcp_entry(tmp_path)["command"] == str(exe)
+
+
+def test_register_mcp_json_refreshes_dead_command_but_keeps_env(tmp_path, monkeypatch):
+    from legis.install import register_mcp_json
+
+    dead = tmp_path / "gone-venv" / "legis"  # never created
+    _write_legis_mcp_entry(tmp_path, dead, env={"LEGIS_WARDLINE_CELL": "surface_override"})
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, _ = register_mcp_json(tmp_path)
+    assert ok
+    entry = _read_legis_mcp_entry(tmp_path)
+    assert entry["command"] == "/opt/bin/legis"
+    assert entry["env"] == {"LEGIS_WARDLINE_CELL": "surface_override"}
+
+
+def test_register_mcp_json_explicit_agent_id_updates_usable_entry_in_place(tmp_path, monkeypatch):
+    from legis.install import register_mcp_json
+
+    exe = _touch_exe(tmp_path / "tools" / "legis")
+    _write_legis_mcp_entry(tmp_path, exe, env={"K": "V"}, agent_id="claude-code")
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/elsewhere/legis"])
+    ok, _ = register_mcp_json(tmp_path, "new-bot")
+    assert ok
+    entry = _read_legis_mcp_entry(tmp_path)
+    args = entry["args"]
+    assert args[args.index("--agent-id") + 1] == "new-bot"
+    assert entry["command"] == str(exe)  # in-place retarget, no regeneration
+    assert entry["env"] == {"K": "V"}
+
+
+def test_install_hooks_does_not_rewrite_working_absolute_command(tmp_path, monkeypatch):
+    exe = _touch_exe(tmp_path / "tools" / "legis")
+    working = f"{exe} session-context"
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": working}]}]}})
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok
+    cmds = _session_commands(json.loads((claude / "settings.json").read_text()))
+    assert cmds == [working]
+    assert "already" in msg
+
+
+def test_install_hooks_upgrades_dead_absolute_command(tmp_path, monkeypatch):
+    dead = tmp_path / "gone-venv" / "legis"  # never created
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"{dead} session-context"}]}]}}
+        )
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, _ = install_claude_code_hooks(tmp_path)
+    assert ok
+    cmds = _session_commands(json.loads((claude / "settings.json").read_text()))
+    assert cmds == ["/opt/bin/legis session-context"]
