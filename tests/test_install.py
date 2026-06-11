@@ -669,6 +669,7 @@ def test_ensure_gitignore_creates_file(tmp_path):
     assert ok
     content = (tmp_path / ".gitignore").read_text()
     assert ".weft/legis/" in content
+    assert ".weft/\n" not in content
 
 
 def test_ensure_gitignore_appends_missing_rules(tmp_path):
@@ -678,6 +679,17 @@ def test_ensure_gitignore_appends_missing_rules(tmp_path):
     content = (tmp_path / ".gitignore").read_text()
     assert "*.db" in content
     assert ".weft/legis/" in content
+    assert ".weft/\n" not in content
+
+
+def test_ensure_gitignore_does_not_accept_top_level_weft_rule(tmp_path):
+    (tmp_path / ".gitignore").write_text(".weft/\n")
+    ok, msg = ensure_gitignore(tmp_path)
+    assert ok
+    assert "Added" in msg
+    content = (tmp_path / ".gitignore").read_text()
+    assert ".weft/\n" in content
+    assert ".weft/legis/\n" in content
 
 
 def test_ensure_gitignore_idempotent(tmp_path):
