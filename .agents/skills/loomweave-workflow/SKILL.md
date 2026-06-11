@@ -14,10 +14,12 @@ description: >
 ## Overview
 
 Loomweave pre-extracts a codebase into a queryable map — entities (functions,
-classes, modules, files), the call/reference/import edges between them, and
+classes, modules, files), the call/reference/import edges between them, the
+relation edges (`inherits_from`/`decorates`/`implements`/`derives`), and
 subsystem clusters — and serves it over MCP. **Ask Loomweave instead of
 re-exploring the tree.** One `find_entity` + one `callers_of` answers "what
-calls this?" without reading a single file.
+calls this?" — and one `entity_relation_list` answers "what subclasses this?" —
+without reading a single file.
 
 ## When to use
 
@@ -59,11 +61,13 @@ tell which case you're in.
 | Tool | Use when | Args |
 |------|----------|------|
 | `find_entity` | locate an entity by name, or by a concept word in its docstring/identifier (substring) | `{"pattern": "<name-or-word>"}` |
+| `entity_resolve` | resolve dotted qualnames (`pkg.mod.func`) to entity ids + SEIs — the inverse of having an id | `{"qualnames": ["pkg.mod.func"]}` |
 | `entity_at` | what's at a file:line | `{"file": "rel/path.py", "line": 42}` |
-| `callers_of` | what calls this entity | `{"id": "<id>"}` |
-| `neighborhood` | one-hop callers+callees+container+contained+references+imports | `{"id": "<id>"}` |
+| `callers_of` | what calls this entity (bounded: `limit`+`cursor`) | `{"id": "<id>"}` |
+| `neighborhood` | one-hop callers+callees+container+contained+references+imports+relations (per-bucket `limit`) | `{"id": "<id>"}` |
+| `entity_relation_list` | what subclasses X / what does a decorator decorate / what implements a trait — the `inherits_from`/`decorates`/`implements`/`derives` edges, with the anchoring source line | `{"id": "<id>", "direction": "in"}` |
 | `execution_paths_from` | bounded call paths out of an entity | `{"id": "<id>", "max_depth": 5}` |
-| `subsystem_members` | modules in a subsystem | `{"id": "core:subsystem:<hash>"}` |
+| `subsystem_members` | modules in a subsystem (bounded: `limit`+`cursor`) | `{"id": "core:subsystem:<hash>"}` |
 | `subsystem_of` | the subsystem an entity belongs to (reverse of `subsystem_members`) | `{"id": "<id>"}` |
 | `summary` † | on-demand prose summary of one entity | `{"id": "<id>"}` |
 | `summary_preview_cost` | preview a `summary` call's cache status / cost before spending | `{"id": "<id>"}` |
@@ -86,25 +90,58 @@ policy. `summary` additionally requires the live LLM provider to be enabled
 (`llm_policy.enabled: true` + `allow_live_provider: true`), or it serves cache
 only.
 
-`callers_of` / `neighborhood` / `execution_paths_from` take a `confidence`
-tier — one of `"resolved"` (default; only high-confidence edges),
-`"ambiguous"`, or `"inferred"`. There is no `"all"` value. When you suspect an
-edge is missing (e.g. dynamic dispatch), re-query at `"ambiguous"` and
-`"inferred"` and union the results — a default `resolved` count can understate
-the true caller set.
+`callers_of` / `neighborhood` / `execution_paths_from` / `entity_relation_list`
+take a `confidence` tier — one of `"resolved"` (default; only high-confidence
+edges), `"ambiguous"`, or `"inferred"`. There is no `"all"` value. When you
+suspect an edge is missing (e.g. dynamic dispatch), re-query at `"ambiguous"`
+and `"inferred"` and union the results — a default `resolved` count can
+understate the true caller set. (Relation edges are never LLM-inferred, so for
+`entity_relation_list` and the `relations_in`/`relations_out` buckets
+`"ambiguous"` is the widest tier; `"inferred"` adds nothing.)
 
-These three tools also return a `scope_excludes` array listing static blind
-spots the query did **not** search (e.g. `"attribute-receiver-calls"` like
-`ctx.svc.run()`). A non-empty
+Of those, `callers_of` / `neighborhood` / `execution_paths_from` also return a
+`scope_excludes` array listing static blind spots the query did **not** search
+(e.g. `"attribute-receiver-calls"` like `ctx.svc.run()`). A non-empty
 `scope_excludes` means an empty/short result is **not** a guaranteed true
 negative — re-query at `"inferred"` (which searches those categories and returns
 `scope_excludes: []`) before concluding "nothing calls this."
+(`entity_relation_list` returns no `scope_excludes` and has no inferred tier;
+its honesty caveat is in its description — only *declared* relations are
+recorded, so a dynamically applied decorator or runtime-built class is
+invisible.)
 
 `execution_paths_from` returns a compact shape: `root`, a deduplicated `nodes`
 table (id + short_name + location, each node once), and `paths` as arrays of
 node-id strings ranked longest-first. Resolve a path id against `nodes`, not by
 re-reading each path element. `truncated`/`truncation_reason` report `edge-cap`
 (traversal stopped early) or `path-cap` (ranked output trimmed for size).
+
+### Ids, SEIs, and `entity_resolve`
+
+Every id-taking tool (`callers_of`, `neighborhood`, `summary`, `source_for_entity`,
+`call_sites`, `wardline_for`, `issues_for`, `propose_guidance`, …) accepts **either**
+a raw locator (`python:function:pkg.mod.func`) **or** a Stable Entity Identity
+(SEI) token (`loomweave:eid:…`). A SEI is resolved through its alive binding to
+the current entity; an orphaned/unknown SEI fails closed as `entity-not-found`.
+You never have to convert a SEI before passing it. `find_entity` also accepts a
+pasted SEI as an **exact** lookup (it returns the one entity that SEI binds to,
+not a fuzzy match).
+
+When you have a **dotted qualname** but no id — e.g. a name from a stack trace or
+another tool — use `entity_resolve` (batch: `{"qualnames": ["a.b.c", …]}`, up to
+2000). Each input yields one `results` entry **in input order** with a
+`result_kind`:
+
+- `resolved` — `candidates` has one `{ id, sei, kind }` you can feed straight
+  into any id-taking tool.
+- `unresolved` — `candidates` is empty. This is **honest-empty, not an error**:
+  no entity matches that qualname.
+- `ambiguous` — reserved for a future heuristic tier (the exact tier never
+  emits it). A `scope_excludes` of `["heuristic-tier-not-implemented"]` records
+  that only exact resolution ran.
+
+A candidate whose entity is secret-scan-blocked collapses to the redacted stub
+(id/sei withheld) — the same posture as every other identity surface.
 
 ### How `find_entity` matches — the grep replacement for "find the thing that does Y"
 
@@ -123,7 +160,9 @@ entity is named after it. This is the **always-on keyword-discovery path: reach
 for `find_entity` before you grep.** It needs no embeddings — semantic *ranking*
 is the separate, opt-in `search_semantic` (below). Full-text hits rank first,
 then substring-only hits. Docstrings withheld by the secret scanner
-(`briefing_blocked`) are never matched.
+(`briefing_blocked`) are never matched. A pasted **SEI** (`loomweave:eid:…`) is
+treated as an exact lookup — it returns the single bound entity, not a fuzzy
+substring scan over the token.
 
 ## Catalogue tools — inspection · faceted search · shortcuts
 
@@ -225,6 +264,24 @@ and are composed into `summary` prompts with a real guidance fingerprint.
 - **`find_entity` is paginated** (~20/page, `next_cursor`); a broad concept word
   now matches docstring/identifier substrings too, so it can return many hits —
   narrow the pattern (or add a `kind` filter) rather than paging if you can.
+- **`callers_of` and `subsystem_members` are bounded** (`limit` default 50, max
+  100, plus a numeric-offset `cursor`). Each response carries `next_cursor`
+  (null when exhausted) and an explicit `truncated` flag — re-call with
+  `{"cursor": "<next_cursor>"}` to walk the full set. An empty page on a non-null
+  cursor means you paged past the end.
+- **`neighborhood` caps each bucket independently** with one per-bucket `limit`
+  and reports a `truncated` **map** (`{callers, callees, contained,
+  references_in, references_out, imports_in, imports_out, relations_in,
+  relations_out}`) — it has **no cursor**. When a bucket is `truncated:true`,
+  switch to that relation's dedicated cursor-paginated tool (e.g. `callers_of`,
+  `entity_relation_list`) for the complete set; `neighborhood` is a one-hop
+  overview, not a paging surface.
+- **Relation direction reads as a sentence** (`from KIND to`, ADR-051):
+  `entity_relation_list` with `direction: "in"` on a class answers "what
+  subclasses / implements / derives this"; `direction: "out"` on a *decorator*
+  answers "what does this decorate" (the decorator is the FROM side — inverted
+  from where the `@decorator` line sits). Each entry carries the anchoring
+  file/line/line-text so you can see the declaration behind the edge.
 
 ## Launch
 
