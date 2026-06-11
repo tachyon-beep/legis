@@ -499,8 +499,31 @@ def _find_legis_command() -> list[str]:
     return [sys.executable, "-P", "-m", "legis"]
 
 
-def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
-    """Whether *hook_command* is a bare, absolute-path, or module form of *bare_command*."""
+def _path_head_is_project_local(head: str, project_root: Path | None) -> bool:
+    """True when a command head names a path controlled by the project root."""
+    if project_root is None or not head:
+        return False
+    if "/" not in head and "\\" not in head:
+        return False
+    root = project_root.resolve(strict=False)
+    candidate = Path(head)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        candidate.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _hook_cmd_matches(
+    hook_command: str,
+    bare_command: str,
+    *,
+    project_root: Path | None = None,
+    allow_project_local: bool = False,
+) -> bool:
+    """Whether *hook_command* is a safe bare, absolute-path, or module form of *bare_command*."""
     if hook_command == bare_command:
         return True
     try:
@@ -519,18 +542,35 @@ def _hook_cmd_matches(hook_command: str, bare_command: str) -> bool:
         hook_bin = hook_tokens[0]
         if hook_bin == bare_bin:
             return True
+        if _path_head_is_project_local(hook_bin, project_root) and not allow_project_local:
+            return False
+        if (
+            "/" in hook_bin or "\\" in hook_bin
+        ) and not Path(hook_bin).is_absolute() and not allow_project_local:
+            return False
         hook_base = hook_bin.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         return hook_base.lower() in {bare_bin.lower(), f"{bare_bin.lower()}.exe"}
 
     module_prefixes = (["-m", bare_bin], ["-P", "-m", bare_bin])
     for prefix in module_prefixes:
         if len(hook_tokens) == n + len(prefix) and hook_tokens[1 : 1 + len(prefix)] == prefix:
+            if _path_head_is_project_local(hook_tokens[0], project_root) and not allow_project_local:
+                return False
+            if (
+                "/" in hook_tokens[0] or "\\" in hook_tokens[0]
+            ) and not Path(hook_tokens[0]).is_absolute() and not allow_project_local:
+                return False
             return hook_tokens[1 + len(prefix) :] == bare_tokens[1:]
 
     return False
 
 
-def _has_unscoped_session_start_hook(settings: dict[str, Any], command: str) -> bool:
+def _has_unscoped_session_start_hook(
+    settings: dict[str, Any],
+    command: str,
+    *,
+    project_root: Path | None = None,
+) -> bool:
     """Whether *command* appears in an unscoped/wildcard SessionStart block."""
     if not isinstance(settings, dict):
         return False
@@ -549,12 +589,16 @@ def _has_unscoped_session_start_hook(settings: dict[str, Any], command: str) -> 
         if not isinstance(hook_list, list):
             continue
         for hook in hook_list:
-            if isinstance(hook, dict) and _hook_cmd_matches(hook.get("command", ""), command):
+            if isinstance(hook, dict) and _hook_cmd_matches(
+                hook.get("command", ""),
+                command,
+                project_root=project_root,
+            ):
                 return True
     return False
 
 
-def _hook_command_is_stale(cmd: str) -> bool:
+def _hook_command_is_stale(cmd: str, *, project_root: Path | None = None) -> bool:
     """Whether a legis hook command can no longer run and needs re-pinning.
 
     Stale means the executable token cannot be exec'd: a bare token (portable
@@ -571,12 +615,20 @@ def _hook_command_is_stale(cmd: str) -> bool:
     if not tokens:
         return False
     head = tokens[0]
+    if _path_head_is_project_local(head, project_root):
+        return True
     if "/" not in head and "\\" not in head:
         return True  # bare form — pin to the resolved binary
     return not (Path(head).is_file() or shutil.which(head))
 
 
-def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_command: str) -> bool:
+def _upgrade_hook_commands(
+    settings: dict[str, Any],
+    bare_command: str,
+    new_command: str,
+    *,
+    project_root: Path | None = None,
+) -> bool:
     """Re-pin stale hook commands matching *bare_command* to *new_command*."""
     changed = False
     hooks = settings.get("hooks", {})
@@ -600,7 +652,16 @@ def _upgrade_hook_commands(settings: dict[str, Any], bare_command: str, new_comm
             if not isinstance(hook, dict):
                 continue
             cmd = hook.get("command", "")
-            if _hook_cmd_matches(cmd, bare_command) and cmd != new_command and _hook_command_is_stale(cmd):
+            if (
+                _hook_cmd_matches(
+                    cmd,
+                    bare_command,
+                    project_root=project_root,
+                    allow_project_local=True,
+                )
+                and cmd != new_command
+                and _hook_command_is_stale(cmd, project_root=project_root)
+            ):
                 hook["command"] = new_command
                 changed = True
     return changed
@@ -650,8 +711,17 @@ def install_claude_code_hooks(project_root: Path) -> tuple[bool, str]:
     prefix = shlex.join(_find_legis_command())
     session_context_cmd = f"{prefix} session-context"
 
-    upgraded = _upgrade_hook_commands(settings, SESSION_CONTEXT_COMMAND, session_context_cmd)
-    needs_add = not _has_unscoped_session_start_hook(settings, SESSION_CONTEXT_COMMAND)
+    upgraded = _upgrade_hook_commands(
+        settings,
+        SESSION_CONTEXT_COMMAND,
+        session_context_cmd,
+        project_root=project_root,
+    )
+    needs_add = not _has_unscoped_session_start_hook(
+        settings,
+        SESSION_CONTEXT_COMMAND,
+        project_root=project_root,
+    )
 
     if not needs_add:
         _atomic_write_text(settings_path, json.dumps(settings, indent=2) + "\n")

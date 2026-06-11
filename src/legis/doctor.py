@@ -241,7 +241,11 @@ def _hook_present(root: Path) -> bool:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return False
-    return _install._has_unscoped_session_start_hook(settings, _install.SESSION_CONTEXT_COMMAND)
+    return _install._has_unscoped_session_start_hook(
+        settings,
+        _install.SESSION_CONTEXT_COMMAND,
+        project_root=root,
+    )
 
 
 def check_hook(root: Path, *, repair: bool) -> DoctorCheck:

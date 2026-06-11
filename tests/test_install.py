@@ -568,6 +568,8 @@ def test_install_hooks_does_not_reuse_scoped_block(tmp_path):
     [
         ("legis session-context", True),
         ("/usr/local/bin/legis session-context", True),
+        ("./legis session-context", False),
+        ("bin/legis session-context", False),
         ("/path/python -P -m legis session-context", True),
         ("/path/python -m legis session-context", True),
         ("echo legis session-context", False),
@@ -735,6 +737,40 @@ def test_upgrade_hook_commands_tolerates_non_dict_settings():
 def test_has_unscoped_session_start_hook_tolerates_non_dict():
     assert install._has_unscoped_session_start_hook({"hooks": "nope"}, "legis session-context") is False
     assert install._has_unscoped_session_start_hook({}, "legis session-context") is False
+
+
+def test_has_unscoped_session_start_hook_rejects_repo_local_command(tmp_path):
+    settings = {
+        "hooks": {
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "./legis session-context"}]}
+            ]
+        }
+    }
+    assert (
+        install._has_unscoped_session_start_hook(
+            settings,
+            "legis session-context",
+            project_root=tmp_path,
+        )
+        is False
+    )
+
+
+def test_install_hooks_rewrites_repo_local_hook_command(tmp_path, monkeypatch):
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./legis session-context"}]}]}}
+        )
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, msg = install_claude_code_hooks(tmp_path)
+    assert ok, msg
+    blocks = json.loads((claude / "settings.json").read_text())["hooks"]["SessionStart"]
+    commands = [h["command"] for block in blocks for h in block["hooks"]]
+    assert commands == ["/opt/bin/legis session-context"]
 
 
 def test_install_hooks_leaves_user_scoped_block_command_untouched(tmp_path, monkeypatch):
@@ -936,8 +972,8 @@ def test_register_mcp_json_explicit_agent_id_updates_usable_entry_in_place(tmp_p
     assert entry["env"] == {"K": "V"}
 
 
-def test_install_hooks_does_not_rewrite_working_absolute_command(tmp_path, monkeypatch):
-    exe = _touch_exe(tmp_path / "tools" / "legis")
+def test_install_hooks_does_not_rewrite_working_absolute_command_outside_project(tmp_path, monkeypatch):
+    exe = _touch_exe(tmp_path.parent / f"{tmp_path.name}-external" / "legis")
     working = f"{exe} session-context"
     claude = tmp_path / ".claude"
     claude.mkdir()
@@ -950,6 +986,20 @@ def test_install_hooks_does_not_rewrite_working_absolute_command(tmp_path, monke
     cmds = _session_commands(json.loads((claude / "settings.json").read_text()))
     assert cmds == [working]
     assert "already" in msg
+
+
+def test_install_hooks_upgrades_project_local_absolute_command(tmp_path, monkeypatch):
+    exe = _touch_exe(tmp_path / "tools" / "legis")
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"{exe} session-context"}]}]}})
+    )
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/opt/bin/legis"])
+    ok, _ = install_claude_code_hooks(tmp_path)
+    assert ok
+    cmds = _session_commands(json.loads((claude / "settings.json").read_text()))
+    assert cmds == ["/opt/bin/legis session-context"]
 
 
 def test_install_hooks_upgrades_dead_absolute_command(tmp_path, monkeypatch):
