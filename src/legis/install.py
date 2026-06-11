@@ -206,7 +206,7 @@ def _build_instructions_block() -> str:
 
 # Reader counterpart to the opening marker built in `_build_instructions_block`.
 # It lives next to the writer (and is derived from the same `INSTRUCTIONS_MARKER`
-# constant) so the freshness check cannot silently desync from the marker format:
+# constant) so marker audits cannot silently desync from the marker format:
 # the prefix is `re.escape`d from the constant, and the token is captured as an
 # opaque `\S+` rather than re-encoding its `v{version}:{hash}` shape — so a future
 # change to the token shape needs no edit here. The round-trip is pinned by a test.
@@ -217,6 +217,29 @@ def _extract_marker_token(content: str) -> str | None:
     """Return the token from the first legis instruction marker, or ``None``."""
     m = _MARKER_TOKEN_RE.search(content)
     return m.group(1) if m else None
+
+
+def _instructions_block_is_current(content: str) -> bool:
+    """Return whether the installed top-level legis block exactly matches source.
+
+    The marker token is a hint, not proof: an attacker can leave the current
+    marker in place and edit the body. Freshness therefore compares the whole
+    owned block to the bundled block, using the same foreign-fence-aware bounds
+    as ``inject_instructions``.
+    """
+    start = _first_own_open_fence_pos(content)
+    if start == -1:
+        return False
+    own_end = content.find(_END_MARKER, start)
+    if own_end == -1:
+        return False
+    foreign = _first_foreign_fence_pos(content, start + len(INSTRUCTIONS_MARKER))
+    if own_end >= foreign:
+        return False
+    bound = own_end + len(_END_MARKER)
+    if content[start:bound] != _build_instructions_block():
+        return False
+    return _first_own_open_fence_pos(content[bound:]) == -1
 
 
 def _own_open_marker_tokens(content: str) -> list[str | None]:
@@ -231,9 +254,8 @@ def _own_open_marker_tokens(content: str) -> list[str | None]:
     The list length is the number of distinct legis blocks. More than one is a
     split brain — two divergent copies of the guidance — which the injector
     tolerates when it cannot canonicalise across a sibling's block (it warns and
-    leaves the stale copy). The freshness probe consumes this so it cannot read
-    "healthy" off the first marker alone while a stale second block survives
-    (INSTALL-1).
+    leaves the stale copy). Doctor consumes this so it cannot read "healthy" off
+    the first marker alone while a stale second block survives (INSTALL-1).
     """
     tokens: list[str | None] = []
     inside_foreign: str | None = None

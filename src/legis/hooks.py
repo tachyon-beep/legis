@@ -23,9 +23,8 @@ from pathlib import Path
 from legis.install import (
     INSTRUCTIONS_MARKER,
     SKILL_NAME,
-    _extract_marker_token,
     _get_skills_source_dir,
-    _marker_token,
+    _instructions_block_is_current,
     _skill_tree_fingerprint,
     inject_instructions,
     install_codex_skills,
@@ -39,15 +38,13 @@ logger = logging.getLogger(__name__)
 def refresh_instructions(root: Path) -> list[str]:
     """Refresh drifted legis instruction blocks and skill packs under *root*.
 
-    Compares the embedded ``v{version}:{hash}`` token against the current one
-    for ``CLAUDE.md`` / ``AGENTS.md`` (re-injecting on drift), and each installed
-    skill pack's tree fingerprint against the bundled source (reinstalling on
-    drift). Returns human-readable update messages (empty when everything is
-    current). Only marker-bearing files and already-installed skill packs are
-    touched.
+    Compares each owned ``CLAUDE.md`` / ``AGENTS.md`` block byte-for-byte
+    against the bundled block (re-injecting on drift), and each installed skill
+    pack's tree fingerprint against the bundled source (reinstalling on drift).
+    Returns human-readable update messages (empty when everything is current).
+    Only marker-bearing files and already-installed skill packs are touched.
     """
     messages: list[str] = []
-    current_token = _marker_token()
 
     for filename in ("CLAUDE.md", "AGENTS.md"):
         md_path = root / filename
@@ -60,7 +57,7 @@ def refresh_instructions(root: Path) -> list[str]:
             continue
         if INSTRUCTIONS_MARKER not in content:
             continue
-        if _extract_marker_token(content) == current_token:
+        if _instructions_block_is_current(content):
             continue
         ok, reason = inject_instructions(md_path)
         if ok:
@@ -103,7 +100,6 @@ def _instructions_posture(root: Path) -> str:
     failed (already warned by ``refresh_instructions``) — say so rather than
     claiming currency. Unreadable files mirror the refresh's skip semantics.
     """
-    current_token = _marker_token()
     seen = False
     for filename in ("CLAUDE.md", "AGENTS.md"):
         md_path = root / filename
@@ -116,7 +112,7 @@ def _instructions_posture(root: Path) -> str:
         if INSTRUCTIONS_MARKER not in content:
             continue
         seen = True
-        if _extract_marker_token(content) != current_token:
+        if not _instructions_block_is_current(content):
             return "instructions stale (refresh failed; see logs)"
     if not seen:
         return "instructions not installed (run legis install)"
