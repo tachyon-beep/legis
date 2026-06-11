@@ -585,15 +585,17 @@ def test_hook_cmd_matches(command, expected):
 # ---------------------------------------------------------------------------
 
 
-def test_register_mcp_json_creates_file_with_legis_entry(tmp_path):
+def test_register_mcp_json_creates_file_with_legis_entry(tmp_path, monkeypatch):
     from legis.install import register_mcp_json
 
+    monkeypatch.setattr(install, "_find_legis_command", lambda: ["/usr/bin/python3", "-P", "-m", "legis"])
     ok, msg = register_mcp_json(tmp_path)
     assert ok, msg
     data = json.loads((tmp_path / ".mcp.json").read_text())
     entry = data["mcpServers"]["legis"]
     assert entry["type"] == "stdio"
-    assert entry["args"][0] == "mcp"
+    assert entry["command"] == "/usr/bin/python3"
+    assert entry["args"] == ["-P", "-m", "legis", "mcp", "--agent-id", "claude-code"]
     assert "--agent-id" in entry["args"]
 
 
