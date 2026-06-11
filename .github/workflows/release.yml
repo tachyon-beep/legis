@@ -54,9 +54,44 @@ jobs:
           name: dist
           path: dist/
 
+  live-loomweave-conformance:
+    name: Live Loomweave SEI conformance
+    needs: [build]
+    runs-on: ubuntu-latest
+    env:
+      LOOMWEAVE_URL: ${{ vars.LOOMWEAVE_URL }}
+      LOOMWEAVE_LIVE_ORACLE_LOCATOR: ${{ vars.LOOMWEAVE_LIVE_ORACLE_LOCATOR }}
+      LEGIS_LOOMWEAVE_HMAC_KEY: ${{ secrets.LEGIS_LOOMWEAVE_HMAC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Require live oracle configuration
+        run: |
+          missing=()
+          for name in LOOMWEAVE_URL LOOMWEAVE_LIVE_ORACLE_LOCATOR LEGIS_LOOMWEAVE_HMAC_KEY; do
+            if [ -z "${!name}" ]; then
+              missing+=("${name}")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            joined="$(IFS=', '; echo "${missing[*]}")"
+            echo "::error::Missing required release conformance environment: ${joined}"
+            exit 1
+          fi
+
+      - name: Run live Loomweave oracle
+        run: uv run pytest tests/conformance/test_live_loomweave_oracle.py
+
   publish:
     name: Publish to PyPI
-    needs: [build]
+    needs: [build, live-loomweave-conformance]
     runs-on: ubuntu-latest
     environment:
       name: pypi

@@ -8,6 +8,11 @@ def _ci_steps():
     return workflow["jobs"]["test"]["steps"]
 
 
+def _release_jobs():
+    workflow = yaml.safe_load(Path(".github/workflows/release.yml").read_text())
+    return workflow["jobs"]
+
+
 def test_ci_enforces_coverage_threshold():
     commands = "\n".join(str(step.get("run", "")) for step in _ci_steps())
 
@@ -19,4 +24,24 @@ def test_ci_runs_sei_and_live_loomweave_conformance_targets():
     commands = "\n".join(str(step.get("run", "")) for step in _ci_steps())
 
     assert "tests/conformance/test_sei_oracle.py" in commands
+    assert "tests/conformance/test_live_loomweave_oracle.py" in commands
+
+
+def test_release_publish_requires_live_loomweave_conformance():
+    jobs = _release_jobs()
+    publish_needs = jobs["publish"]["needs"]
+
+    assert "live-loomweave-conformance" in jobs
+    assert "build" in publish_needs
+    assert "live-loomweave-conformance" in publish_needs
+
+    live_job = jobs["live-loomweave-conformance"]
+    assert "if" not in live_job
+    env = live_job["env"]
+    assert env["LOOMWEAVE_URL"] == "${{ vars.LOOMWEAVE_URL }}"
+    assert env["LOOMWEAVE_LIVE_ORACLE_LOCATOR"] == "${{ vars.LOOMWEAVE_LIVE_ORACLE_LOCATOR }}"
+    assert env["LEGIS_LOOMWEAVE_HMAC_KEY"] == "${{ secrets.LEGIS_LOOMWEAVE_HMAC_KEY }}"
+
+    commands = "\n".join(str(step.get("run", "")) for step in live_job["steps"])
+    assert "Missing required release conformance environment" in commands
     assert "tests/conformance/test_live_loomweave_oracle.py" in commands
