@@ -6,9 +6,23 @@ Legis is the fourth Weft product: the git/CI and governance side of the suite's 
 
 ## Status
 
-Legis is at **`1.0.0`** — the gold release. The standalone git/CI surfaces, the graded 2×2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are all built and tested; the git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving. The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`), and Legis now stands itself up via `legis install` (instruction block + `legis-workflow` skill pack + SessionStart hook + `.mcp.json` registration). `legis doctor [--fix]` provides an operator health view and safe repair for the install + config layer, tagging each problem `[auto-fixable]` or `[operator]` so it is clear what `--fix` will and will not touch, including report-only checks that name the enablement path when the governance surface is unwired (policy cells, Wardline routing) — it reports, it never auto-enables or touches a signing key.
+Legis is at **`1.0.0`** — the gold release. The standalone git/CI surfaces, the graded 2x2 enforcement engine, the agent-programmable policy grammar, SEI-keyed attestations, and the Wardline/Filigree suite combinations are built and tested. The git-rename provider to Loomweave is contract-locked, operative pending Loomweave's committed-range driving.
+
+The transport-agnostic service layer (WP-M1) and the agent-facing MCP surface on top of it have landed (`legis mcp`). The MCP surface now declares output schemas across its tools, exposes read-side governance/diagnostic tools (`doctor_get`, `override_list`, `policy_boundary_check`, lineage-honesty reads, `check_report`, `signoff_bind_issue`), and keeps the API/MCP/CLI paths routed through the same service layer instead of duplicating governance decisions.
+
+Legis stands itself up with `legis install`: instruction block, `legis-workflow` skill pack, SessionStart hook, `.mcp.json` registration, and the Legis-only `.weft/legis/` ignore rule. `legis doctor [--fix]` provides an operator health view and safe repair for the install + config layer, tagging each problem `[auto-fixable]` or `[operator]` so it is clear what `--fix` will and will not touch. Doctor names enablement paths when governance is unwired (policy cells, Wardline routing), but it reports rather than auto-enabling policy surfaces or touching signing keys.
 
 Gold was earned, not declared: 1.0.0 was first cut on 2026-06-09, then re-opened when a P0 governance-honesty false-green (G1 — an absent Wardline `findings` key routing zero defects under a green status) was caught *after* the cut. The fix, the cross-member conformance vector that makes it real, and a small batch of follow-through hardening shipped before final. See the combination matrix below for per-pairing status and `CHANGELOG.md` for the full release notes.
+
+### Last week in practical terms
+
+The last week moved Legis from "feature-complete release candidate" to "operationally hardened gold":
+
+- **Release and conformance.** PyPI publishing is gated on live Loomweave SEI conformance with required `LOOMWEAVE_URL`, `LOOMWEAVE_LIVE_ORACLE_LOCATOR`, and `LEGIS_LOOMWEAVE_HMAC_KEY`; optional CI-only skips no longer decide release integrity.
+- **Doctor and install hardening.** Doctor validates `.mcp.json` as an executable Legis stdio server, rejects repo-local SessionStart hooks, handles missing roots without crashing, and keeps audit-chain checks report-only instead of initializing truncated stores. Instruction refresh compares the whole owned block to the packaged block, not just the marker token.
+- **Governance honesty.** Wardline dirty unsigned artifacts no longer return transport success when nothing was governed; malformed or missing scan fields fail as malformed input rather than routing zero findings under green. Policy-boundary evidence fingerprints now include semantic decorators such as `pytest.mark.skip`, `parametrize`, and wrapper decorators.
+- **Configuration custody.** Repo `weft.toml` can no longer redirect Legis governance stores; explicit `LEGIS_*_DB` environment variables are the relocation mechanism. The root `.gitignore` ignores only `.weft/legis/`, not the whole shared `.weft/` namespace.
+- **Transport custody.** Filigree request signing sends the exact canonical bytes it signs and rejects redirects before `X-Weft-*` HMAC headers can leak. Loomweave/Filigree remote plaintext remains a dev-only escape hatch that voids response-integrity custody.
 
 ## The Weft suite
 
@@ -16,17 +30,20 @@ Gold was earned, not declared: 1.0.0 was first cut on 2026-06-09, then re-opened
 
 Weft is a suite of four tools that share a single substrate: a codebase modelled as **entities**, each carrying typed facts from different tools, all keyed on one durable identity, all freshness-honest, all consumable in one call.
 
-```
-                ┌──────────────── the entity (one durable identity: SEI) ───────────────┐
- Wardline ──taint facts──►                                                               │
- Loomweave  ──structure/linkages/lineage──►   [ Loomweave: identity authority + fact store ] │
- Legis    ──governance attestations──►                                                   │
- Filigree ──issue associations──►                                                        │
-                └─────────────────────────────────────────────────────────────────────┘
-                                          ▲
-                      one freshness-honest read: dossier(entity) / traverse(...)
-                                          ▲
-                                      a coding agent
+```mermaid
+flowchart LR
+    Agent["Coding agent"]
+    Entity["Entity dossier<br/>one durable identity: SEI"]
+    Loomweave["Loomweave<br/>identity authority + fact store"]
+    Wardline["Wardline<br/>taint and trust facts"]
+    Legis["Legis<br/>governance attestations"]
+    Filigree["Filigree<br/>issue associations"]
+
+    Wardline -->|"taint facts"| Entity
+    Loomweave -->|"structure, linkages, lineage"| Entity
+    Legis -->|"governance attestations"| Entity
+    Filigree -->|"issue associations"| Entity
+    Entity -->|"fresh dossier(entity) / traverse(...)"| Agent
 ```
 
 **Goal state:** a coding agent can ask *"what is true of this function, and what should I do about it?"* and get a complete, current, cited answer — and that answer stays correct when the function is renamed tomorrow.
@@ -62,7 +79,7 @@ SEI is the connective tissue of the whole matrix: one non-conformant binding orp
 
 ## What Legis is
 
-Legis is the planned Weft authority for:
+Legis is the Weft authority for:
 
 - project change provenance,
 - branch / commit / pull request context,
@@ -74,6 +91,20 @@ Legis answers: *what changed, in which branch/commit/PR/check context, and what 
 ### The governance 2×2
 
 Legis's enforcement surface is a **2×2**, and the base always stays weightless. Two independent axes: how much governance *structure* you want (simple / complex), and whether an LLM *judge* sits inline (off / on). Each axis is agent-set; every cell is genuinely useful.
+
+```mermaid
+flowchart TB
+    Policy["Policy fires at git/CI boundary"]
+    Policy --> Mode{"Configured cell"}
+    Mode --> Chill["Chill<br/>surface + recordable override"]
+    Mode --> Coached["Coached<br/>LLM wall before override records"]
+    Mode --> Structured["Structured<br/>human sign-off gate"]
+    Mode --> Protected["Protected<br/>signed verdicts + decay + override-rate gate"]
+    Chill --> Trail["SEI-keyed audit trail"]
+    Coached --> Trail
+    Structured --> Trail
+    Protected --> Trail
+```
 
 |  | **Judge OFF** | **Judge ON** |
 |---|---|---|
@@ -103,9 +134,9 @@ The elspeth CI judge (`/home/john/elspeth`) is the working design ancestor of th
 Legis is a governance-*honesty* tool, so it states its own residual limits plainly rather than leaving them in source comments:
 
 - **The coached cell is a model-robustness wall, not a cryptographic one.** A blocked agent clears the coached gate by convincing the LLM judge; a *malicious prompt injection* that persuades the model will likewise clear it. Structural injection (forging a verdict key) is closed and any transport/parse failure is fail-closed to `BLOCKED`, but the coached cell has no defense-in-depth against a model that is genuinely fooled. For verdicts that must not rest on the model's word, use the **protected** cell, where a judge `ACCEPTED` is advisory only and is downgraded to require operator sign-off (unless a deterministic, non-LLM validator confirms it).
-- **Tamper-evidence assumes the signing key is out of the attacker's reach, and is not absolute against raw DB-file writes.** v3 signing binds each record's chain position, so in-place edits, reordering, and renumbering are detected. A holder of raw write access to the governance `.db` can still *delete* a record and re-chain, or rewrite a record's policy to a non-protected value and strip its protected markers ("modify-to-unsigned"), or truncate the tail — these are residuals of the conceded raw-file-write threat tier. The opt-in `HeadAnchor` mitigates truncation/rewind (with a documented anchor-replay caveat). Keep the governance store on storage only the operator controls.
+- **Tamper-evidence assumes the signing key is out of the attacker's reach, and is not absolute against raw DB-file writes.** v3 signing binds each record's chain position, so in-place edits, reordering, and renumbering are detected. A holder of raw write access to the governance `.db` can still *delete* a record and re-chain, or rewrite a record's policy to a non-protected value and strip its protected markers ("modify-to-unsigned"), or truncate the tail — these are residuals of the conceded raw-file-write threat tier. The opt-in `HeadAnchor` mitigates truncation/rewind (with a documented anchor-replay caveat). `legis doctor` now refuses to bless zero-byte or missing-schema audit stores without creating replacement tables, but that is an operator diagnostic, not a substitute for storage custody. Keep the governance store on storage only the operator controls.
 - **Durability tier.** The audit store runs `synchronous=FULL`, but a power loss can still drop the most recent un-checkpointed appends; the trail stays internally consistent (a shortened-but-valid tail), it does not corrupt.
-- **SEI binding integrity rests on TLS by design.** The Weft request HMAC authenticates legis's *requests* to Loomweave/Filigree; it does not sign their *responses*. Response integrity is TLS's job. `LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1` permits plaintext to a remote sibling and therefore **voids that custody seal** (an on-path attacker could forge a stable identity binding) — it now logs a warning and is for dev/loopback use only.
+- **SEI binding integrity rests on TLS by design.** The Weft request HMAC authenticates legis's *requests* to Loomweave/Filigree; it does not sign their *responses*. Response integrity is TLS's job. The Filigree transport rejects redirects before signed `X-Weft-*` headers can be forwarded, but `LEGIS_ALLOW_INSECURE_REMOTE_HTTP=1` still permits plaintext to a remote sibling and therefore **voids that custody seal** (an on-path attacker could forge a stable identity binding) — it logs a warning and is for dev/loopback use only.
 
 **The full adversarial threat model is published — attack recipes and all.** Legis holds itself to the honesty bar it enforces, so both pre-1.0 adversarial reviews ship in the open, including the *reproduced* attack recipes for every residual above:
 
@@ -137,7 +168,7 @@ Legis is not:
 
 ### Loomweave
 
-Loomweave remains the sole authority for code identity and structure, including SEI. Legis is an SEI *consumer* (governance attestations key on SEI; SEI lineage is Legis's audit spine). Legis is also a *potential provider*: once Legis ships a git interface, it may supply the git-rename and history signals the SEI re-binding matcher consumes — but that does not move identity authority out of Loomweave.
+Loomweave remains the sole authority for code identity and structure, including SEI. Legis is an SEI *consumer* (governance attestations key on SEI; SEI lineage is Legis's audit spine). Legis is also a git-signal provider: the git interface and rename feed are built and contract-locked for Loomweave's SEI matcher, but operative use still depends on Loomweave driving a committed rev-range. That does not move identity authority out of Loomweave.
 
 ### Filigree
 
@@ -149,7 +180,7 @@ Wardline remains the authority for policy findings, taint facts, and dossier tru
 
 The division of responsibility is explicit: **Wardline analyses trust; Legis governs it — one judge, not two.** Wardline already has the gate primitive (`--fail-on`, exit codes); Legis adds the governed policy layer around it. This is Wardline's Milestone 5 (governance & trust-vocabulary convergence) from its roadmap — Wardline's half is thin and ready; the gate is Legis existing.
 
-When Legis ships, the Wardline + Legis combination unlocks:
+With Legis live, the Wardline + Legis combination unlocks:
 - agent-defined policy, enforced at the git/CI boundary with graded modes;
 - trust-vocabulary convergence — one `@trust_boundary` grammar across the suite, delivering elspeth's custody and fabrication-test guarantees in Weft's own terms, not a second naming scheme bolted on beside the first; and
 - the full chill → coached → protected progression across the 2×2, with Wardline's findings as the input and Legis's enforcement layer as the output.
