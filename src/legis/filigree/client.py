@@ -9,6 +9,7 @@ content hash for Filigree to store verbatim; drift comparison stays legis's job.
 from __future__ import annotations
 
 import json
+import http.client
 import ipaddress
 import logging
 import os
@@ -102,11 +103,25 @@ def _urllib_fetch(
     for name, value in (headers or {}).items():
         req.add_header(name, value)
     try:
-        with urllib.request.urlopen(req, timeout=10.0) as resp:  # noqa: S310 (trusted Filigree URL)
+        with _open_no_redirect(req) as resp:  # noqa: S310 (trusted Filigree URL)
             decoded = _decode_json_response(resp, f"{method} {url}")
-    except (urllib.error.URLError, ValueError) as exc:
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise FiligreeError(f"{method} {url} redirect not allowed: {exc.code}") from exc
+        raise FiligreeError(f"{method} {url} failed: {exc}") from exc
+    except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException) as exc:
         raise FiligreeError(f"{method} {url} failed: {exc}") from exc
     return _require_dict(decoded, f"{method} {url}")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+def _open_no_redirect(req: urllib.request.Request) -> Any:
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    return opener.open(req, timeout=10.0)
 
 
 def _decode_json_response(resp: Any, context: str) -> Any:

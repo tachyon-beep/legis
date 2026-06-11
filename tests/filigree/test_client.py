@@ -168,8 +168,6 @@ def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
     # request body verifies against the captured signature.
     import hashlib
     import hmac
-    import urllib.request
-
     import legis.filigree.client as client_mod
 
     captured = {}
@@ -186,12 +184,12 @@ def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    def fake_urlopen(req, timeout=None):
+    def fake_open_no_redirect(req):
         captured["data"] = req.data
         captured["headers"] = dict(req.header_items())
         return _FakeResp()
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client_mod, "_open_no_redirect", fake_open_no_redirect)
 
     key = b"weft-key"
     c = HttpFiligreeClient("https://filigree.example", hmac_key=key)
@@ -239,14 +237,58 @@ def test_path_and_query_includes_query_string():
 def test_urllib_fetch_wraps_transport_error(monkeypatch):
     # A urllib URLError (DNS failure, connection refused, timeout) surfaces as a
     # typed FiligreeError, never an unhandled urllib exception.
-    import urllib.request
+    import urllib.error
 
     def boom(req, timeout=None):
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    monkeypatch.setattr(client_mod, "_open_no_redirect", boom)
     with pytest.raises(FiligreeError, match="connection refused"):
         client_mod._urllib_fetch("GET", "https://filigree.example/api/x", None)
+
+
+def test_urllib_fetch_rejects_redirects_before_hmac_headers_can_leak():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    captured = {}
+
+    class _RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/start":
+                self.send_response(302)
+                self.send_header("Location", "/leak")
+                self.end_headers()
+                return
+            if self.path == "/leak":
+                captured["headers"] = dict(self.headers)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+                return
+            self.send_error(404)
+
+        def log_message(self, _format, *args):  # noqa: A002
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/start"
+        headers = {
+            "X-Weft-Component": "filigree:secret",
+            "X-Weft-Timestamp": "1700000000",
+            "X-Weft-Nonce": "nonce",
+        }
+        with pytest.raises(FiligreeError, match="redirect not allowed"):
+            client_mod._urllib_fetch("GET", url, None, headers)
+        assert "headers" not in captured
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_decode_rejects_non_json_content_type():
