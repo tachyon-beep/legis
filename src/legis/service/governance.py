@@ -26,6 +26,9 @@ from legis.identity.resolver import IdentityResolver
 from legis.policy.grammar import PolicyEvaluation, PolicyGrammar, PolicyResult
 from legis.service.errors import (
     AuditIntegrityError,
+    BindingUnavailableError,
+    NoSuchRequestError,
+    NotClearedError,
     NotEnabledError,
     ProtectedKeyRequiredError,
 )
@@ -320,6 +323,161 @@ def request_signoff(
         agent_id=agent_id,
         extensions={**ext, **(extra_extensions or {})},
     )
+
+
+def read_identity_gaps(
+    identity: IdentityResolver | None,
+    records: Callable[[], list],
+) -> dict[str, Any]:
+    """The identity-gap read: which attestations' SEIs does Loomweave report dead?
+
+    GOV-2 honesty: a bare ``[]`` when Loomweave is unwired would read as an
+    all-clear on exactly the condition this read exists to catch, so the
+    payload always discriminates ``status: "unavailable"`` (could not check,
+    with reasons) from ``status: "checked"`` (checked, possibly zero gaps).
+    ``records`` is called only when a check can actually run.
+    """
+    from legis.governance.gaps import find_orphan_gaps
+
+    if identity is None or identity.client is None:
+        return {
+            "status": "unavailable",
+            "gaps": [],
+            "unavailable": [{"reason": "loomweave client not configured"}],
+        }
+    gaps = find_orphan_gaps(records(), identity.client)
+    return {
+        "status": "checked",
+        "gaps": [
+            {"sei": g.sei, "reason": g.reason, "lineage": g.lineage}
+            for g in gaps
+        ],
+    }
+
+
+def read_lineage_integrity(
+    identity: IdentityResolver | None,
+    records: Callable[[], list],
+) -> dict[str, Any]:
+    """The lineage-integrity read: do recorded snapshots still prefix lineage?
+
+    GOV-1 honesty: three-way status with ``diverged > unverified > verified``
+    precedence — a divergence is never masked by an unavailable sibling, and an
+    unverifiable lineage is never reported verified. Same unwired discipline as
+    ``read_identity_gaps``.
+    """
+    from legis.governance.gaps import find_lineage_integrity
+
+    if identity is None or identity.client is None:
+        return {
+            "status": "unavailable",
+            "divergences": [],
+            "unavailable": [{"reason": "loomweave client not configured"}],
+        }
+    integrity = find_lineage_integrity(records(), identity.client)
+    return {
+        "status": (
+            "diverged" if integrity.divergences
+            else "unverified" if integrity.unavailable
+            else "verified"
+        ),
+        "divergences": [
+            {"sei": d.sei, "recorded_length": d.recorded_length,
+             "current_length": d.current_length} for d in integrity.divergences
+        ],
+        "unavailable": [
+            {"sei": u.sei, "reason": u.reason} for u in integrity.unavailable
+        ],
+    }
+
+
+def _binding_entity_from_backfill(
+    records: list[Any], original_seq: int
+) -> tuple[EntityKey, str] | None:
+    """ADR-0003 recovery: resolve a locator-keyed request through SEI_BACKFILL.
+
+    Walks the verified trail newest-first for a ``SEI_BACKFILL`` event that
+    re-keys ``original_seq`` onto a stable SEI; returns the backfilled key and
+    content hash, or ``None`` when no usable backfill exists.
+    """
+    for rec in reversed(records):
+        payload = rec.payload
+        if payload.get("event") != "SEI_BACKFILL":
+            continue
+        if payload.get("original_seq") != original_seq:
+            continue
+        try:
+            entity_key = EntityKey.from_dict(payload["entity_key"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not entity_key.identity_stable:
+            continue
+        content_hash = payload.get("extensions", {}).get("loomweave", {}).get(
+            "content_hash"
+        ) or ""
+        return entity_key, content_hash
+    return None
+
+
+def bind_signoff_issue(
+    signoff_gate: SignoffGate | None,
+    trail_verifier,
+    filigree,
+    *,
+    issue_id: str,
+    request_seq: int,
+    key: bytes | None = None,
+    ledger=None,
+) -> dict[str, Any]:
+    """Bind a CLEARED structured sign-off to a Filigree issue.
+
+    The single bind decision both adapters drive (Q-H2): fail-closed trail
+    verification first, then a recorded and cleared request, then the SEI and
+    content hash sourced from the recorded request — never the caller — with
+    the ADR-0003 ``SEI_BACKFILL`` recovery for locator-keyed requests, then the
+    attach + ledger record via ``bind_signoff_to_issue``.
+    """
+    from legis.governance.signoff_binding import bind_signoff_to_issue
+
+    if filigree is None:
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "filigree binding not enabled: ask the operator to set "
+            "FILIGREE_API_URL (out-of-band) and relaunch"
+        )
+    if signoff_gate is None:
+        raise NotEnabledError(
+            "structured cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
+    records = verified_records(signoff_gate, trail_verifier, lambda: [])
+    request = signoff_gate.request_record(request_seq)
+    if request is None:
+        raise NoSuchRequestError(f"no sign-off request at seq {request_seq}")
+    if not signoff_gate.is_cleared(request_seq):
+        raise NotClearedError("sign-off not cleared")
+    entity_key = EntityKey.from_dict(request["entity_key"])
+    content_hash = request.get("extensions", {}).get("loomweave", {}).get(
+        "content_hash"
+    ) or ""
+    if not entity_key.identity_stable:
+        backfilled = _binding_entity_from_backfill(records, request_seq)
+        if backfilled is not None:
+            entity_key, content_hash = backfilled
+    try:
+        return bind_signoff_to_issue(
+            filigree,
+            issue_id=issue_id,
+            entity_key=entity_key,
+            content_hash=content_hash,
+            signoff_seq=request_seq,
+            key=key,
+            ledger=ledger,
+        )
+    except ValueError as exc:
+        # ADR-0003 fail-closed: a locator-keyed (non-SEI) sign-off cannot be
+        # rename-stably bound; the sign-off stands, only the pointer waits.
+        raise BindingUnavailableError(str(exc)) from exc
 
 
 def sign_off(

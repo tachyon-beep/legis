@@ -171,6 +171,7 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
         "policy_list",
         "override_submit",
         "signoff_status_get",
+        "signoff_bind_issue",
         "policy_evaluate",
         "scan_route",
         "git_branch_list",
@@ -181,7 +182,16 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
         "check_list",
         "override_rate_get",
         "filigree_closure_gate_get",
+        "identity_gap_list",
+        "lineage_integrity_get",
+        "check_report",
     }
+    # Named decision (legis-e5c57dedd1): PR recording stays OFF the agent
+    # surface — the forge, not the agent, is the source of truth for PR state;
+    # the legis PR store is a CI/forge-integration mirror (HTTP writer token).
+    # check_report IS exposed because the agent that ran the check is the
+    # natural source of that claim.
+    assert "pull_request_record" not in by_name
     assert "signoff_sign" not in by_name
     assert "protected_operator_override" not in by_name
     assert "operator_override" not in by_name
@@ -1828,6 +1838,9 @@ def test_every_emitted_error_code_yields_a_nonempty_next_action():
         "UNKNOWN_TOOL",
         "AUDIT_INTEGRITY_FAILURE",
         "GIT_ERROR",
+        "SIGNOFF_NOT_CLEARED",
+        "BINDING_UNAVAILABLE",
+        "FILIGREE_UNAVAILABLE",
         # codes that hit the default next_action (still must be non-empty)
         "SERVICE_ERROR",
         "INTERNAL_ERROR",
@@ -2111,3 +2124,626 @@ def test_service_error_does_not_log_expected_typed_errors(caplog):
 
     assert result["structuredContent"]["error_code"] == "NOT_FOUND"
     assert not caplog.records
+
+
+# --- legis-428f05c9ca: signoff_bind_issue + binding read over pure MCP ---
+
+class _FakeFiligree:
+    def __init__(self):
+        self.attached = []
+
+    def attach(self, issue_id, entity_id, content_hash, *, actor,
+               signoff_seq=None, signature=None):
+        self.attached.append(
+            (issue_id, entity_id, content_hash, actor, signoff_seq, signature)
+        )
+        return {"issue_id": issue_id, "loomweave_entity_id": entity_id,
+                "content_hash_at_attach": content_hash, "attached_at": "t",
+                "attached_by": actor}
+
+    def associations_for_entity(self, entity_id):
+        return []
+
+
+def _bind_runtime(tmp_path, *, with_ledger=True):
+    from legis.governance.binding_ledger import BindingLedger
+
+    runtime, store = _runtime(tmp_path)
+    clock = FixedClock("2026-06-02T12:00:00+00:00")
+    runtime.signoff_gate = SignoffGate(store, clock)
+    runtime.filigree = _FakeFiligree()
+    if with_ledger:
+        runtime.binding_ledger = BindingLedger(
+            AuditStore(f"sqlite:///{tmp_path / 'bind.db'}"), clock, key=b"ledger-key"
+        )
+    runtime.binding_key = b"bind-key"
+    return runtime, store
+
+
+def _cleared_sei_request(gate, *, content_hash="blake3"):
+    req = gate.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
+        rationale="needs a human",
+        agent_id="agent-1",
+        extensions={"loomweave": {"content_hash": content_hash, "alive": True,
+                                  "lineage_snapshot": None}},
+    )
+    gate.sign_off(request_seq=req.seq, operator_id="op-1")
+    return req
+
+
+def test_signoff_bind_issue_is_listed():
+    from legis.mcp import tool_definitions
+
+    names = {t["name"] for t in tool_definitions()}
+    assert "signoff_bind_issue" in names
+    # The sign itself stays operator-only, off the agent surface (locked decision).
+    assert "signoff_sign" not in names
+
+
+def test_signoff_bind_issue_completes_the_pure_mcp_closure_flow(tmp_path):
+    # The legis-428f05c9ca acceptance: REQUEST (override_submit, covered
+    # elsewhere) -> poll -> BIND -> closure gate green, all over MCP tools only.
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    req = _cleared_sei_request(runtime.signoff_gate)
+
+    bound = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+    assert not bound.get("isError")
+    payload = bound["structuredContent"]
+    assert payload["binding_seq"] == 1
+    assert payload["signoff_seq"] == req.seq
+    # The SEI and content_hash come from the recorded, CLEARED sign-off — never
+    # from the caller (same governed sourcing as the HTTP bind-issue route).
+    issue_id, entity_id, chash, actor, seq, signature = runtime.filigree.attached[0]
+    assert (issue_id, entity_id, chash, actor, seq) == (
+        "ISSUE-1", "loomweave:eid:abc", "blake3", "legis", req.seq
+    )
+    assert signature is not None  # binding_key wired -> signed attestation
+
+    # The binding read rides in signoff_status_get's cleared payload.
+    status = call_tool(runtime, "signoff_status_get", {"seq": req.seq})
+    status_payload = status["structuredContent"]
+    assert status_payload["cleared"] is True
+    assert status_payload["binding"]["issue_id"] == "ISSUE-1"
+    assert status_payload["binding"]["entity_key"]["value"] == "loomweave:eid:abc"
+    assert status_payload["binding"]["content_hash"] == "blake3"
+
+    # And the Filigree closure gate goes green — the flow is completable.
+    gate = call_tool(runtime, "filigree_closure_gate_get", {"issue_id": "ISSUE-1"})
+    assert gate["structuredContent"]["allowed"] is True
+
+
+def test_signoff_status_get_cleared_payload_reports_unbound_as_null(tmp_path):
+    # Ledger wired but nothing bound yet: binding is an explicit null, so an
+    # agent can tell "not bound yet" from "no ledger on this deployment"
+    # (key omitted entirely — pinned by the exact-equality assertion in
+    # test_override_submit_structured_escalates_and_status_poll_reflects_signoff).
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    req = _cleared_sei_request(runtime.signoff_gate)
+
+    status = call_tool(runtime, "signoff_status_get", {"seq": req.seq})
+    payload = status["structuredContent"]
+    assert payload["cleared"] is True
+    assert payload["binding"] is None
+
+
+def test_signoff_bind_issue_rejects_uncleared_request_with_poll_guidance(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    req = runtime.signoff_gate.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_sei("loomweave:eid:abc"),
+        rationale="needs a human",
+        agent_id="agent-1",
+    )
+
+    result = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "SIGNOFF_NOT_CLEARED"
+    assert sc["recoverable"] is True
+    assert "signoff_status_get" in sc["next_action"]
+    assert runtime.filigree.attached == []
+
+
+def test_signoff_bind_issue_unknown_seq_is_no_such_request(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+
+    result = call_tool(runtime, "signoff_bind_issue", {"seq": 99, "issue_id": "I-1"})
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "NO_SUCH_REQUEST"
+    assert runtime.filigree.attached == []
+
+
+def test_signoff_bind_issue_locator_keyed_signoff_is_binding_unavailable(tmp_path):
+    # ADR-0003: a locator-keyed (non-SEI) sign-off fails closed rather than
+    # recording a rename-fragile binding. Typed amber, not INTERNAL_ERROR.
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    req = runtime.signoff_gate.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_locator("python:function:m.f"),
+        rationale="needs a human",
+        agent_id="agent-1",
+    )
+    runtime.signoff_gate.sign_off(request_seq=req.seq, operator_id="op-1")
+
+    result = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "BINDING_UNAVAILABLE"
+    assert runtime.filigree.attached == []
+
+
+def test_signoff_bind_issue_uses_sei_backfill_for_locator_keyed_request(tmp_path):
+    # The recovery half of ADR-0003: a SEI_BACKFILL event resolves the locator
+    # to a stable identity and the bind succeeds with the backfilled SEI.
+    from legis.mcp import call_tool
+
+    runtime, store = _bind_runtime(tmp_path)
+    req = runtime.signoff_gate.request(
+        policy="prod-deploy",
+        entity_key=EntityKey.from_locator("python:function:m.f"),
+        rationale="needs a human",
+        agent_id="agent-1",
+    )
+    runtime.signoff_gate.sign_off(request_seq=req.seq, operator_id="op-1")
+    store.append(
+        {
+            "event": "SEI_BACKFILL",
+            "original_seq": req.seq,
+            "entity_key": EntityKey.from_sei("loomweave:eid:abc").to_dict(),
+            "identity_stable": True,
+            "agent_id": "legis-sei-backfill",
+            "recorded_at": "2026-06-04T12:00:00+00:00",
+            "extensions": {
+                "loomweave": {
+                    "alive": True,
+                    "content_hash": "hash-abc",
+                    "lineage_snapshot": {"length": 1, "hash": "lineage"},
+                    "identity_resolution_status": "resolved",
+                    "lineage_snapshot_status": "verified",
+                },
+                "backfill": {
+                    "source": "pre_sei_locator",
+                    "original_seq": req.seq,
+                    "original_entity_key": EntityKey.from_locator(
+                        "python:function:m.f"
+                    ).to_dict(),
+                },
+            },
+        }
+    )
+
+    result = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+
+    assert not result.get("isError")
+    issue_id, entity_id, chash, _actor, _seq, _sig = runtime.filigree.attached[0]
+    assert (issue_id, entity_id, chash) == ("ISSUE-1", "loomweave:eid:abc", "hash-abc")
+
+
+def test_signoff_bind_issue_without_filigree_names_operator_knob(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    runtime.filigree = None
+
+    result = call_tool(runtime, "signoff_bind_issue", {"seq": 1, "issue_id": "I-1"})
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "CELL_NOT_ENABLED"
+    # LEG-2: the message names the operator knob, phrased as an operator action.
+    assert "FILIGREE_API_URL" in sc["message"]
+    assert "operator" in sc["message"]
+
+
+def test_signoff_bind_issue_without_signoff_gate_names_operator_key(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _runtime(tmp_path)  # no signoff gate wired
+    runtime.filigree = _FakeFiligree()
+
+    result = call_tool(runtime, "signoff_bind_issue", {"seq": 1, "issue_id": "I-1"})
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "CELL_NOT_ENABLED"
+    assert "LEGIS_HMAC_KEY" in sc["message"]
+
+
+def test_signoff_bind_issue_fails_closed_on_tampered_signed_signoff(tmp_path):
+    # Same fail-closed property the HTTP route has: a tampered signed sign-off
+    # trail is an AUDIT_INTEGRITY_FAILURE and nothing is attached to Filigree.
+    from legis.mcp import call_tool
+
+    runtime, _store = _bind_runtime(tmp_path)
+    db = tmp_path / "gov.db"
+    gate = SignoffGate(
+        AuditStore(f"sqlite:///{db}"),
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        signer=True,
+        key=KEY,
+    )
+    runtime.signoff_gate = gate
+    runtime.trail_verifier = TrailVerifier(KEY, frozenset())
+    req = _cleared_sei_request(gate)
+    _tamper_first_record_and_rechain(
+        db,
+        lambda p: p["extensions"]["loomweave"].update({"content_hash": "forged"}),
+    )
+
+    result = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+    assert runtime.filigree.attached == []
+
+
+def test_signoff_bind_issue_filigree_transport_failure_is_typed(tmp_path):
+    # A Filigree that is down/unreachable is an expected operational state for
+    # an agent — a typed, recoverable error, not INTERNAL_ERROR.
+    from legis.filigree.client import FiligreeError
+    from legis.mcp import call_tool
+
+    class _DownFiligree:
+        def attach(self, *a, **kw):
+            raise FiligreeError("POST http://filigree/attach failed: refused")
+
+        def associations_for_entity(self, entity_id):
+            return []
+
+    runtime, _store = _bind_runtime(tmp_path)
+    runtime.filigree = _DownFiligree()
+    req = _cleared_sei_request(runtime.signoff_gate)
+
+    result = call_tool(
+        runtime, "signoff_bind_issue", {"seq": req.seq, "issue_id": "ISSUE-1"}
+    )
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "FILIGREE_UNAVAILABLE"
+    assert sc["recoverable"] is True
+
+
+def test_build_runtime_wires_filigree_and_binding_key_from_env(tmp_path, monkeypatch):
+    from legis.filigree.client import HttpFiligreeClient
+    from legis.mcp import build_runtime
+
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "secret")
+    monkeypatch.setenv("FILIGREE_API_URL", "http://localhost:8971")
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", f"sqlite:///{tmp_path / 'gov-env.db'}")
+    monkeypatch.setenv("LEGIS_BINDING_DB", f"sqlite:///{tmp_path / 'bind-env.db'}")
+
+    runtime = build_runtime("agent-launch")
+
+    assert isinstance(runtime.filigree, HttpFiligreeClient)
+    assert runtime.binding_key == b"secret"
+
+
+def test_build_runtime_leaves_filigree_unwired_without_env(tmp_path, monkeypatch):
+    from legis.mcp import build_runtime
+
+    monkeypatch.delenv("FILIGREE_API_URL", raising=False)
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+
+    runtime = build_runtime("agent-launch")
+
+    assert runtime.filigree is None
+    assert runtime.binding_key is None
+
+
+# --- legis-62c7c58ae4: SEI lineage-honesty reads over MCP ---
+
+class _FakeLoomweave:
+    """Duck-typed LoomweaveIdentity read client (mirrors tests/api FakeClient)."""
+
+    def __init__(self, lineage=None, alive=True):
+        self._lineage = lineage or []
+        self._alive = alive
+
+    def capability(self):
+        return True
+
+    def resolve_locator(self, locator):
+        return {"sei": "loomweave:eid:abc123", "current_locator": locator,
+                "content_hash": "h", "alive": True}
+
+    def resolve_sei(self, sei):
+        if self._alive:
+            return {"sei": sei, "alive": True}
+        return {"sei": sei, "alive": False, "lineage": [{"event": "orphaned"}]}
+
+    def lineage(self, sei):
+        return self._lineage
+
+
+def _sei_record(sei="loomweave:eid:abc123", *, loomweave_ext=None):
+    payload = {
+        "policy": "no-eval",
+        "entity_key": {"value": sei, "identity_stable": True},
+        "agent_id": "agent-1",
+        "rationale": "reviewed",
+    }
+    if loomweave_ext is not None:
+        payload["extensions"] = {"loomweave": loomweave_ext}
+    return payload
+
+
+def test_lineage_honesty_read_tools_are_listed():
+    from legis.mcp import tool_definitions
+
+    names = {t["name"] for t in tool_definitions()}
+    assert "identity_gap_list" in names
+    assert "lineage_integrity_get" in names
+
+
+def test_identity_gap_list_unwired_loomweave_is_unavailable_not_empty_green(tmp_path):
+    # GOV-2: a bare [] when Loomweave is unwired would read as an all-clear on
+    # exactly the condition the tool exists to catch. status must say so.
+    from legis.mcp import call_tool
+
+    runtime, _store = _runtime(tmp_path)  # no identity resolver wired
+
+    result = call_tool(runtime, "identity_gap_list", {})
+
+    assert not result.get("isError")
+    assert result["structuredContent"] == {
+        "status": "unavailable",
+        "gaps": [],
+        "unavailable": [{"reason": "loomweave client not configured"}],
+    }
+
+
+def test_lineage_integrity_get_unwired_loomweave_is_unavailable_not_verified(tmp_path):
+    # GOV-1 twin of the above for the lineage read.
+    from legis.mcp import call_tool
+
+    runtime, _store = _runtime(tmp_path)
+
+    result = call_tool(runtime, "lineage_integrity_get", {})
+
+    assert not result.get("isError")
+    assert result["structuredContent"] == {
+        "status": "unavailable",
+        "divergences": [],
+        "unavailable": [{"reason": "loomweave client not configured"}],
+    }
+
+
+def test_identity_gap_list_surfaces_orphaned_attestation(tmp_path):
+    from legis.identity.resolver import IdentityResolver
+    from legis.mcp import call_tool
+
+    runtime, store = _runtime(tmp_path)
+    runtime.identity = IdentityResolver(_FakeLoomweave(alive=False))
+    store.append(_sei_record())
+
+    result = call_tool(runtime, "identity_gap_list", {})
+
+    payload = result["structuredContent"]
+    assert payload["status"] == "checked"
+    assert payload["gaps"] == [
+        {"sei": "loomweave:eid:abc123", "reason": "orphaned",
+         "lineage": [{"event": "orphaned"}]}
+    ]
+
+
+def test_lineage_integrity_get_three_way_status_precedence(tmp_path):
+    # GOV-1: diverged > unverified > verified — a divergence is never masked by
+    # an unavailable sibling, and unavailable is never reported verified.
+    from legis.identity.resolver import IdentityResolver
+    from legis.mcp import call_tool
+
+    lineage = [{"event": "born"}]
+    runtime, store = _runtime(tmp_path)
+    runtime.identity = IdentityResolver(_FakeLoomweave(lineage=lineage))
+
+    # verified: snapshot is a prefix of the current lineage
+    store.append(_sei_record(loomweave_ext={
+        "lineage_snapshot": {"length": 1, "hash": content_hash(lineage)},
+    }))
+    verified = call_tool(runtime, "lineage_integrity_get", {})["structuredContent"]
+    assert verified == {"status": "verified", "divergences": [], "unavailable": []}
+
+    # unverified: a second SEI recorded with no snapshot
+    store.append(_sei_record("loomweave:eid:nosnap", loomweave_ext={
+        "lineage_snapshot": None, "lineage_snapshot_status": "unavailable",
+    }))
+    unverified = call_tool(runtime, "lineage_integrity_get", {})["structuredContent"]
+    assert unverified["status"] == "unverified"
+    assert unverified["divergences"] == []
+    assert unverified["unavailable"] == [
+        {"sei": "loomweave:eid:nosnap", "reason": "unavailable"}
+    ]
+
+    # diverged beats unverified: a third SEI whose recorded prefix no longer holds
+    store.append(_sei_record("loomweave:eid:diverged", loomweave_ext={
+        "lineage_snapshot": {"length": 1, "hash": "not-the-recorded-prefix"},
+    }))
+    diverged = call_tool(runtime, "lineage_integrity_get", {})["structuredContent"]
+    assert diverged["status"] == "diverged"
+    assert diverged["divergences"] == [
+        {"sei": "loomweave:eid:diverged", "recorded_length": 1, "current_length": 1}
+    ]
+    assert diverged["unavailable"] == [
+        {"sei": "loomweave:eid:nosnap", "reason": "unavailable"}
+    ]
+
+
+def test_identity_gap_list_reads_trail_on_fresh_runtime(tmp_path, monkeypatch):
+    # The keyless trail is read through the lazily-initialised engine store, so
+    # the result is not call-order-dependent (same bug class as the
+    # pull_request_get fresh-runtime fix): a fresh runtime must see records an
+    # earlier session persisted, not report a hollow zero-gap green.
+    from legis.identity.resolver import IdentityResolver
+    from legis.mcp import McpRuntime, call_tool
+
+    db = f"sqlite:///{tmp_path / 'gov.db'}"
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", db)
+    AuditStore(db).append(_sei_record())
+    runtime = McpRuntime(
+        agent_id="agent-1",
+        initialized=True,
+        identity=IdentityResolver(_FakeLoomweave(alive=False)),
+    )
+
+    result = call_tool(runtime, "identity_gap_list", {})
+
+    payload = result["structuredContent"]
+    assert payload["status"] == "checked"
+    assert [g["sei"] for g in payload["gaps"]] == ["loomweave:eid:abc123"]
+
+
+def test_lineage_honesty_reads_fail_closed_on_tampered_protected_trail(tmp_path):
+    # Same fail-closed property as the HTTP routes (tampered trail -> 500): the
+    # reads consume the VERIFIED trail, never a tampered one.
+    from legis.identity.resolver import IdentityResolver
+    from legis.mcp import call_tool
+
+    db = tmp_path / "gov.db"
+    store = AuditStore(f"sqlite:///{db}")
+    gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=_ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
+        key=KEY,
+    )
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="original",
+        agent_id="agent-launch",
+        file_fingerprint="fp",
+        ast_path="ap",
+    )
+    _tamper_first_record_and_rechain(db, lambda p: p.update({"rationale": "FORGED"}))
+
+    runtime, _unused = _runtime(tmp_path)
+    runtime.engine = None
+    runtime.protected_gate = gate
+    runtime.trail_verifier = TrailVerifier(KEY, frozenset({"no-eval"}))
+    runtime.identity = IdentityResolver(_FakeLoomweave())
+
+    for tool in ("identity_gap_list", "lineage_integrity_get"):
+        result = call_tool(runtime, tool, {})
+        assert result["isError"] is True, tool
+        assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+
+
+# --- legis-e5c57dedd1: check_report write + pull_request_record named decision ---
+
+def test_check_report_records_launch_bound_agent_and_reads_back(tmp_path):
+    from legis.mcp import call_tool
+
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    runtime, _store = _runtime(tmp_path, agent_id="agent-ci", check_surface=checks)
+
+    result = call_tool(runtime, "check_report", {
+        "check_name": "pytest",
+        "run_id": "run-1",
+        "commit_sha": "c" * 40,
+        "outcome": "fail",
+        "branch": "rc5",
+        "pr": 7,
+    })
+
+    assert not result.get("isError")
+    payload = result["structuredContent"]
+    assert payload["check_name"] == "pytest"
+    assert payload["outcome"] == "fail"
+    # Attribution is the launch-bound agent_id (stronger than the HTTP writer
+    # token), never a call argument.
+    assert payload["recorded_by"] == "agent-ci"
+    # Q-M2 honesty: a recorded check is a writer-supplied claim, not a
+    # forge-attested fact — the recorder sees that posture in the result.
+    assert payload["provenance"] == "unauthenticated"
+
+    listed = call_tool(runtime, "check_list", {"target_type": "pr", "target": "7"})
+    assert [c["run_id"] for c in listed["structuredContent"]["checks"]] == ["run-1"]
+    by_commit = call_tool(
+        runtime, "check_list", {"target_type": "commit", "target": "c" * 40}
+    )
+    assert [c["run_id"] for c in by_commit["structuredContent"]["checks"]] == ["run-1"]
+
+
+def test_check_report_rejects_unknown_outcome_without_recording(tmp_path):
+    from legis.mcp import call_tool
+
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    runtime, _store = _runtime(tmp_path, check_surface=checks)
+
+    result = call_tool(runtime, "check_report", {
+        "check_name": "pytest", "run_id": "run-1",
+        "commit_sha": "c" * 40, "outcome": "green",
+    })
+
+    assert result["isError"] is True
+    sc = result["structuredContent"]
+    assert sc["error_code"] == "INVALID_ARGUMENT"
+    # The message names the valid vocabulary (LEG-2 quality bar).
+    for valid in ("pass", "fail", "skipped", "timeout"):
+        assert valid in sc["message"]
+    assert checks.for_commit("c" * 40) == []
+
+
+def test_check_report_rejects_caller_supplied_identity(tmp_path):
+    # The launch-binding is the attribution; identity-shaped arguments are
+    # rejected as unexpected keys, same as every other tool on the surface.
+    from legis.mcp import call_tool
+
+    checks = CheckSurface(f"sqlite:///{tmp_path / 'checks.db'}")
+    runtime, _store = _runtime(tmp_path, check_surface=checks)
+
+    for forged in ({"agent_id": "someone-else"}, {"recorded_by": "someone-else"}):
+        result = call_tool(runtime, "check_report", {
+            "check_name": "pytest", "run_id": "run-1",
+            "commit_sha": "c" * 40, "outcome": "pass", **forged,
+        })
+        assert result["isError"] is True, forged
+        assert result["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert checks.for_commit("c" * 40) == []
+
+
+def test_check_report_records_on_fresh_runtime(tmp_path, monkeypatch):
+    # The check surface lazily initialises from LEGIS_CHECK_DB on a fresh
+    # runtime (build_runtime leaves it None) — recording must not depend on
+    # some other tool having initialised the surface first.
+    from legis.mcp import McpRuntime, call_tool
+
+    db = f"sqlite:///{tmp_path / 'checks.db'}"
+    monkeypatch.setenv("LEGIS_CHECK_DB", db)
+    runtime = McpRuntime(agent_id="agent-fresh", initialized=True)
+
+    result = call_tool(runtime, "check_report", {
+        "check_name": "ruff", "run_id": "run-9",
+        "commit_sha": "d" * 40, "outcome": "pass",
+    })
+
+    assert not result.get("isError")
+    recorded = CheckSurface(db).for_commit("d" * 40)
+    assert [r.run_id for r in recorded] == ["run-9"]
+    assert recorded[0].recorded_by == "agent-fresh"

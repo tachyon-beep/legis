@@ -43,19 +43,23 @@ from legis.enforcement.signoff import SignoffGate
 from legis.git.pull_request import PullRequestSource
 from legis.git.rename_feed import build_rename_feed
 from legis.git.surface import GitError, GitSurface
-from legis.governance.gaps import find_lineage_integrity, find_orphan_gaps
 from legis.filigree.client import FiligreeClient
 from legis.governance.binding_ledger import BindingError, BindingLedger
-from legis.governance.signoff_binding import bind_signoff_to_issue
 from legis.identity.entity_key import EntityKey
 from legis.identity.resolver import IdentityResolver
 from legis.service.errors import (
     AuditIntegrityError,
+    BindingUnavailableError,
     InvalidArgumentError,
+    NotClearedError,
     NotEnabledError,
+    NotFoundError,
     WardlineRoutingError,
 )
+from legis.service.governance import bind_signoff_issue as _bind_signoff_issue
 from legis.service.governance import compute_override_rate as _compute_override_rate
+from legis.service.governance import read_identity_gaps as _read_identity_gaps
+from legis.service.governance import read_lineage_integrity as _read_lineage_integrity
 from legis.service.governance import evaluate_policy as _evaluate_policy
 from legis.service.governance import request_signoff as _request_signoff
 from legis.service.governance import resolve_for_record as _resolve_for_record
@@ -283,28 +287,6 @@ def _pull_to_dict(pr: PullRequest) -> dict:
     d = asdict(pr)
     d["state"] = pr.state.value
     return d
-
-
-def _binding_entity_from_backfill(
-    records: list[Any], original_seq: int
-) -> tuple[EntityKey, str] | None:
-    for rec in reversed(records):
-        payload = rec.payload
-        if payload.get("event") != "SEI_BACKFILL":
-            continue
-        if payload.get("original_seq") != original_seq:
-            continue
-        try:
-            entity_key = EntityKey.from_dict(payload["entity_key"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if not entity_key.identity_stable:
-            continue
-        content_hash = payload.get("extensions", {}).get("loomweave", {}).get(
-            "content_hash"
-        ) or ""
-        return entity_key, content_hash
-    return None
 
 
 def create_app(
@@ -634,46 +616,31 @@ def create_app(
     def bind_issue(
         request_seq: int, body: BindIssueIn, actor: str = Depends(verify_writer)
     ) -> dict:
-        if filigree is None:
-            raise HTTPException(status_code=404, detail="filigree binding not enabled")
-        if signoff_gate is None:
-            raise HTTPException(status_code=404, detail="structured cell not enabled")
-        # Fail-closed trail verification via the single service decision rather
-        # than an inline re-implementation (Q-H2): integrity + HMAC tamper check.
+        # The whole bind decision — fail-closed trail verification, cleared
+        # request, SEI/content_hash sourced from the record (never the caller),
+        # SEI_BACKFILL recovery — is the single service decision shared with the
+        # MCP signoff_bind_issue tool (Q-H2). This route only maps errors.
         try:
-            records = _verified_records(signoff_gate, trail_verifier, signoff_gate.records)
-        except AuditIntegrityError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        req = signoff_gate.request_record(request_seq)
-        if req is None:
-            raise HTTPException(
-                status_code=404, detail="no sign-off request at seq"
-            )
-        if not signoff_gate.is_cleared(request_seq):
-            raise HTTPException(status_code=409, detail="sign-off not cleared")
-        # The SEI and content_hash come from the recorded request, never the
-        # caller — binding only what was actually signed off.
-        entity_key = EntityKey.from_dict(req["entity_key"])
-        content_hash = req.get("extensions", {}).get("loomweave", {}).get(
-            "content_hash"
-        ) or ""
-        if not entity_key.identity_stable:
-            backfilled = _binding_entity_from_backfill(records, request_seq)
-            if backfilled is not None:
-                entity_key, content_hash = backfilled
-        try:
-            return bind_signoff_to_issue(
+            return _bind_signoff_issue(
+                signoff_gate,
+                trail_verifier,
                 filigree,
                 issue_id=body.issue_id,
-                entity_key=entity_key,
-                content_hash=content_hash,
-                signoff_seq=request_seq,
+                request_seq=request_seq,
                 key=binding_key,
                 ledger=binding_ledger,
             )
-        except ValueError as exc:
+        except NotEnabledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AuditIntegrityError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except NotClearedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except BindingUnavailableError as exc:
             # A locator-keyed (non-SEI) sign-off can't be rename-stably bound.
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/signoff/{request_seq}/binding")
     def get_binding(request_seq: int) -> dict:
@@ -731,50 +698,18 @@ def create_app(
     # A tampered protected trail raises HTTP 500 before any scan is attempted.
     # When no client is wired there is nothing stable to probe.
 
+    # Both reads (GOV-1/GOV-2 honesty discipline: status "unavailable" vs
+    # "checked"/three-way, never a bare [] false-green) are single service
+    # decisions shared with the MCP identity_gap_list / lineage_integrity_get
+    # tools (Q-H2). verified_governance_records maps a tampered trail to 500.
+
     @app.get("/governance/identity-gaps")
     def identity_gaps() -> dict:
-        # GOV-2: distinguish "could not check" from "checked, zero gaps". A bare
-        # [] when Loomweave is unwired reads as an all-clear on the exact
-        # condition this endpoint exists to catch — the same false-green shape as
-        # GOV-1, which the sibling lineage-integrity endpoint already avoids.
-        if identity is None or identity.client is None:
-            return {
-                "status": "unavailable",
-                "gaps": [],
-                "unavailable": [{"reason": "loomweave client not configured"}],
-            }
-        gaps = find_orphan_gaps(verified_governance_records(), identity.client)
-        return {
-            "status": "checked",
-            "gaps": [
-                {"sei": g.sei, "reason": g.reason, "lineage": g.lineage}
-                for g in gaps
-            ],
-        }
+        return _read_identity_gaps(identity, verified_governance_records)
 
     @app.get("/governance/lineage-integrity")
     def lineage_integrity() -> dict:
-        if identity is None or identity.client is None:
-            return {
-                "status": "unavailable",
-                "divergences": [],
-                "unavailable": [{"reason": "loomweave client not configured"}],
-            }
-        integrity = find_lineage_integrity(verified_governance_records(), identity.client)
-        return {
-            "status": (
-                "diverged" if integrity.divergences
-                else "unverified" if integrity.unavailable
-                else "verified"
-            ),
-            "divergences": [
-                {"sei": d.sei, "recorded_length": d.recorded_length,
-                 "current_length": d.current_length} for d in integrity.divergences
-            ],
-            "unavailable": [
-                {"sei": u.sei, "reason": u.reason} for u in integrity.unavailable
-            ],
-        }
+        return _read_lineage_integrity(identity, verified_governance_records)
 
     # --- agent-programmable policy grammar (WP-4.1) ---
 

@@ -19,7 +19,7 @@ from typing import Any, TextIO
 
 from legis import __version__
 from legis.canonical import content_hash
-from legis.checks.models import CheckRun
+from legis.checks.models import CheckOutcome, CheckRun
 from legis.checks.surface import CheckSurface
 from legis.clock import SystemClock
 from legis.enforcement.engine import EnforcementEngine
@@ -27,6 +27,7 @@ from legis.enforcement.judge_factory import build_judge_from_env
 from legis.enforcement.protected import ProtectedGate, TrailVerifier, TamperError
 from legis.enforcement.signoff import SignoffGate
 from legis.enforcement.verdict import SignoffState, Verdict
+from legis.filigree.client import FiligreeError
 from legis.git.surface import GitError, GitSurface
 from legis.governance.binding_ledger import BindingError
 from legis.policy.cells import (
@@ -40,7 +41,10 @@ from legis.policy.grammar import PolicyGrammar, default_grammar
 from legis.pulls.surface import PullSurface
 from legis.service.errors import (
     AuditIntegrityError,
+    BindingUnavailableError,
     InvalidArgumentError,
+    NoSuchRequestError,
+    NotClearedError,
     NotEnabledError,
     NotFoundError,
     ServiceError,
@@ -48,8 +52,11 @@ from legis.service.errors import (
 )
 from legis.service.explain import explain_cell, explain_policy
 from legis.service.governance import (
+    bind_signoff_issue,
     compute_override_rate,
     evaluate_policy,
+    read_identity_gaps,
+    read_lineage_integrity,
     submit_override,
     submit_protected_override,
     request_signoff,
@@ -66,6 +73,7 @@ _AGENT_TOOLS = frozenset(
         "policy_list",
         "override_submit",
         "signoff_status_get",
+        "signoff_bind_issue",
         "policy_evaluate",
         "scan_route",
         "git_branch_list",
@@ -76,6 +84,9 @@ _AGENT_TOOLS = frozenset(
         "check_list",
         "override_rate_get",
         "filigree_closure_gate_get",
+        "identity_gap_list",
+        "lineage_integrity_get",
+        "check_report",
     }
 )
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
@@ -138,6 +149,8 @@ class McpRuntime:
     wardline_artifact_key: bytes | None = None
     wardline_allow_dirty: bool = False
     binding_ledger: Any | None = None
+    filigree: Any | None = None
+    binding_key: bytes | None = None
 
 
 def _load_policy_cell_registry() -> PolicyCellRegistry:
@@ -174,13 +187,24 @@ def build_runtime(agent_id: str) -> McpRuntime:
             HttpLoomweaveIdentity(loomweave_url, hmac_key=loomweave_hmac_key_from_env())
         )
 
+    filigree = None
+    filigree_url = os.environ.get("FILIGREE_API_URL")
+    if filigree_url:
+        from legis.filigree.client import HttpFiligreeClient
+
+        filigree = HttpFiligreeClient(filigree_url)
+
     protected_gate = None
     trail_verifier = None
     signoff_gate = None
     binding_ledger = None
+    binding_key = None
     hmac_key = os.environ.get("LEGIS_HMAC_KEY")
     if hmac_key:
         key = hmac_key.encode("utf-8")
+        # Same fallback the HTTP adapter uses: the binding attestation key is
+        # the governance HMAC key unless a dedicated one is injected.
+        binding_key = key
         store = AuditStore(governance_db_url())
         protected = protected_policies()
         trail_verifier = TrailVerifier(key, protected)
@@ -225,6 +249,8 @@ def build_runtime(agent_id: str) -> McpRuntime:
         ),
         wardline_allow_dirty=os.environ.get("LEGIS_WARDLINE_ALLOW_DIRTY") == "1",
         binding_ledger=binding_ledger,
+        filigree=filigree,
+        binding_key=binding_key,
     )
 
 
@@ -288,8 +314,28 @@ def tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "signoff_status_get",
-            "description": "Poll whether a structured sign-off request has been cleared.",
+            "description": (
+                "Poll whether a structured sign-off request has been cleared. "
+                "When cleared and the binding ledger is enabled, the payload "
+                "also carries the recorded Filigree binding for the seq "
+                "(binding: object, or null when not yet bound)."
+            ),
             "inputSchema": _schema(["seq"], {"seq": integer}),
+        },
+        {
+            "name": "signoff_bind_issue",
+            "description": (
+                "Bind a CLEARED structured sign-off to a Filigree issue. The "
+                "bound entity identity (SEI) and content hash come from the "
+                "recorded sign-off — never from the caller. Records the "
+                "verified binding evidence that filigree_closure_gate_get "
+                "reads, completing the sign-off → Filigree closure flow. The "
+                "sign-off must first be cleared by an operator (poll "
+                "signoff_status_get with the seq from override_submit)."
+            ),
+            "inputSchema": _schema(
+                ["seq", "issue_id"], {"seq": integer, "issue_id": string}
+            ),
         },
         {
             "name": "policy_evaluate",
@@ -380,6 +426,29 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": _schema(["issue_id"], {"issue_id": string}),
         },
         {
+            "name": "identity_gap_list",
+            "description": (
+                "List governance attestations whose SEI Loomweave now reports "
+                "dead (orphaned). Honest two-state payload: status 'checked' "
+                "(checked, possibly zero gaps) vs 'unavailable' (could not "
+                "check, with reasons) — never read an empty gaps list as "
+                "all-clear without status 'checked'."
+            ),
+            "inputSchema": _schema([], {}),
+        },
+        {
+            "name": "lineage_integrity_get",
+            "description": (
+                "Verify each recorded lineage snapshot is still a prefix of "
+                "the entity's current Loomweave lineage. Three-way status with "
+                "diverged > unverified > verified precedence: any divergence "
+                "wins, any unverifiable lineage blocks 'verified'. Appends "
+                "(rename/move) are legitimate; a removed or mutated prior "
+                "event is divergence."
+            ),
+            "inputSchema": _schema([], {}),
+        },
+        {
             "name": "pull_request_get",
             "description": "Read recorded pull-request metadata with joined check outcomes.",
             "inputSchema": _schema(["number"], {"number": string}),
@@ -399,6 +468,42 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "override_rate_get",
             "description": "Read the fixed operator force-past override-rate gate.",
             "inputSchema": _schema([], {}),
+        },
+        # Named decision (legis-e5c57dedd1): check recording IS on the agent
+        # surface — the agent that ran the check is the natural source of that
+        # claim, and the launch-bound agent_id is stronger attribution than the
+        # HTTP writer token. PR recording is NOT: the forge, not the agent, is
+        # the source of truth for PR state; the legis PR store is a CI/forge-
+        # integration mirror and stays HTTP-writer-only (POST /git/pulls).
+        {
+            "name": "check_report",
+            "description": (
+                "Record a CI/check outcome as the launch-bound agent (the "
+                "agent that ran the check is the natural recorder; "
+                "recorded_by is the launch-bound agent_id, never a call "
+                "argument). The recorded fact is a writer-supplied claim with "
+                "provenance 'unauthenticated' — readers must not treat it as "
+                "forge-attested."
+            ),
+            "inputSchema": _schema(
+                ["check_name", "run_id", "commit_sha", "outcome"],
+                {
+                    "check_name": string,
+                    "run_id": string,
+                    "commit_sha": string,
+                    "outcome": {
+                        "type": "string",
+                        "enum": [o.value for o in CheckOutcome],
+                    },
+                    "branch": string,
+                    "pr": integer,
+                    "ran_against": string,
+                    "rule_set": string,
+                    "policy_version": string,
+                    "started_at": string,
+                    "finished_at": string,
+                },
+            ),
         },
     ]
 
@@ -433,6 +538,23 @@ def _recovery_for(code: str) -> dict[str, Any]:
             "unenabled."
         ),
         "NO_SUCH_REQUEST": "Poll a known sign-off sequence returned by override_submit.",
+        "SIGNOFF_NOT_CLEARED": (
+            "The sign-off has not been cleared by an operator yet. Poll "
+            "signoff_status_get until cleared:true, then retry "
+            "signoff_bind_issue."
+        ),
+        "BINDING_UNAVAILABLE": (
+            "The cleared sign-off is locator-keyed (no stable SEI), so a "
+            "rename-stable Filigree binding would orphan (ADR-0003, "
+            "fail-closed). The sign-off itself stands. Ask the operator to "
+            "wire Loomweave identity (LOOMWEAVE_API_URL) so requests resolve "
+            "to an SEI, or retry after an SEI_BACKFILL recovery event."
+        ),
+        "FILIGREE_UNAVAILABLE": (
+            "The Filigree call failed at the transport layer; nothing was "
+            "bound. Check that Filigree is reachable at FILIGREE_API_URL and "
+            "retry."
+        ),
         "NOT_FOUND": "Refresh the target identifier and retry.",
         "UNKNOWN_TOOL": "Call tools/list and use one of the advertised tool names.",
         "AUDIT_INTEGRITY_FAILURE": "Stop and ask an operator to inspect the governance trail.",
@@ -473,8 +595,20 @@ def _service_error(exc: Exception) -> dict[str, Any]:
         return _tool_error("AUDIT_INTEGRITY_FAILURE", str(exc))
     if isinstance(exc, NotEnabledError):
         return _tool_error("CELL_NOT_ENABLED", str(exc))
+    if isinstance(exc, NoSuchRequestError):
+        # Subclass of NotFoundError — must precede it to keep the sign-off
+        # flow's NO_SUCH_REQUEST code (same as signoff_status_get).
+        return _tool_error("NO_SUCH_REQUEST", str(exc))
     if isinstance(exc, NotFoundError):
         return _tool_error("NOT_FOUND", str(exc))
+    if isinstance(exc, NotClearedError):
+        return _tool_error("SIGNOFF_NOT_CLEARED", str(exc))
+    if isinstance(exc, BindingUnavailableError):
+        return _tool_error("BINDING_UNAVAILABLE", str(exc))
+    if isinstance(exc, FiligreeError):
+        # A down/unreachable Filigree is an expected operational state for an
+        # agent — typed and recoverable, not an INTERNAL_ERROR.
+        return _tool_error("FILIGREE_UNAVAILABLE", str(exc))
     if isinstance(exc, InvalidArgumentError):
         return _tool_error("INVALID_ARGUMENT", str(exc))
     if isinstance(exc, WardlineRoutingError):
@@ -1012,7 +1146,33 @@ def _tool_signoff_status_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[
     if signed is not None:
         payload["signed_by"] = signed.get("agent_id")
         payload["signed_at"] = signed.get("recorded_at")
+    # The binding read rides in the cleared payload (legis-428f05c9ca): present
+    # only when the ledger is wired, so "not bound yet" (null) stays
+    # distinguishable from "no binding ledger on this deployment" (key absent).
+    # A BindingError propagates to AUDIT_INTEGRITY_FAILURE — never read forged.
+    if runtime.binding_ledger is not None:
+        payload["binding"] = runtime.binding_ledger.get(seq)
     return _tool_result(payload)
+
+
+def _tool_signoff_bind_issue(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    seq = _require_int(args, "seq")
+    issue_id = _require(args, "issue_id")
+    # The bind decision (fail-closed trail verification, cleared request,
+    # SEI/content_hash from the record, SEI_BACKFILL recovery) is the single
+    # service decision shared with the HTTP bind-issue route (Q-H2). The
+    # attestation key and ledger are server-held — never call arguments (C-8).
+    return _tool_result(
+        bind_signoff_issue(
+            runtime.signoff_gate,
+            runtime.trail_verifier,
+            runtime.filigree,
+            issue_id=issue_id,
+            request_seq=seq,
+            key=runtime.binding_key,
+            ledger=runtime.binding_ledger,
+        )
+    )
 
 
 def _tool_policy_evaluate(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
@@ -1142,6 +1302,36 @@ def _tool_filigree_closure_gate_get(runtime: McpRuntime, args: dict[str, Any]) -
     )
 
 
+def _governance_trail_records(runtime: McpRuntime) -> list[Any]:
+    """The verified governance trail the SEI lineage-honesty reads consume.
+
+    Mirrors the HTTP adapter's ``verified_governance_records``: the protected
+    store when a protected gate is wired, the engine store otherwise — read
+    through ``_engine`` so a fresh runtime sees records an earlier session
+    persisted (not call-order-dependent; same bug class as the
+    pull_request_get fresh-runtime fix).
+    """
+    return service_verified_records(
+        runtime.protected_gate,
+        runtime.trail_verifier,
+        lambda: _engine(runtime).records(),
+    )
+
+
+def _tool_identity_gap_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    return _tool_result(
+        read_identity_gaps(runtime.identity, lambda: _governance_trail_records(runtime))
+    )
+
+
+def _tool_lineage_integrity_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    return _tool_result(
+        read_lineage_integrity(
+            runtime.identity, lambda: _governance_trail_records(runtime)
+        )
+    )
+
+
 def _tool_pull_request_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     number = _require_int(args, "number")
     pull = _pulls(runtime).get(number)
@@ -1191,6 +1381,42 @@ def _tool_check_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
     )
 
 
+def _tool_check_report(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    raw_outcome = _require(args, "outcome")
+    try:
+        outcome = CheckOutcome(raw_outcome)
+    except ValueError as exc:
+        valid = ", ".join(o.value for o in CheckOutcome)
+        raise InvalidArgumentError(
+            f"outcome {raw_outcome!r} is not a check outcome; must be one of: {valid}"
+        ) from exc
+    run = CheckRun(
+        check_name=_require(args, "check_name"),
+        run_id=_require(args, "run_id"),
+        commit_sha=_require(args, "commit_sha"),
+        outcome=outcome,
+        branch=_optional_string(args, "branch"),
+        pr=_require_int(args, "pr") if "pr" in args else None,
+        ran_against=_optional_string(args, "ran_against"),
+        rule_set=_optional_string(args, "rule_set"),
+        policy_version=_optional_string(args, "policy_version"),
+        started_at=_optional_string(args, "started_at"),
+        finished_at=_optional_string(args, "finished_at"),
+        recorded_by=runtime.agent_id,
+    )
+    _checks(runtime).record(run)
+    # The result echoes the recorded posture: who the launch binding attributed
+    # the claim to, and that it is unauthenticated (Q-M2) — the recorder is
+    # never led to believe its own report became forge-attested evidence.
+    return _tool_result(
+        {
+            **_check_to_dict(run),
+            "recorded_by": run.recorded_by,
+            "provenance": run.provenance,
+        }
+    )
+
+
 def _tool_override_rate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     rate = compute_override_rate(_verified_records(runtime))
     return _tool_result(
@@ -1208,6 +1434,7 @@ _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any
     "policy_list": _tool_policy_list,
     "override_submit": _tool_override_submit,
     "signoff_status_get": _tool_signoff_status_get,
+    "signoff_bind_issue": _tool_signoff_bind_issue,
     "policy_evaluate": _tool_policy_evaluate,
     "scan_route": _tool_scan_route,
     "git_branch_list": _tool_git_branch_list,
@@ -1215,8 +1442,11 @@ _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any
     "git_rename_list": _tool_git_rename_list,
     "git_rename_feed_get": _tool_git_rename_feed_get,
     "filigree_closure_gate_get": _tool_filigree_closure_gate_get,
+    "identity_gap_list": _tool_identity_gap_list,
+    "lineage_integrity_get": _tool_lineage_integrity_get,
     "pull_request_get": _tool_pull_request_get,
     "check_list": _tool_check_list,
+    "check_report": _tool_check_report,
     "override_rate_get": _tool_override_rate_get,
 }
 
