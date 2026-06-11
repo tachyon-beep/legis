@@ -692,6 +692,10 @@ def test_ensure_gitignore_does_not_accept_top_level_weft_rule(tmp_path):
     assert ".weft/legis/\n" in content
 
 
+def test_gitignore_rules_present_missing_root_is_false(tmp_path):
+    assert install.gitignore_rules_present(tmp_path / "missing") is False
+
+
 def test_ensure_gitignore_idempotent(tmp_path):
     ensure_gitignore(tmp_path)
     first = (tmp_path / ".gitignore").read_text()

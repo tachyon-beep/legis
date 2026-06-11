@@ -817,7 +817,7 @@ def gitignore_rules_present(project_root: Path) -> bool:
     """True iff every legis ignore rule is already a non-comment line in .gitignore."""
     try:
         gitignore = project_path(project_root, ".gitignore")
-    except UnsafeInstallPathError:
+    except (OSError, UnsafeInstallPathError):
         return False
     if not gitignore.exists():
         return False
@@ -866,7 +866,7 @@ def ensure_gitignore(project_root: Path) -> tuple[bool, str]:
     """Ensure legis's runtime-state subtree (``.weft/legis/``) is ignored."""
     try:
         gitignore = project_path(project_root, ".gitignore")
-    except UnsafeInstallPathError as exc:
+    except (OSError, UnsafeInstallPathError) as exc:
         return False, str(exc)
 
     if gitignore.exists():

@@ -430,6 +430,16 @@ def test_gitignore_absent_is_error_then_repaired(tmp_path):
     assert ".weft/legis/" in (tmp_path / ".gitignore").read_text()
 
 
+def test_gitignore_missing_root_reports_error_instead_of_raising(tmp_path):
+    missing = tmp_path / "missing"
+    c = check_gitignore(missing, repair=False)
+    assert c.status == "error"
+    assert ".weft/legis/" in (c.message or "")
+    repaired = check_gitignore(missing, repair=True)
+    assert repaired.status == "error"
+    assert str(missing) in (repaired.message or "")
+
+
 def test_skill_pack_absent_is_error(tmp_path):
     assert check_skill_pack(tmp_path, ".claude", repair=False).status == "error"
 
