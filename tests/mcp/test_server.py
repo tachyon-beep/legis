@@ -1314,10 +1314,10 @@ def _dirty_scan():
     }
 
 
-def test_scan_route_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
+def test_scan_route_dirty_tree_is_error_skip_not_success(tmp_path, monkeypatch):
     # P1: a dirty dev artifact in the CI posture (key configured) is a typed
-    # amber SKIPPED_DIRTY_TREE outcome, NOT the generic INVALID_ARGUMENT red,
-    # and nothing is governed.
+    # dirty-tree error, not a successful scan_route result, because nothing is
+    # governed.
     monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
     monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
     monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
@@ -1335,17 +1335,12 @@ def test_scan_route_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
         runtime,
     )[0]["result"]
 
-    assert result.get("isError") is not True
+    assert result["isError"] is True
     structured = result["structuredContent"]
-    assert structured["outcome"] == "SKIPPED_DIRTY_TREE"
-    assert structured["routed"] == []
+    assert structured["error_code"] == "WARDLINE_DIRTY_TREE"
+    assert "SKIPPED_DIRTY_TREE" in structured["message"]
+    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in structured["next_action"]
     assert store.read_all() == []
-    # N4 (weft-a7a92a40dd) / C-10(d): the skip is honest + actionable, not a
-    # prose-only blob — a harness can branch on it.
-    assert structured["reason"] == "SKIPPED_DIRTY_TREE"
-    assert structured["posture"] == "ci_artifact_key_configured"
-    assert structured["cause"] == "dirty_unsigned_artifact"
-    assert "LEGIS_WARDLINE_ALLOW_DIRTY" in " ".join(structured["remediation"])
 
 
 def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch):
@@ -1376,9 +1371,9 @@ def test_scan_route_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypatch
 
 
 def test_scan_route_malformed_finding_is_invalid_argument_red(tmp_path, monkeypatch):
-    # The other half of the dirty-vs-malformed contract (cf. the amber test
+    # The other half of the dirty-vs-malformed contract (cf. the dirty-tree test
     # above): a malformed finding — here an unknown severity — is a generic red
-    # INVALID_ARGUMENT, NOT the amber SKIPPED_DIRTY_TREE. WardlinePayloadError is
+    # INVALID_ARGUMENT, NOT WARDLINE_DIRTY_TREE. WardlinePayloadError is
     # deliberately not a WardlineDirtyTreeError, so the boundary keeps "broken or
     # tampered scan" distinct from "commit first". Nothing is governed.
     monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")

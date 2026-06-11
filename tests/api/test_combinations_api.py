@@ -570,10 +570,9 @@ def _dirty_wardline_scan():
     }
 
 
-def test_scan_results_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
-    # P1: key configured, dirty + unsigned, no dev-mode -> HTTP 200 typed amber
-    # SKIPPED_DIRTY_TREE (distinguishable from the 422 generic red); nothing
-    # governed.
+def test_scan_results_dirty_tree_is_error_skip_not_success(tmp_path, monkeypatch):
+    # P1: key configured, dirty + unsigned, no dev-mode -> typed
+    # SKIPPED_DIRTY_TREE, but as a non-2xx result because nothing was governed.
     monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
     monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
     c = _client(tmp_path)
@@ -582,7 +581,7 @@ def test_scan_results_dirty_tree_is_amber_skip_not_red(tmp_path, monkeypatch):
                   json={"cell": "surface_only", "agent_id": "a",
                         "scan": _dirty_wardline_scan()})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 409
     body = resp.json()
     assert body["outcome"] == "SKIPPED_DIRTY_TREE"
     assert body["routed"] == []
@@ -616,8 +615,8 @@ def test_scan_results_dirty_tree_governs_under_devmode_optin(tmp_path, monkeypat
 def test_scan_results_devmode_optin_is_strict_and_fails_safe(tmp_path, monkeypatch):
     # The dev-mode opt-in is `LEGIS_WARDLINE_ALLOW_DIRTY == "1"` exactly. A
     # governing knob that gates UNSIGNED artifacts must fail safe: any value other
-    # than "1" (truthy-looking "true", "0", "yes") must NOT govern — it stays the
-    # typed amber skip. Pins the strict parse against a future drift to truthiness.
+    # than "1" (truthy-looking "true", "0", "yes") must NOT govern — it stays a
+    # typed recoverable failure. Pins the strict parse against a future drift to truthiness.
     monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
     for value in ("0", "true", "True", "yes", "2", ""):
         monkeypatch.setenv("LEGIS_WARDLINE_ALLOW_DIRTY", value)
@@ -625,7 +624,7 @@ def test_scan_results_devmode_optin_is_strict_and_fails_safe(tmp_path, monkeypat
         resp = c.post("/wardline/scan-results",
                       json={"cell": "surface_only", "agent_id": "a",
                             "scan": _dirty_wardline_scan()})
-        assert resp.status_code == 200, value
+        assert resp.status_code == 409, value
         assert resp.json()["outcome"] == "SKIPPED_DIRTY_TREE", value
         assert resp.json()["routed"] == [], value
 

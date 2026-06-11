@@ -458,22 +458,6 @@ def tool_definitions() -> list[dict[str, Any]]:
                     },
                 },
             ),
-            # WardlineDirtyTreeError.to_payload — the typed amber skip.
-            _schema(
-                [
-                    "outcome", "routed", "reason", "posture", "cause",
-                    "remediation", "detail",
-                ],
-                {
-                    "outcome": {"const": ScanOutcome.SKIPPED_DIRTY_TREE.value},
-                    "routed": {"type": "array", "maxItems": 0},
-                    "reason": {"const": ScanOutcome.SKIPPED_DIRTY_TREE.value},
-                    "posture": string,
-                    "cause": string,
-                    "remediation": string_array,
-                    "detail": string,
-                },
-            ),
         ]
     }
     rename_item = _schema(
@@ -640,11 +624,11 @@ def tool_definitions() -> list[dict[str, Any]]:
             "description": (
                 "Route Wardline scan findings through one cell, a severity_map "
                 "policy, or a cell plus fail_on threshold. Returns a discriminated "
-                "outcome: ROUTED (governed) or SKIPPED_DIRTY_TREE (an unsigned "
-                "dirty-tree dev artifact arrived where signed provenance is "
-                "required — a typed amber skip, not a failure; commit for a "
-                "signed artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to govern "
-                "it unsigned in dev)."
+                "success outcome: ROUTED (governed). An unsigned dirty-tree dev "
+                "artifact where signed provenance is required returns "
+                "WARDLINE_DIRTY_TREE with isError:true; commit for a signed "
+                "artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to govern it "
+                "unsigned in dev."
             ),
             "inputSchema": _schema(
                 ["scan"],
@@ -1131,6 +1115,11 @@ def _recovery_for(code: str) -> dict[str, Any]:
             "opt-in — discouraged.) The error message names which kind of cell "
             "spec was rejected."
         ),
+        "WARDLINE_DIRTY_TREE": (
+            "Commit the working tree and rerun Wardline to produce a signed "
+            "artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 out-of-band for a "
+            "dev-only unsigned dirty artifact. Nothing was governed."
+        ),
         "CELL_NOT_ENABLED": (
             "Two enablement tiers, by cell — both operator-enabled, out-of-band. "
             "Simple tier (chill/coached) is reachable WITHOUT a key: the operator "
@@ -1190,6 +1179,17 @@ def _tool_error(code: str, message: str) -> dict[str, Any]:
             **recovery,
         },
     }
+
+
+def _tool_dirty_tree_error(exc: WardlineDirtyTreeError) -> dict[str, Any]:
+    payload = exc.to_payload()
+    return _tool_error(
+        "WARDLINE_DIRTY_TREE",
+        (
+            f"{payload['reason']}: {payload['detail']} "
+            f"(posture={payload['posture']}, cause={payload['cause']})"
+        ),
+    )
 
 
 def _service_error(exc: Exception) -> dict[str, Any]:
@@ -1838,12 +1838,9 @@ def _tool_scan_route(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any
             ),
         )
     except WardlineDirtyTreeError as exc:
-        # Amber, not red (INVALID_ARGUMENT): a dirty dev tree is "environment
-        # not ready", not a broken/tampered scan. The typed, structured payload
-        # (single-sourced on the exception) lets a harness tell "commit first"
-        # apart from a genuine legis/scan fault and names what to do; nothing is
-        # governed (routed == []).
-        return _tool_result(exc.to_payload())
+        # Environment-not-ready, not success: nothing was governed, so MCP must
+        # emit isError=true while keeping a distinct, recoverable error code.
+        return _tool_dirty_tree_error(exc)
     # Echo the scan-level posture at the root (opp #6): a keyless dev pass
     # (`unverified`/`dirty`) is distinguishable from a CI-signed `verified` pass,
     # even when nothing routed.

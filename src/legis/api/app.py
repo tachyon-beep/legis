@@ -771,12 +771,10 @@ def create_app(
                 allow_dirty=os.environ.get("LEGIS_WARDLINE_ALLOW_DIRTY") == "1",
             )
         except WardlineDirtyTreeError as exc:
-            # Amber, not red: a dirty dev tree is "environment not ready", not a
-            # broken/tampered scan. 200 with the typed, structured skip payload
-            # (single-sourced on the exception, field-for-field identical to the
-            # MCP structuredContent) so a harness can tell it apart from the 422
-            # generic failure; nothing is governed.
-            return exc.to_payload()
+            # Environment-not-ready, not success: nothing was governed, so the
+            # transport must not share the 2xx signal with ROUTED. Keep the
+            # typed/actionable payload so callers can branch on the cause.
+            return JSONResponse(status_code=409, content=exc.to_payload())
         except WardlinePayloadError as exc:
             raise HTTPException(status_code=422, detail=f"invalid Wardline scan: {exc}")
         except ValueError as exc:

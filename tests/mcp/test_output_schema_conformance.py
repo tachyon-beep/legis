@@ -293,11 +293,13 @@ def test_scan_route_conforms_routed(tmp_path, monkeypatch):
 
 
 def test_scan_route_conforms_skipped_dirty_tree(tmp_path, monkeypatch):
+    from legis.mcp import ERROR_ENVELOPE_SCHEMA, call_tool
+
     monkeypatch.setenv("LEGIS_WARDLINE_CELL", "surface_only")
     monkeypatch.setenv("LEGIS_WARDLINE_ARTIFACT_KEY", "wardline-key")
     monkeypatch.delenv("LEGIS_WARDLINE_ALLOW_DIRTY", raising=False)
     runtime, _ = _runtime(tmp_path)
-    payload = _conformant(
+    result = call_tool(
         runtime,
         "scan_route",
         {
@@ -311,8 +313,11 @@ def test_scan_route_conforms_skipped_dirty_tree(tmp_path, monkeypatch):
             }
         },
     )
-    assert payload["outcome"] == "SKIPPED_DIRTY_TREE"
-    assert payload["routed"] == []
+    assert result["isError"] is True
+    payload = result["structuredContent"]
+    jsonschema.validate(payload, ERROR_ENVELOPE_SCHEMA, cls=Draft202012Validator)
+    assert payload["error_code"] == "WARDLINE_DIRTY_TREE"
+    assert "SKIPPED_DIRTY_TREE" in payload["message"]
 
 
 def test_git_tools_conform(tmp_path, git_repo):

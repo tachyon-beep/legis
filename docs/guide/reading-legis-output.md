@@ -105,7 +105,7 @@ and, on the artifact, a **status**:
 | `scan_route` outcome | Meaning | Do you act? |
 |---|---|---|
 | `ROUTED` | Findings were governed into the configured cell. Normal path. | No. |
-| `SKIPPED_DIRTY_TREE` | A *typed amber skip*, not an error: an unsigned dirty-tree dev artifact arrived where signed provenance is required. **Nothing was governed.** | No — the agent commits for a signed artifact (or a dev sets `LEGIS_WARDLINE_ALLOW_DIRTY=1`). Distinguishable from a real failure on purpose. |
+| `SKIPPED_DIRTY_TREE` | A typed recoverable failure: an unsigned dirty-tree dev artifact arrived where signed provenance is required. **Nothing was governed.** HTTP returns 409; MCP returns `WARDLINE_DIRTY_TREE` with `isError: true`. | No — the agent commits for a signed artifact (or a dev sets `LEGIS_WARDLINE_ALLOW_DIRTY=1`). |
 
 The artifact's provenance `status` tells you how far it verified:
 
