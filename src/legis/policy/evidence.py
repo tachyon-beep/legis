@@ -32,12 +32,13 @@ def _disabling_marker(decorator: ast.expr) -> str | None:
 
     Deliberately broad and fail-closed: it matches the terminal attribute or bare
     name (``pytest.mark.skip``, ``mark.xfail``, ``m.skipif(...)``, or a bare
-    ``skip`` imported under that name), with or without a call. The fingerprint is
-    blind to decorators AND the marker's import alias lives outside the function
-    source it sees, so a chain match anchored on a literal ``pytest`` would leave
-    the alias path open. The population of evidence tests is tiny and the only
-    decorators legitimately placed on them are pytest markers, so over-matching
-    merely (loudly) blocks a boundary a human then resolves, whereas
+    ``skip`` imported under that name), with or without a call. Fingerprints now
+    include decorators, but the marker's import alias can still live outside the
+    function source being pinned, so a chain match anchored on a literal
+    ``pytest`` would leave the alias path open for a freshly pinned disabled
+    test. The population of evidence tests is tiny and the only decorators
+    legitimately placed on them are pytest markers, so over-matching merely
+    (loudly) blocks a boundary a human then resolves, whereas
     under-matching would silently let a disabled test satisfy the gate — the exact
     false-green this closes.
 
@@ -123,12 +124,11 @@ def evaluate_test_evidence(
     # Disabled-evidence (highest priority, POLICY-1): a test carrying a pytest
     # skip / skipif / xfail marker does not run (or is not expected to pass), so
     # it cannot stand as live behavioural evidence — independent of whether it
-    # otherwise exercises the boundary and asserts the policy. The fingerprint is
-    # intentionally blind to decorators (Q-L5 parity), so a reviewer-pinned
-    # evidence test can be disabled after the fact with no fingerprint drift; this
-    # is the only thing standing between that and a false-green gate. Both gate
-    # callers route through here, so the detection lands on the runtime gate and
-    # the static scanner identically.
+    # otherwise exercises the boundary and asserts the policy. Fingerprints catch
+    # post-review decorator drift; this evaluator catches the case where someone
+    # pins the disabled decorated test itself. Both gate callers route through
+    # here, so the detection lands on the runtime gate and the static scanner
+    # identically.
     if test_fn is not None:
         for decorator in test_fn.decorator_list:
             marker = _disabling_marker(decorator)

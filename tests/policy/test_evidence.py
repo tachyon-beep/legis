@@ -152,9 +152,9 @@ def test_ok_when_boundary_result_is_the_condition_and_policy_in_message():
 
 
 # --- POLICY-1: a disabled evidence test cannot stand as live proof ---
-# The fingerprint is intentionally blind to decorators (Q-L5 parity), so the
-# evaluator is the single place that must notice a skip/xfail marker. These pin
-# the disabled-evidence judgement directly on the shared evaluator both gates use.
+# Fingerprints now include decorators, but the evaluator still rejects a
+# currently pinned skip/xfail marker so disabled evidence cannot stand even if
+# someone deliberately records the decorated fingerprint.
 # Each case carries a fully-valid body (exercises the boundary AND asserts the
 # policy) so the ONLY reason it fails is the disabling marker — proving the
 # disabled check pre-empts an otherwise-passing test.

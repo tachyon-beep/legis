@@ -152,10 +152,11 @@ class _BoundaryVisitor(ast.NodeVisitor):
                 return
 
             test_source, test_node = test_result
-            test_segment = ast.get_source_segment(test_source, test_node) or ""
+            test_segment = _source_segment_with_decorators(test_source, test_node)
             # Same canonicalization the runtime honesty gate uses — CRLF/dedent
-            # normalization and a decorator-insensitive AST hash — so the two
-            # paths cannot diverge for a decorated / class-method test_ref (Q-L5).
+            # normalization and a decorator-sensitive AST hash — so the two
+            # paths cannot diverge for a decorated / class-method test_ref (Q-L5),
+            # and decorators that change execution semantics are pinned.
             actual_fingerprint = fingerprint_source(test_segment)
             if actual_fingerprint != test_fingerprint:
                 self._add(
@@ -324,6 +325,26 @@ def _resolve_test_ref(
 
 def _test_ref_finding(rule_id: str, reason: str) -> BoundaryFinding:
     return BoundaryFinding(rule_id, "", 0, "", reason)
+
+
+def _source_segment_with_decorators(
+    source: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> str:
+    """Return source for *node* including decorator lines.
+
+    ``ast.get_source_segment`` for a FunctionDef starts at the ``def`` line even
+    when decorators are present. Runtime ``inspect.getsource`` includes
+    decorators, and decorators can change test execution semantics, so the
+    scanner must include them before hashing.
+    """
+    if node.end_lineno is None:
+        return ast.get_source_segment(source, node) or ""
+    start_lineno = node.lineno
+    if node.decorator_list:
+        start_lineno = min(decorator.lineno for decorator in node.decorator_list)
+    lines = source.splitlines(keepends=True)
+    return "".join(lines[start_lineno - 1 : node.end_lineno])
 
 
 def _find_test_node(
