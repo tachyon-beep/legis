@@ -31,9 +31,16 @@ class PolicyExplanation:
     # fell through to default_cell. Distinguishes a configured-but-disabled cell
     # from a hallucinated/unconfigured policy name (matched_rule is None).
     matched_rule: str | None = None
+    # N-9: the explicit boolean form of the same distinction — True iff a
+    # registry rule matched the policy name; False means the name may be
+    # unrecognized/hallucinated (it was routed by default_cell). None on
+    # cell-level explanations (policy_list), where there is no policy referent;
+    # the key is then omitted from the payload so a per-cell row can never
+    # carry a misleading policy_known:false.
+    policy_known: bool | None = None
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "cell": self.cell,
             "judge_inline": self.judge_inline,
             "self_clearable": self.self_clearable,
@@ -45,6 +52,9 @@ class PolicyExplanation:
             ],
             "matched_rule": self.matched_rule,
         }
+        if self.policy_known is not None:
+            payload["policy_known"] = self.policy_known
+        return payload
 
 
 _PROTECTED_INPUTS = (
@@ -84,8 +94,14 @@ def explain_policy(
     )
     # matched_rule distinguishes a configured policy (reports its pattern) from an
     # unconfigured name routed by default_cell (None) — closing "real-but-disabled
-    # vs hallucinated". It never affects cell/enabled.
-    return replace(explanation, matched_rule=rule.pattern if rule is not None else None)
+    # vs hallucinated". policy_known is the explicit boolean form of the same
+    # signal (N-9), always set on this path. Neither affects cell/enabled: an
+    # unmatched name still legitimately routes to default_cell, never an error.
+    return replace(
+        explanation,
+        matched_rule=rule.pattern if rule is not None else None,
+        policy_known=rule is not None,
+    )
 
 
 def explain_cell(
@@ -100,8 +116,8 @@ def explain_cell(
     The single source of truth for per-cell ``enabled`` / ``judge_inline`` /
     ``self_clearable`` / ``human_in_loop`` and the legal moves. ``policy_list``
     and ``policy_explain`` both route through here so they can never disagree.
-    The returned ``matched_rule`` is always ``None`` here; ``explain_policy``
-    fills it after routing.
+    The returned ``matched_rule`` / ``policy_known`` are always ``None`` here;
+    ``explain_policy`` fills them after routing.
     """
     if cell == "chill":
         enabled = engine is not None and not engine.has_judge

@@ -169,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "session-context",
-        help="SessionStart hook: refresh drifted legis instructions/skills in the cwd",
+        help="SessionStart hook: print a posture banner and refresh drifted legis instructions/skills in the cwd",
     )
 
     doctor = subparsers.add_parser(
@@ -358,9 +358,8 @@ def main(argv: list[str] | None = None, *, run=uvicorn.run) -> int:
     if args.command == "session-context":
         from legis.hooks import generate_session_context
 
-        context = generate_session_context()
-        if context:
-            print(context)
+        # Always non-empty (N-1): a posture banner, then any refresh messages.
+        print(generate_session_context())
         return 0
 
     if args.command in {"check-override-rate", "governance-gate"}:

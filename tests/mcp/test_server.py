@@ -295,12 +295,14 @@ def test_policy_explain_returns_service_explanation_payload(tmp_path):
         "available_moves": ["override_submit", "signoff_status_get"],
         "required_inputs": [],
         "matched_rule": "human.*",
+        "policy_known": True,
     }
 
 
 def test_policy_explain_reports_null_matched_rule_for_unconfigured_policy(tmp_path):
     # LEG-1(c): an unconfigured policy name is routed by default_cell and reports
     # matched_rule:null — distinguishing "real-but-disabled" from "hallucinated".
+    # N-9: policy_known:false makes that distinction an explicit boolean.
     runtime, _store = _runtime(tmp_path)
     runtime.cell_registry = PolicyCellRegistry(
         default_cell="chill",
@@ -324,6 +326,7 @@ def test_policy_explain_reports_null_matched_rule_for_unconfigured_policy(tmp_pa
 
     assert result["structuredContent"]["cell"] == "chill"
     assert result["structuredContent"]["matched_rule"] is None
+    assert result["structuredContent"]["policy_known"] is False
 
 
 def _policy_list(runtime):
@@ -392,6 +395,17 @@ def test_policy_list_keyless_runtime_reports_complex_tier_disabled(tmp_path):
 
     assert by_cell["structured"]["enabled"] is False
     assert by_cell["protected"]["enabled"] is False
+
+
+def test_policy_list_cells_do_not_carry_policy_known(tmp_path):
+    # N-9 guard: policy_known belongs to policy_explain (a policy referent
+    # exists). The per-cell rows in policy_list must not carry a misleading
+    # policy_known:false.
+    runtime, _store = _runtime(tmp_path)
+    payload = _policy_list(runtime)["structuredContent"]
+
+    for cell_row in payload["cells"]:
+        assert "policy_known" not in cell_row
 
 
 def test_policy_list_complex_tier_enabled_when_gates_wired(tmp_path):
@@ -1870,6 +1884,73 @@ def test_filigree_closure_gate_get_is_listed():
 
     names = {t["name"] for t in tool_definitions()}
     assert "filigree_closure_gate_get" in names
+
+
+def test_tool_error_text_content_carries_next_action():
+    # LEG-2: text-only MCP clients never see structuredContent, so the recovery
+    # hint must ride in the text content too. The "{code}: {message}" first
+    # line stays a stable prefix (clients may parse it); the remediation is
+    # appended after it.
+    from legis.mcp import _tool_error
+
+    result = _tool_error("CELL_NOT_ENABLED", "binding ledger not enabled")
+
+    text = result["content"][0]["text"]
+    assert text.startswith("CELL_NOT_ENABLED: binding ledger not enabled")
+    assert f"\nnext_action: {result['structuredContent']['next_action']}" in text
+
+
+def test_binding_ledger_not_enabled_message_names_operator_key(monkeypatch):
+    # LEG-2: the MESSAGE itself names the enabling knob (scan_route quality
+    # bar) — phrased as an operator action, never an agent one (C-8).
+    from legis.mcp import build_runtime, call_tool
+
+    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
+    runtime = build_runtime("agent-1")
+
+    result = call_tool(runtime, "filigree_closure_gate_get", {"issue_id": "ISSUE-7"})
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+    message = result["structuredContent"]["message"]
+    assert "LEGIS_HMAC_KEY" in message
+    assert "operator" in message
+    # The text content surfaces both the message and the recovery hint.
+    assert "LEGIS_HMAC_KEY" in result["content"][0]["text"]
+    assert "next_action:" in result["content"][0]["text"]
+
+
+def test_signoff_status_get_not_enabled_message_names_operator_key(tmp_path):
+    runtime, _store = _runtime(tmp_path)  # no signoff gate wired
+
+    result = _run(
+        _messages(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "signoff_status_get", "arguments": {"seq": 1}},
+            }
+        ),
+        runtime,
+    )[0]["result"]
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "CELL_NOT_ENABLED"
+    message = result["structuredContent"]["message"]
+    assert "LEGIS_HMAC_KEY" in message
+    assert "operator" in message
+
+
+def test_policy_explain_description_documents_policy_known():
+    # N-9: agents must learn the policy_known semantics from tools/list alone.
+    from legis.mcp import tool_definitions
+
+    description = next(
+        t for t in tool_definitions() if t["name"] == "policy_explain"
+    )["description"]
+    assert "policy_known" in description
+    assert "default_cell" in description
 
 
 def test_filigree_closure_gate_get_not_enabled_without_ledger(monkeypatch):

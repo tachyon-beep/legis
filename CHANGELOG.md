@@ -5,6 +5,28 @@ All notable changes to Legis are documented here. The format follows
 versions per [PEP 440](https://peps.python.org/pep-0440/) /
 [SemVer](https://semver.org/) (pre-release: `1.0.0rc1`).
 
+## [Unreleased]
+
+### Fixed (lacuna dogfood second pass, 2026-06-11)
+
+- **N-9 / LEG-1 — `policy_explain` now says when a policy name is unknown.**
+  The payload carries an explicit `policy_known` boolean (true iff a registry
+  rule matched; false means the name fell through to `default_cell` and may be
+  hallucinated), additive alongside `matched_rule`. The tool description
+  documents the signal. `policy_list` per-cell rows never carry it.
+- **LEG-2 — error remediation now rides where agents actually read it.** Every
+  MCP error envelope appends `next_action: …` to the *text* content (the
+  `{code}: {message}` first line stays stable for parsing clients);
+  `structuredContent` is unchanged. Terse `NotEnabledError` messages now name
+  the operator knob — e.g. `binding ledger not enabled: ask the operator to set
+  LEGIS_HMAC_KEY (out-of-band) and relaunch` — phrased as operator actions per
+  C-8 (keys stay out of agent reach).
+- **N-1 — `legis session-context` is never silent.** It always prints a
+  one-line posture banner (instructions / skill pack / cells-config posture,
+  derived only from what the hook process can see — never the MCP server's
+  runtime env), followed by any refresh messages; the internal-failure path
+  emits a failure line instead of exiting 0 mutely.
+
 ## [1.0.0] — 2026-06-11
 
 This is the gold release. It aggregates everything since the last published

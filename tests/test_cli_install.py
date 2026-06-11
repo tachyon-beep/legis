@@ -68,12 +68,17 @@ def test_install_renders_fail_and_continues_when_a_step_raises(tmp_path, monkeyp
     assert rc == 1
 
 
-def test_session_context_silent_when_fresh(tmp_path, monkeypatch, capsys):
+def test_session_context_banner_only_when_fresh(tmp_path, monkeypatch, capsys):
+    # N-1: a fresh project still gets the one-line posture banner — silence is
+    # indistinguishable from a broken command — but no drift messages.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
     install.inject_instructions(tmp_path / "CLAUDE.md")
     rc = main(["session-context"])
     assert rc == 0
-    assert capsys.readouterr().out == ""
+    out = capsys.readouterr().out
+    assert out.startswith("legis: instructions current")
+    assert out.count("\n") == 1  # banner line only, no refresh messages
 
 
 def test_session_context_prints_on_drift(tmp_path, monkeypatch, capsys):

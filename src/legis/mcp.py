@@ -247,7 +247,9 @@ def tool_definitions() -> list[dict[str, Any]]:
             "description": (
                 "Explain which governance cell controls a policy/entity pair, "
                 "whether that cell is enabled on this server, and which move the "
-                "agent may make next."
+                "agent may make next. policy_known:false means no routing rule "
+                "matched the name — the name may be unrecognized/hallucinated "
+                "and was routed to default_cell."
             ),
             "inputSchema": _schema(
                 ["policy", "entity"],
@@ -444,9 +446,18 @@ def _recovery_for(code: str) -> dict[str, Any]:
 
 def _tool_error(code: str, message: str) -> dict[str, Any]:
     recovery = _recovery_for(code)
+    # LEG-2: the recovery hint rides in the text content too — text-only MCP
+    # clients never see structuredContent, so a hint kept there alone is
+    # invisible to them. The "{code}: {message}" first line is a stable prefix
+    # clients may parse; the next_action is appended after it.
     return {
         "isError": True,
-        "content": [{"type": "text", "text": f"{code}: {message}"}],
+        "content": [
+            {
+                "type": "text",
+                "text": f"{code}: {message}\nnext_action: {recovery['next_action']}",
+            }
+        ],
         "structuredContent": {
             "error_code": code,
             "message": message,
@@ -852,9 +863,17 @@ def _tool_override_submit(runtime: McpRuntime, args: dict[str, Any]) -> dict[str
         signoff_gate=runtime.signoff_gate,
     )
     if not explanation.enabled:
-        raise NotEnabledError(
-            f"cell {explanation.cell!r} is not enabled for override submission"
-        )
+        # LEG-2: name the enabling knob in the message where it is unambiguous.
+        # Complex tier enablement is the operator-held key — an operator action,
+        # never an agent one (C-8). The simple tier's knob depends on which
+        # half is unwired (engine vs judge config), so it stays generic; the
+        # CELL_NOT_ENABLED next_action covers both tiers.
+        message = f"cell {explanation.cell!r} is not enabled for override submission"
+        if explanation.cell in ("structured", "protected"):
+            message += (
+                ": ask the operator to set LEGIS_HMAC_KEY (out-of-band) and relaunch"
+            )
+        raise NotEnabledError(message)
     idempotency_request_hash = (
         _override_idempotency_request_hash(
             agent_id=runtime.agent_id,
@@ -978,7 +997,11 @@ def _tool_override_submit(runtime: McpRuntime, args: dict[str, Any]) -> dict[str
 def _tool_signoff_status_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
     seq = _require_int(args, "seq")
     if runtime.signoff_gate is None:
-        raise NotEnabledError("structured cell not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "structured cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     request = runtime.signoff_gate.request_record(seq)
     if request is None:
         return _tool_error("NO_SUCH_REQUEST", f"no sign-off request at seq {seq}")
@@ -1109,7 +1132,11 @@ def _tool_filigree_closure_gate_get(runtime: McpRuntime, args: dict[str, Any]) -
     from legis.governance.filigree_gate import evaluate_issue_closure
 
     if runtime.binding_ledger is None:
-        raise NotEnabledError("binding ledger not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "binding ledger not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     return _tool_result(
         evaluate_issue_closure(runtime.binding_ledger, issue_id=_require(args, "issue_id"))
     )

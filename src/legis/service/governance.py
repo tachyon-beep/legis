@@ -235,7 +235,11 @@ def submit_protected_override(
 ) -> ProtectedResult:
     """Submit a protected-cell override using transport-bound agent identity."""
     if protected_gate is None:
-        raise NotEnabledError("protected cell not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "protected cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     entity_key, ext = resolve_for_record(identity, entity)
     source_binding = verify_current_source_binding(
         entity=entity,
@@ -268,7 +272,11 @@ def submit_operator_override(
 ) -> ProtectedResult:
     """Submit a protected-cell operator override with current-source binding."""
     if protected_gate is None:
-        raise NotEnabledError("protected cell not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "protected cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     entity_key, ext = resolve_for_record(identity, entity)
     source_binding = verify_current_source_binding(
         entity=entity,
@@ -299,7 +307,11 @@ def request_signoff(
 ) -> SignoffResult:
     """Open a structured sign-off request for a launch-bound agent."""
     if signoff_gate is None:
-        raise NotEnabledError("structured cell not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "structured cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     entity_key, ext = resolve_for_record(identity, entity)
     return signoff_gate.request(
         policy=policy,
@@ -323,7 +335,11 @@ def sign_off(
     reaches past the service layer to the gate (Q-H2).
     """
     if signoff_gate is None:
-        raise NotEnabledError("structured cell not enabled")
+        # LEG-2: the message names the operator knob (C-8: operator action).
+        raise NotEnabledError(
+            "structured cell not enabled: ask the operator to set "
+            "LEGIS_HMAC_KEY (out-of-band) and relaunch"
+        )
     return signoff_gate.sign_off(
         request_seq=request_seq,
         operator_id=operator_id,

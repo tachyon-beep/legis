@@ -169,9 +169,12 @@ def test_main_mcp_sets_store_and_policy_cell_env(monkeypatch):
         )
         return 0
 
-    monkeypatch.delenv("LEGIS_GOVERNANCE_DB", raising=False)
-    monkeypatch.delenv("LEGIS_CHECK_DB", raising=False)
-    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    for var in ("LEGIS_GOVERNANCE_DB", "LEGIS_CHECK_DB", "LEGIS_POLICY_CELLS"):
+        # delenv(raising=False) on an absent var records nothing to restore,
+        # so the env writes main()'s mcp path makes below would leak into later
+        # tests; seed first so the monkeypatch teardown undoes them.
+        monkeypatch.setenv(var, "leak-guard")
+        monkeypatch.delenv(var)
     monkeypatch.setattr(mcp_module, "main", fake_mcp_main)
 
     rc = main(
@@ -568,3 +571,50 @@ def test_check_override_rate_rejects_rechained_protected_tampering(tmp_path, mon
 
     assert rc == 1
     assert "verification failed" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# session-context (N-1: never exit silently)
+# ---------------------------------------------------------------------------
+
+
+def test_session_context_always_prints_banner(tmp_path, monkeypatch, capsys):
+    # N-1: exit 0 with NO output is indistinguishable from a broken command —
+    # even a non-project cwd must get a one-line posture banner.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    rc = main(["session-context"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("legis: ")
+    assert out.count("\n") == 1  # one banner line, nothing else
+
+
+def test_session_context_prints_banner_then_drift_messages(tmp_path, monkeypatch, capsys):
+    from legis import install
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LEGIS_POLICY_CELLS", raising=False)
+    install.inject_instructions(tmp_path / "CLAUDE.md")
+    monkeypatch.setattr(install, "_instructions_text", lambda: "DRIFTED\n")
+    rc = main(["session-context"])
+    assert rc == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("legis: ")
+    assert any("CLAUDE.md" in line for line in lines[1:])
+
+
+def test_session_context_prints_failure_line_when_refresh_raises(tmp_path, monkeypatch, capsys):
+    import legis.hooks as hooks_module
+
+    monkeypatch.chdir(tmp_path)
+
+    def boom(_root):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(hooks_module, "refresh_instructions", boom)
+    rc = main(["session-context"])
+    assert rc == 0  # the hook must never fail the session start...
+    out = capsys.readouterr().out
+    # ...but the failure must be visible, not silent.
+    assert "instruction freshness check failed" in out
