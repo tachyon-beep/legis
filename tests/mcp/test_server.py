@@ -185,6 +185,9 @@ def test_initialize_and_tools_list_exposes_full_agent_surface(tmp_path):
         "identity_gap_list",
         "lineage_integrity_get",
         "check_report",
+        "override_list",
+        "doctor_get",
+        "policy_boundary_check",
     }
     # Named decision (legis-e5c57dedd1): PR recording stays OFF the agent
     # surface — the forge, not the agent, is the source of truth for PR state;
@@ -2747,3 +2750,230 @@ def test_check_report_records_on_fresh_runtime(tmp_path, monkeypatch):
     recorded = CheckSurface(db).for_commit("d" * 40)
     assert [r.run_id for r in recorded] == ["run-9"]
     assert recorded[0].recorded_by == "agent-fresh"
+
+
+# --- legis-72d4e85d05: override-trail read (override_list) ---
+# --- legis-8587a1f2c0: report-only doctor_get ---
+# --- legis-716d4934e7: policy_boundary_check in the authoring loop ---
+
+
+def test_gap_analysis_read_tools_are_listed():
+    from legis.mcp import tool_definitions
+
+    names = {t["name"] for t in tool_definitions()}
+    assert {"override_list", "doctor_get", "policy_boundary_check"} <= names
+
+
+def test_override_list_returns_verified_trail_with_seq(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _runtime(tmp_path)
+    runtime.engine.submit_override(
+        policy="p.a",
+        entity_key=EntityKey.from_locator("src/a.py:f"),
+        rationale="r1",
+        agent_id="agent-launch",
+    )
+    runtime.engine.submit_override(
+        policy="p.b",
+        entity_key=EntityKey.from_locator("src/b.py:g"),
+        rationale="r2",
+        agent_id="other-agent",
+    )
+
+    result = call_tool(runtime, "override_list", {})
+
+    assert not result.get("isError")
+    overrides = result["structuredContent"]["overrides"]
+    assert [o["policy"] for o in overrides] == ["p.a", "p.b"]
+    # seq is the poll/idempotency handle other tools speak (signoff_status_get,
+    # override_submit responses) — the read must carry it.
+    assert [o["seq"] for o in overrides] == [1, 2]
+    assert overrides[0]["agent_id"] == "agent-launch"
+    assert overrides[0]["entity_key"]["value"] == "src/a.py:f"
+
+
+def test_override_list_filters_by_policy_entity_and_agent(tmp_path):
+    from legis.mcp import call_tool
+
+    runtime, _store = _runtime(tmp_path)
+    for policy, entity, agent in (
+        ("p.a", "src/a.py:f", "agent-launch"),
+        ("p.b", "src/b.py:g", "agent-launch"),
+        ("p.a", "src/b.py:g", "other-agent"),
+    ):
+        runtime.engine.submit_override(
+            policy=policy,
+            entity_key=EntityKey.from_locator(entity),
+            rationale="r",
+            agent_id=agent,
+        )
+
+    by_policy = call_tool(runtime, "override_list", {"policy": "p.a"})
+    assert [o["seq"] for o in by_policy["structuredContent"]["overrides"]] == [1, 3]
+
+    by_entity = call_tool(runtime, "override_list", {"entity": "src/b.py:g"})
+    assert [o["seq"] for o in by_entity["structuredContent"]["overrides"]] == [2, 3]
+
+    # The filter is "submitted_by", never "agent_id" — no tool schema accepts
+    # an agent_id argument (launch-binding invariant); this filters the
+    # RECORDED agent_id, it does not assert caller identity.
+    by_agent = call_tool(runtime, "override_list", {"submitted_by": "other-agent"})
+    assert [o["seq"] for o in by_agent["structuredContent"]["overrides"]] == [3]
+
+    combined = call_tool(
+        runtime, "override_list", {"policy": "p.a", "submitted_by": "agent-launch"}
+    )
+    assert [o["seq"] for o in combined["structuredContent"]["overrides"]] == [1]
+
+
+def test_override_list_reads_trail_on_fresh_runtime(tmp_path, monkeypatch):
+    # Same bug class as the pull_request_get fresh-runtime fix: a fresh
+    # build_runtime-shaped runtime (engine=None) must lazily open the
+    # governance store, not report an empty trail that an agent would read as
+    # "never overridden before".
+    from legis.mcp import McpRuntime, call_tool
+
+    db = f"sqlite:///{tmp_path / 'gov.db'}"
+    engine = EnforcementEngine(AuditStore(db), FixedClock("2026-06-02T12:00:00+00:00"))
+    engine.submit_override(
+        policy="p.a",
+        entity_key=EntityKey.from_locator("src/a.py:f"),
+        rationale="r",
+        agent_id="agent-earlier",
+    )
+    monkeypatch.setenv("LEGIS_GOVERNANCE_DB", db)
+    runtime = McpRuntime(agent_id="agent-fresh", initialized=True)
+
+    result = call_tool(runtime, "override_list", {})
+
+    overrides = result["structuredContent"]["overrides"]
+    assert [o["policy"] for o in overrides] == ["p.a"]
+    assert overrides[0]["agent_id"] == "agent-earlier"
+
+
+def test_override_list_fails_closed_on_rechained_protected_tamper(tmp_path):
+    # Same verified-records-only honesty as GET /overrides: a tampered
+    # protected trail is AUDIT_INTEGRITY_FAILURE, never silently read.
+    from legis.mcp import call_tool
+
+    db = tmp_path / "gov.db"
+    store = AuditStore(f"sqlite:///{db}")
+    gate = ProtectedGate(
+        store,
+        FixedClock("2026-06-02T12:00:00+00:00"),
+        judge=_ScriptedJudge(JudgeOpinion(Verdict.ACCEPTED, "judge@1", "ok")),
+        key=KEY,
+    )
+    gate.submit(
+        policy="no-eval",
+        entity_key=EntityKey.from_locator("src/x.py:f"),
+        rationale="original",
+        agent_id="agent-launch",
+        file_fingerprint="fp",
+        ast_path="ap",
+    )
+    _tamper_first_record_and_rechain(db, lambda p: p.update({"rationale": "FORGED"}))
+    assert store.verify_integrity() is True
+
+    runtime, _unused = _runtime(tmp_path)
+    runtime.engine = None
+    runtime.protected_gate = gate
+    runtime.trail_verifier = TrailVerifier(KEY, frozenset({"no-eval"}))
+
+    result = call_tool(runtime, "override_list", {})
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "AUDIT_INTEGRITY_FAILURE"
+
+
+def test_doctor_get_returns_the_same_json_payload_the_cli_emits(tmp_path):
+    from legis.doctor import collect_checks, render_json
+    from legis.mcp import McpRuntime, call_tool
+
+    runtime = McpRuntime(agent_id="agent-1", initialized=True, source_root=str(tmp_path))
+
+    result = call_tool(runtime, "doctor_get", {})
+
+    assert not result.get("isError")
+    payload = result["structuredContent"]
+    assert payload == json.loads(render_json(collect_checks(tmp_path, repair=False)))
+    # A bare directory is missing every install artifact — the read must say so.
+    assert payload["ok"] is False
+    assert payload["next_actions"]
+
+
+def test_doctor_get_is_report_only_and_never_repairs(tmp_path):
+    # C-8: repairs stay operator/CLI (`legis doctor --fix`); the MCP read must
+    # not write anything and must not expose a repair knob.
+    from legis.mcp import McpRuntime, call_tool, tool_definitions
+
+    runtime = McpRuntime(agent_id="agent-1", initialized=True, source_root=str(tmp_path))
+
+    result = call_tool(runtime, "doctor_get", {})
+
+    assert list(tmp_path.iterdir()) == []  # nothing created or repaired
+    assert not any(c["fixed"] for c in result["structuredContent"]["checks"])
+
+    tool = next(t for t in tool_definitions() if t["name"] == "doctor_get")
+    assert tool["inputSchema"]["properties"] == {}
+    assert "report-only" in tool["description"].lower()
+    for forbidden_arg in ("fix", "repair", "root"):
+        assert forbidden_arg not in tool["inputSchema"]["properties"]
+
+
+def test_policy_boundary_check_pass_on_clean_tree(tmp_path):
+    from legis.mcp import McpRuntime, call_tool
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "clean.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    runtime = McpRuntime(agent_id="agent-1", initialized=True, source_root=str(tmp_path))
+
+    result = call_tool(runtime, "policy_boundary_check", {})
+
+    assert result["structuredContent"] == {"outcome": "PASS", "findings": []}
+
+
+def test_policy_boundary_check_reports_findings(tmp_path):
+    from legis.mcp import McpRuntime, call_tool
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "guarded.py").write_text(
+        '@policy_boundary(suppresses=("no-eval",))\n'
+        "def f():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    runtime = McpRuntime(agent_id="agent-1", initialized=True, source_root=str(tmp_path))
+
+    result = call_tool(runtime, "policy_boundary_check", {})
+
+    payload = result["structuredContent"]
+    assert payload["outcome"] == "FINDINGS"
+    assert payload["findings"][0]["rule_id"] == "POLICY_BOUNDARY_TEST_REF_MISSING"
+    assert payload["findings"][0]["qualname"] == "f"
+    assert payload["findings"][0]["file_path"] == "src/guarded.py"
+
+
+def test_policy_boundary_check_resolves_relative_roots_against_repo_root(tmp_path):
+    from legis.mcp import McpRuntime, call_tool
+
+    lib = tmp_path / "pkg" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "x.py").write_text(
+        '@policy_boundary(suppresses=("no-eval",))\n'
+        "def g():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    runtime = McpRuntime(agent_id="agent-1", initialized=True, source_root=str(tmp_path))
+
+    result = call_tool(
+        runtime, "policy_boundary_check", {"root": "lib", "repo_root": "pkg"}
+    )
+
+    payload = result["structuredContent"]
+    assert payload["outcome"] == "FINDINGS"
+    assert payload["findings"][0]["file_path"] == "lib/x.py"

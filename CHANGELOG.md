@@ -7,6 +7,26 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 
 ## [Unreleased]
 
+### Added (MCP surface gap analysis, 2026-06-11)
+
+Three read-only tools close the remaining self-service gaps on the agent
+surface (18 → 21 tools):
+
+- **`override_list`** — the verified governance-trail read (the same records
+  `GET /overrides` serves), each with its `seq` handle, filterable by `policy`,
+  `entity`, or `submitted_by` (the *recorded* agent_id — a read filter; caller
+  identity stays launch-bound and is never a call argument). Verified-records-
+  only honesty: a tampered trail is `AUDIT_INTEGRITY_FAILURE`, never silently
+  read.
+- **`doctor_get`** — report-only install/config posture, the same JSON payload
+  `legis doctor --format json` emits (single-sourced via `doctor_payload`).
+  Never repairs anything: `--fix` stays operator/CLI (C-8); the schema carries
+  no repair knob.
+- **`policy_boundary_check`** — the `@policy_boundary` behavioural-evidence
+  scan joins the policy-authoring loop over MCP, returning a discriminated
+  `PASS` / `FINDINGS` outcome (`root` defaults to `<repo_root>/src`,
+  `repo_root` to the server's source root).
+
 ### Fixed (lacuna dogfood second pass, 2026-06-11)
 
 - **N-9 / LEG-1 — `policy_explain` now says when a policy name is unknown.**

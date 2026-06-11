@@ -87,6 +87,9 @@ _AGENT_TOOLS = frozenset(
         "identity_gap_list",
         "lineage_integrity_get",
         "check_report",
+        "override_list",
+        "doctor_get",
+        "policy_boundary_check",
     }
 )
 _OVERRIDE_RATE_NOTE = "measures operator force-pasts; not movable by agent retries"
@@ -468,6 +471,52 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "override_rate_get",
             "description": "Read the fixed operator force-past override-rate gate.",
             "inputSchema": _schema([], {}),
+        },
+        {
+            "name": "override_list",
+            "description": (
+                "Read the verified governance trail (the same records GET "
+                "/overrides serves): prior overrides, sign-off requests, and "
+                "governance events, each with its seq handle. Optional exact-"
+                "match filters narrow by policy, entity (the recorded "
+                "entity_key value — SEI or locator), or submitted_by (the "
+                "recorded agent_id; a read filter — the caller's own identity "
+                "stays launch-bound and is never a call argument). Verified-"
+                "records-only honesty: a tampered trail is "
+                "AUDIT_INTEGRITY_FAILURE, never silently read."
+            ),
+            "inputSchema": _schema(
+                [],
+                {"policy": string, "entity": string, "submitted_by": string},
+            ),
+        },
+        {
+            "name": "doctor_get",
+            "description": (
+                "Report-only legis install/config health read — the same JSON "
+                "`legis doctor --format json` emits (ok, checks, "
+                "next_actions), run against the server's source root. Never "
+                "repairs anything: fixes stay operator/CLI (`legis doctor "
+                "--fix` for [auto-fixable] items; [operator] items need "
+                "out-of-band config and a relaunch)."
+            ),
+            "inputSchema": _schema([], {}),
+        },
+        {
+            "name": "policy_boundary_check",
+            "description": (
+                "Read-only scan validating @policy_boundary declarations "
+                "against current behavioural evidence (the policy-authoring "
+                "loop's `legis policy-boundary-check`). Returns a "
+                "discriminated outcome: PASS (no findings) or FINDINGS with "
+                "the findings list. root defaults to <repo_root>/src and "
+                "repo_root to the server's source root; relative paths "
+                "resolve against repo_root."
+            ),
+            "inputSchema": _schema(
+                [],
+                {"root": string, "repo_root": string},
+            ),
         },
         # Named decision (legis-e5c57dedd1): check recording IS on the agent
         # surface — the agent that ran the check is the natural source of that
@@ -1429,6 +1478,62 @@ def _tool_override_rate_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[s
     )
 
 
+def _tool_override_list(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    policy = _optional_string(args, "policy")
+    entity = _optional_string(args, "entity")
+    # "submitted_by", not "agent_id": no tool schema ever accepts an agent_id
+    # argument (launch-binding invariant, pinned by the surface test). This is
+    # a read filter over the RECORDED agent_id, not caller identity.
+    submitted_by = _optional_string(args, "submitted_by")
+    # The same verified trail GET /overrides serves (via _governance_trail_records
+    # so a fresh runtime lazily opens the engine store — never a false-empty
+    # "no prior overrides"). Filters are exact-match on the recorded payload;
+    # records without the filtered key (e.g. bare events) simply don't match.
+    overrides = []
+    for rec in _governance_trail_records(runtime):
+        payload = rec.payload
+        if policy is not None and payload.get("policy") != policy:
+            continue
+        if entity is not None:
+            entity_key = payload.get("entity_key")
+            if not isinstance(entity_key, dict) or entity_key.get("value") != entity:
+                continue
+        if submitted_by is not None and payload.get("agent_id") != submitted_by:
+            continue
+        overrides.append({"seq": rec.seq, **payload})
+    return _tool_result({"overrides": overrides})
+
+
+def _tool_doctor_get(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    from legis.doctor import collect_checks, doctor_payload
+
+    # Report-only by construction: repair=False is hardwired and the schema
+    # carries no fix/repair knob — repairs stay operator/CLI (C-8).
+    root = Path(runtime.source_root or os.getcwd())
+    return _tool_result(doctor_payload(collect_checks(root, repair=False)))
+
+
+def _tool_policy_boundary_check(runtime: McpRuntime, args: dict[str, Any]) -> dict[str, Any]:
+    from legis.policy.boundary_scan import scan_policy_boundaries
+
+    source_root = Path(runtime.source_root or os.getcwd())
+    repo_root_arg = _optional_string(args, "repo_root")
+    repo_root = Path(repo_root_arg) if repo_root_arg else source_root
+    if not repo_root.is_absolute():
+        repo_root = source_root / repo_root
+    root_arg = _optional_string(args, "root")
+    root = Path(root_arg) if root_arg else repo_root / "src"
+    if not root.is_absolute():
+        root = repo_root / root
+    findings = scan_policy_boundaries(root, repo_root=repo_root)
+    return _tool_result(
+        {
+            "outcome": "FINDINGS" if findings else "PASS",
+            "findings": [finding.to_dict() for finding in findings],
+        }
+    )
+
+
 _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any]]] = {
     "policy_explain": _tool_policy_explain,
     "policy_list": _tool_policy_list,
@@ -1448,6 +1553,9 @@ _TOOL_HANDLERS: dict[str, Callable[["McpRuntime", dict[str, Any]], dict[str, Any
     "check_list": _tool_check_list,
     "check_report": _tool_check_report,
     "override_rate_get": _tool_override_rate_get,
+    "override_list": _tool_override_list,
+    "doctor_get": _tool_doctor_get,
+    "policy_boundary_check": _tool_policy_boundary_check,
 }
 
 

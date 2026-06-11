@@ -1,8 +1,11 @@
 """`legis doctor` — view and repair legis install/config health.
 
-Operator/CLI tool only: it inspects and repairs the *host* install and legis's
-own per-member artifacts. It is NOT on the agent MCP surface or the service
-layer, and per hub doctrine C-9(b) it NEVER writes weft.toml.
+It inspects and repairs the *host* install and legis's own per-member
+artifacts. The REPORT side (``collect_checks(..., repair=False)`` /
+``doctor_payload``) is shared with the agent MCP surface's report-only
+``doctor_get`` tool; the REPAIR side stays operator/CLI only (``--fix`` is
+never reachable over MCP, C-8), and per hub doctrine C-9(b) doctor NEVER
+writes weft.toml.
 """
 
 from __future__ import annotations
@@ -49,13 +52,19 @@ def _next_actions(checks: list[DoctorCheck]) -> list[str]:
     return [f"{c.id}: {c.message}" for c in checks if c.status != "ok" and c.message]
 
 
-def render_json(checks: list[DoctorCheck]) -> str:
-    payload = {
+def doctor_payload(checks: list[DoctorCheck]) -> dict[str, Any]:
+    """The machine-readable doctor report — single-sourced for the CLI's
+    ``--format json`` and the MCP ``doctor_get`` structuredContent, so the two
+    surfaces can never drift."""
+    return {
         "ok": all(c.ok for c in checks),
         "checks": [c.to_dict() for c in checks],
         "next_actions": _next_actions(checks),
     }
-    return json.dumps(payload, indent=2, sort_keys=True)
+
+
+def render_json(checks: list[DoctorCheck]) -> str:
+    return json.dumps(doctor_payload(checks), indent=2, sort_keys=True)
 
 
 def render_text(checks: list[DoctorCheck]) -> str:
