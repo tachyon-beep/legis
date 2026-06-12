@@ -558,3 +558,25 @@ def test_scan_and_runtime_gate_agree_on_a_shared_corpus(tmp_path: Path) -> None:
         assert runtime_ok == scanner_ok, (
             f"gates disagree on {name!r}: runtime={runtime_ok}, scanner={scanner_ok}"
         )
+
+
+def test_hostile_nesting_degrades_per_file_and_scan_continues(tmp_path: Path) -> None:
+    """Dogfood-4 A2 / federation rec #3 (fail-degraded, never fail-dead): one
+    hostile file (lacuna's nesting_bomb class) must not kill the whole run with
+    a RecursionError. It becomes a POLICY_BOUNDARY_FILE_TOO_COMPLEX finding and
+    the sibling file is still scanned."""
+    src = tmp_path / "src"
+    src.mkdir()
+    # Same shape as lacuna's specimen: a deep left-leaning BinOp chain PARSES
+    # fine but blows the recursive NodeVisitor walk.
+    bomb = "BOMB = " + "+".join(["1"] * 20000) + "\n"
+    (src / "nesting_bomb.py").write_text(bomb, encoding="utf-8")
+    (src / "ordinary.py").write_text("def fine():\n    return 1\n", encoding="utf-8")
+
+    findings = scan_policy_boundaries(src, repo_root=tmp_path)
+
+    rule_ids = {f.rule_id for f in findings}
+    too_complex = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_FILE_TOO_COMPLEX"]
+    assert len(too_complex) == 1, f"expected exactly one degrade finding, got {rule_ids}"
+    assert too_complex[0].file_path.endswith("nesting_bomb.py")
+    assert "skipped" in too_complex[0].reason

@@ -55,12 +55,34 @@ def scan_policy_boundaries(
                 )
             )
             continue
+        except RecursionError:
+            findings.append(_too_complex_finding(display_path))
+            continue
 
-        visitor = _BoundaryVisitor(source, file_path, display_path, repo, repo_resolved)
-        visitor.visit(module)
+        # Fail-degraded, never fail-dead (dogfood-4 A2 / federation rec #3): one
+        # hostile file (e.g. lacuna's nesting_bomb.py) must not kill the whole
+        # run with a RecursionError — skip it, flag it as a finding so the gate
+        # sees it, and keep scanning. Same posture as loomweave's
+        # LMWV-PY-TOO-COMPLEX.
+        try:
+            visitor = _BoundaryVisitor(source, file_path, display_path, repo, repo_resolved)
+            visitor.visit(module)
+        except RecursionError:
+            findings.append(_too_complex_finding(display_path))
+            continue
         findings.extend(visitor.findings)
 
     return findings
+
+
+def _too_complex_finding(display_path: str) -> BoundaryFinding:
+    return BoundaryFinding(
+        "POLICY_BOUNDARY_FILE_TOO_COMPLEX",
+        display_path,
+        1,
+        "",
+        "nesting too deep to analyze; file skipped, scan continued (per-file degrade)",
+    )
 
 
 class _BoundaryVisitor(ast.NodeVisitor):
