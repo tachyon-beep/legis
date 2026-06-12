@@ -96,6 +96,22 @@ def test_every_tool_declares_a_valid_output_schema():
         Draft202012Validator.check_schema(tool["outputSchema"])
 
 
+def test_every_output_schema_declares_top_level_object_type():
+    """MCP clients validate tools/list strictly: outputSchema must carry a
+    top-level ``"type": "object"``. A bare ``oneOf`` is valid JSON Schema but
+    fails client-side validation — and one offending tool vanishes the ENTIRE
+    catalog from the session (dogfood-4 A6: override_submit + scan_route took
+    all 21 tools down)."""
+    from legis.mcp import tool_definitions
+
+    for tool in tool_definitions():
+        schema = tool["outputSchema"]
+        assert schema.get("type") == "object", (
+            f"{tool['name']}'s outputSchema must declare top-level type 'object' "
+            f"(got {schema.get('type')!r}); MCP clients reject the whole tools/list otherwise"
+        )
+
+
 def test_error_envelope_is_a_shared_schema_and_errors_conform():
     from legis.mcp import ERROR_ENVELOPE_SCHEMA, _tool_error
 

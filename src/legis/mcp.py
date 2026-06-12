@@ -358,7 +358,12 @@ def tool_definitions() -> list[dict[str, Any]]:
         "judge_model": nullable_string,
         "judge_rationale": nullable_string,
     }
+    # MCP requires outputSchema's top level to declare "type": "object" — clients
+    # (Claude Code's zod validator) reject the ENTIRE tools/list when any tool
+    # omits it, vanishing all 21 tools from the session (dogfood-4 A6). The oneOf
+    # variants below all describe objects, so the top-level type is sound.
     override_submit_out = {
+        "type": "object",
         "oneOf": [
             _schema(
                 ["outcome", "cell", "seq", "note"],
@@ -445,7 +450,9 @@ def tool_definitions() -> list[dict[str, Any]]:
             "surfaced": boolean,
         },
     }
+    # Top-level "type": "object" required — see override_submit_out note (A6).
     scan_route_out = {
+        "type": "object",
         "oneOf": [
             _schema(
                 ["outcome", "routed", "artifact_status"],
