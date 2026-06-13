@@ -911,6 +911,10 @@ _SECRET_MCP_ENV_KEYS = frozenset({
     "LEGIS_HMAC_KEY",
     "LEGIS_WARDLINE_ARTIFACT_KEY",
     "LEGIS_LOOMWEAVE_HMAC_KEY",
+    # Retired by G11 (legis->Filigree transport-HMAC dropped) and now inert, but
+    # still secret-shaped: keep scrubbing it so a stale operator-set value is
+    # never copied verbatim into .mcp.json as "safe operator-owned env".
+    "LEGIS_FILIGREE_HMAC_KEY",
     "OPENROUTER_API_KEY",
 })
 

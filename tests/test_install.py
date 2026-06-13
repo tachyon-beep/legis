@@ -986,6 +986,9 @@ def test_register_mcp_json_drops_unsafe_or_secret_env(tmp_path, monkeypatch):
             "LEGIS_WARDLINE_CELL": "surface_override",
             "LEGIS_UNSAFE_DEV_AUTH": "1",
             "LEGIS_HMAC_KEY": "secret",
+            # Retired by G11 but still secret-shaped: a stale operator-set value
+            # must still be scrubbed, never copied verbatim into .mcp.json.
+            "LEGIS_FILIGREE_HMAC_KEY": "stale-retired-secret",
             "OPENROUTER_API_KEY": "secret",
         },
     )
@@ -995,6 +998,7 @@ def test_register_mcp_json_drops_unsafe_or_secret_env(tmp_path, monkeypatch):
     entry = _read_legis_mcp_entry(tmp_path)
     assert entry["command"] == "/opt/bin/legis"
     assert entry["env"] == {"LEGIS_WARDLINE_CELL": "surface_override"}
+    assert "LEGIS_FILIGREE_HMAC_KEY" not in entry["env"]
 
 
 def test_register_mcp_json_explicit_agent_id_updates_usable_entry_in_place(tmp_path, monkeypatch):
