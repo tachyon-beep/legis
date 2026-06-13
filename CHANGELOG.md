@@ -7,6 +7,42 @@ versions per [PEP 440](https://peps.python.org/pep-0440/) /
 
 ## [Unreleased]
 
+_Post-1.0.0 work lands here; legis versions independently from the Weft 1.0 launch on._
+
+## [1.0.0] — 2026-06-13
+
+This is the gold release — the legis unit of the coordinated **Weft 1.0** launch. It
+aggregates everything since the last published candidate (`1.0.0rc4`). 1.0.0 was first
+cut 2026-06-09; a P0 governance-honesty false-green (G1) found *after* that cut re-opened
+it as internal `1.0.0rc5` to close G1 plus a batch of post-cut hardening — the dogfood-4
+fail-degrade close-out and the MCP-surface completion below. The internal rc candidates
+were never published; this 2026-06-13 cut is the launch.
+
+### Fixed — fail-degrade close-out (dogfood-4, 2026-06-12/13)
+
+- **Boundary scan fails degraded, never dead, on hostile source (A2, weft-9784d0e654).**
+  `policy/boundary_scan.py` wraps both `ast.parse` and the AST visitor walk per file; a
+  pathological file (deep nesting / oversized expression) yields a
+  `POLICY_BOUNDARY_FILE_TOO_COMPLEX` finding ("file skipped, scan continued") instead of
+  escaping and killing the run. The degrade path is now exercised through the real
+  visitor-walk path (the original test validated the wrong handler) and broadened to
+  catch `MemoryError`, not only `RecursionError`; a 20 000-term BinOp regression fixture
+  pins it. (conventions C-13.)
+- **`override_submit` / `scan_route` outputSchemas declare top-level `type: object`
+  (A6, weft-cca2ecbe12).** The discriminated `oneOf` success envelopes carry the
+  top-level type, made unrepresentable-when-missing via a `_one_of` helper so a
+  type-less variant cannot regress.
+- **Dead transport-signing remnants removed (G6).** Retiring the legis→Filigree
+  transport-HMAC (G11) leaves no dead code: stale helpers/comments deleted; the retired
+  `LEGIS_FILIGREE_HMAC_KEY` is kept only in the `.mcp.json` scrub set so a stale operator
+  env can't silently re-enable a dropped header.
+
+### Tests / contracts (launch prep, 2026-06-12/13)
+
+- The SEI oracle is driven from a vendored Loomweave authority fixture (loaded + parsed
+  once, cached), and a shared Weft dirty-scan artifact conformance vector is added — the
+  cross-member wire contract is byte-exact and self-verifying on both ends.
+
 ### Added (MCP surface gap analysis, 2026-06-11)
 
 Three read-only tools close the remaining self-service gaps on the agent
@@ -64,15 +100,6 @@ surface (18 → 21 tools):
   derived only from what the hook process can see — never the MCP server's
   runtime env), followed by any refresh messages; the internal-failure path
   emits a failure line instead of exiting 0 mutely.
-
-## [1.0.0] — 2026-06-11
-
-This is the gold release. It aggregates everything since the last published
-candidate (`1.0.0rc4`). 1.0.0 was first cut on 2026-06-09; a P0 governance-honesty
-false-green (G1) was found *after* that cut, so the release was re-opened as an
-internal `1.0.0rc5` to close it (and a small batch of post-cut hardening) before
-shipping final. The "federation cross-member hardening" and "post-first-cut code
-review" sections below record that work; rc5 itself was never published.
 
 ### Security / honesty (federation cross-member hardening, 2026-06-10/11)
 
@@ -555,6 +582,7 @@ WP-M1 service-layer extraction, consolidated behind a stable version.
   `HTTPException`, so both HTTP and the forthcoming MCP adapter drive one code
   path. Behavior-preserving; FastAPI handlers are now thin adapters.
 
+[Unreleased]: https://github.com/foundryside-dev/legis/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc4...v1.0.0
 [1.0.0rc4]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc3...v1.0.0rc4
 [1.0.0rc3]: https://github.com/foundryside-dev/legis/compare/v1.0.0rc2...v1.0.0rc3
