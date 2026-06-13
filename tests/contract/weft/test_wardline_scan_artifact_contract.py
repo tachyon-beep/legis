@@ -28,14 +28,20 @@ from legis.wardline.ingest import (
     DEFECT_KIND,
     FINDINGS_KEY,
     KNOWN_KINDS,
+    SKIPPED_DIRTY_TREE,
+    WardlineDirtyTreeError,
     WardlinePayloadError,
     active_defects,
+    verify_wardline_artifact,
     wardline_artifact_fields,
 )
 
 VECTOR_PATH = Path(__file__).parent / "vectors" / "wardline_scan_artifact.v1.json"
+DIRTY_VECTOR_PATH = Path(__file__).parent / "vectors" / "wardline_dirty_scan_artifact.v1.json"
 VECTOR = json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
+DIRTY_VECTOR = json.loads(DIRTY_VECTOR_PATH.read_text(encoding="utf-8"))
 _KEY = VECTOR["signing"]["key_utf8"].encode("utf-8")
+_DIRTY_KEY = DIRTY_VECTOR["signing"]["key_utf8"].encode("utf-8")
 
 
 def _ids(cases: list[dict]) -> list[str]:
@@ -49,6 +55,12 @@ def test_vector_self_describes_the_constants_legis_enforces():
     assert VECTOR["findings_key"] == FINDINGS_KEY
     assert VECTOR["defect_kind"] == DEFECT_KIND
     assert set(VECTOR["known_kinds"]) == set(KNOWN_KINDS)
+
+
+def test_dirty_vector_self_describes_the_dirty_key_legis_consumes():
+    assert DIRTY_VECTOR["contract"] == "weft/wardline-dirty-scan-artifact"
+    assert DIRTY_VECTOR["dirty_key"] == "dirty"
+    assert DIRTY_VECTOR["signature_key"] == "artifact_signature"
 
 
 @pytest.mark.parametrize("case", VECTOR["valid"], ids=_ids(VECTOR["valid"]))
@@ -68,3 +80,24 @@ def test_invalid_vectors_are_rejected_loudly(case):
     # under a green status (the G1 class). The match string anchors WHICH guard.
     with pytest.raises(WardlinePayloadError, match=case["reject_match"]):
         active_defects(case["artifact"])
+
+
+@pytest.mark.parametrize("case", DIRTY_VECTOR["valid"], ids=_ids(DIRTY_VECTOR["valid"]))
+def test_dirty_vector_governs_keyless_as_dirty(case):
+    prov = verify_wardline_artifact(case["artifact"], artifact_key=None)
+    assert prov["artifact_status"] == case["expected_keyless_artifact_status"]
+    assert prov["commit_sha"] == case["artifact"]["commit_sha"]
+
+
+@pytest.mark.parametrize("case", DIRTY_VECTOR["valid"], ids=_ids(DIRTY_VECTOR["valid"]))
+def test_dirty_vector_is_typed_skip_in_ci_posture(case):
+    with pytest.raises(WardlineDirtyTreeError) as exc:
+        verify_wardline_artifact(case["artifact"], artifact_key=_DIRTY_KEY, allow_dirty=False)
+    assert exc.value.reason == case["expected_ci_reject_reason"] == SKIPPED_DIRTY_TREE
+
+
+@pytest.mark.parametrize("case", DIRTY_VECTOR["valid"], ids=_ids(DIRTY_VECTOR["valid"]))
+def test_dirty_vector_governs_under_explicit_devmode(case):
+    prov = verify_wardline_artifact(case["artifact"], artifact_key=_DIRTY_KEY, allow_dirty=True)
+    assert prov["artifact_status"] == case["expected_ci_allow_dirty_artifact_status"]
+    assert "artifact_signature" not in prov
