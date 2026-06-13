@@ -1865,6 +1865,11 @@ def test_c8_no_agent_reachable_enablement_or_signing_surface():
     # the dirty-snapshot opt-in (LEGIS_WARDLINE_ALLOW_DIRTY) and the artifact key
     # stay env-only operator switches, never call arguments (N4 guard).
     scan_route = next(t for t in tool_definitions() if t["name"] == "scan_route")
+    description = scan_route["description"]
+    assert "default keyless posture is governed" in description
+    assert "artifact_status=dirty" in description
+    assert "SKIPPED_DIRTY_TREE" in description
+    assert "WARDLINE_DIRTY_TREE" not in description
     props = set(scan_route["inputSchema"]["properties"])
     assert props == {"scan", "cell", "severity_map", "fail_on"}
     for forbidden_arg in ("allow_dirty", "artifact_key", "hmac_key", "agent_id"):

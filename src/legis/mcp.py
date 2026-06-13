@@ -632,9 +632,10 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "Route Wardline scan findings through one cell, a severity_map "
                 "policy, or a cell plus fail_on threshold. Returns a discriminated "
                 "success outcome: ROUTED (governed). An unsigned dirty-tree dev "
-                "artifact where signed provenance is required returns "
-                "WARDLINE_DIRTY_TREE with isError:true; commit for a signed "
-                "artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to govern it "
+                "artifact in the default keyless posture is governed and stamped "
+                "artifact_status=dirty. Where signed provenance is required, a dirty "
+                "artifact returns SKIPPED_DIRTY_TREE with isError:true; commit for a "
+                "signed artifact, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 to govern it "
                 "unsigned in dev."
             ),
             "inputSchema": _schema(

@@ -121,7 +121,7 @@ All tools return a `structuredContent` JSON payload. Names are exact.
 | `override_submit` | Submit an override as the launch-bound agent. Routes to the governing cell and returns a discriminated outcome envelope (`ACCEPTED_SELF` / `ACCEPTED_BY_JUDGE` / `BLOCKED` / `ESCALATED_PENDING` / `NEED_INPUTS`). |
 | `signoff_status_get` | Poll whether a **structured** sign-off request (by `seq`) has been cleared. |
 | `override_rate_get` | Read the fixed operator force-past override-rate gate (status / rate / sample_size). Measures operator force-pasts; **not** movable by agent retries. |
-| `scan_route` | Route Wardline scan findings through one cell, a `severity_map`, or a cell + `fail_on` threshold. Returns `ROUTED` on success; dirty unsigned artifacts return `WARDLINE_DIRTY_TREE` (`isError: true`) unless the dev dirty opt-in is enabled. |
+| `scan_route` | Route Wardline scan findings through one cell, a `severity_map`, or a cell + `fail_on` threshold. Returns `ROUTED` on success; dirty unsigned artifacts surface as `SKIPPED_DIRTY_TREE` with `isError: true` unless the dev dirty opt-in is enabled. MCP preserves `WARDLINE_DIRTY_TREE` as the structured `error_code`. |
 
 ### Git
 | Tool | Purpose |
@@ -182,10 +182,10 @@ Two routing-specific notes for `scan_route`:
   routing is only honoured under the explicit `LEGIS_UNSAFE_WARDLINE_REQUEST_ROUTING=1`
   escape hatch.
 - An unsigned dirty-tree dev artifact arriving where signed provenance is required
-  is a typed recoverable failure, not a success: MCP returns
-  `WARDLINE_DIRTY_TREE` with `isError: true` and nothing is governed. Commit for
-  a signed artifact, or set `LEGIS_WARDLINE_ALLOW_DIRTY=1` to govern it unsigned
-  in dev.
+  is a typed recoverable failure, not a success: MCP returns `isError: true` with
+  structured `error_code: WARDLINE_DIRTY_TREE` and message/reason
+  `SKIPPED_DIRTY_TREE`; nothing is governed. Commit for a signed artifact, or set
+  `LEGIS_WARDLINE_ALLOW_DIRTY=1` to govern it unsigned in dev.
 
 ## Workflow patterns
 
@@ -240,8 +240,9 @@ If the ledger is not enabled you get `CELL_NOT_ENABLED` — ask the operator to 
 ### Route Wardline findings through governance
 ```
 scan_route {scan}                       # routing is server-owned; pass only the scan
-# → ROUTED (governed into the configured cell), or WARDLINE_DIRTY_TREE with
-#   isError:true (commit, or set LEGIS_WARDLINE_ALLOW_DIRTY=1 in dev)
+# → ROUTED (governed into the configured cell), or SKIPPED_DIRTY_TREE with
+#   isError:true (MCP error_code WARDLINE_DIRTY_TREE; commit, or set
+#   LEGIS_WARDLINE_ALLOW_DIRTY=1 in dev)
 ```
 
 ### Gate boundary evidence in CI

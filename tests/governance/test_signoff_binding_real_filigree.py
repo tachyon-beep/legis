@@ -11,19 +11,16 @@ daemon is up (the same ``:8749`` server-mode marker the incident stands up):
 
     LEGIS_FILIGREE_TEST_URL   base URL of a live Filigree (e.g. http://127.0.0.1:8749)
     LEGIS_FILIGREE_TEST_ISSUE an existing issue id on that server to bind to
-    LEGIS_FILIGREE_HMAC_KEY   (optional) the transport HMAC key; see the posture note
 
 It asserts the full chain end to end over real HTTP:
   bind -> real Filigree attach -> read the association back (persistence, not echo)
        -> record in a local BindingLedger
        -> legis closure-gate (real HTTP via TestClient) flips to allowed + evidence.
 
-G11 posture (weft-c7e3486246), observed live, not assumed: legis EMITS both the
-transport ``X-Weft-*`` HMAC and the app-level ``binding_signature``; the current
-Filigree classic route STORES them without verifying (issue legis-d5783eacff). This
-test asserts that observed reality — the bind succeeds whether or not a key is
-provisioned — so the "verify, or declare the route transport-open and stop emitting
-dead signatures" decision (Filigree's to make) rests on evidence, not folklore.
+G11 posture (weft-c7e3486246): Filigree's classic route is transport-open, so
+legis does not emit dead ``X-Weft-*`` transport headers. The app-level
+``binding_signature`` still persists and the local BindingLedger remains the
+verifier.
 """
 
 from __future__ import annotations
@@ -122,21 +119,15 @@ def test_real_filigree_bind_persists_then_clears_closure_gate(tmp_path):
     assert body["evidence"]["content_hash"] == content_hash
 
 
-def test_real_filigree_bind_succeeds_without_a_transport_key():
-    """G11 evidence: the bind is transport-open today.
+def test_real_filigree_bind_succeeds_on_transport_open_route():
+    """G11 evidence: the bind is transport-open by design.
 
-    With no transport HMAC key provisioned, legis emits no ``X-Weft-*`` headers,
-    yet the classic route still accepts the write. That is the unauthenticated-bind
-    reality the G11 decision must be made against — recorded here as an assertion,
-    not a claim. If a future Filigree starts REJECTING unsigned binds, this test
-    flips red and the "transport-open" half of the posture note is stale.
+    Legis emits no ``X-Weft-*`` headers and the classic route accepts the write;
+    the app-level binding_signature/BindingLedger carry governance proof.
     """
     from legis.filigree.client import HttpFiligreeClient
     from legis.governance.signoff_binding import bind_signoff_to_issue
     from legis.identity.entity_key import EntityKey
-
-    if filigree_transport_key_present():
-        pytest.skip("LEGIS_FILIGREE_HMAC_KEY is set — this probe is for the keyless posture")
 
     base_url = os.environ["LEGIS_FILIGREE_TEST_URL"]
     issue_id = os.environ["LEGIS_FILIGREE_TEST_ISSUE"]
@@ -151,7 +142,3 @@ def test_real_filigree_bind_succeeds_without_a_transport_key():
         signoff_seq=1,
     )
     assert out["loomweave_entity_id"] == entity_id  # accepted, unauthenticated
-
-
-def filigree_transport_key_present() -> bool:
-    return bool(os.environ.get("LEGIS_FILIGREE_HMAC_KEY") or os.environ.get("LEGIS_HMAC_KEY"))

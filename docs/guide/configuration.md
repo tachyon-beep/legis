@@ -114,14 +114,19 @@ load-bearing.
 ### Signing keys (complex tier)
 
 All HMAC keys are operator-held secrets supplied via the environment. A
-channel-specific key wins; absent it, the shared `LEGIS_HMAC_KEY` is the fallback.
+channel-specific key wins; absent it, the shared `LEGIS_HMAC_KEY` is the fallback
+where the channel supports transport signing.
 
 | Variable | Role |
 |---|---|
 | `LEGIS_HMAC_KEY` | Shared signing key — signs governance verdicts and is the fallback for the channel keys below. Enabling the complex tier requires it. |
 | `LEGIS_WARDLINE_ARTIFACT_KEY` | Verifies the signed Wardline scan artifact (`scan_route` CI posture). |
 | `LEGIS_LOOMWEAVE_HMAC_KEY` | Signs legis's requests to Loomweave. |
-| `LEGIS_FILIGREE_HMAC_KEY` | Signs legis's requests to Filigree. |
+| `LEGIS_FILIGREE_HMAC_KEY` | Deprecated and inert for the classic Filigree bind route. It no longer enables request signing. |
+
+Filigree entity-association binds are intentionally transport-open: Legis sends
+the app-level `binding_signature` in the JSON body, but no `X-Weft-*` transport
+HMAC headers.
 
 ### LLM judge (coached / protected cells)
 

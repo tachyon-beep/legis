@@ -116,12 +116,13 @@ rather than ship final with a governance-honesty blocker open.
   `OVERRIDDEN_BY_OPERATOR`) and the accepting set cannot drift apart. `CELL_TIER_ORDER`
   becomes the canonical ordered cell membership; `VALID_CELLS` and `policy_list`
   derive from it, so a new cell can no longer be silently omitted from `policy_list`.
-- **G11 — verification posture stated plainly.** The `weft_signing` docstring now
-  names the transport-open reality: legis *emits* the `X-Weft-*` request HMAC and the
-  app-level `binding_signature`; the classic Filigree route stores them without
-  verifying. Integrity rests on the loopback transport and legis's own
-  `BindingLedger`, not on a sibling checking the signature. The headers are kept (a
-  shared, cheap, forward-compatible seam); verify-or-declare is Filigree's call.
+- **G11 — verification posture stated plainly.** The `weft_signing` and Filigree
+  client docstrings now name the transport-open reality: legis does not emit
+  `X-Weft-*` request HMAC headers on the classic Filigree bind route. The app-level
+  `binding_signature` is still sent in the JSON body; integrity rests on TLS and
+  legis's own `BindingLedger`, not on a sibling checking transport headers. The
+  legacy HMAC helper remains only as a deterministic formula seam for historical
+  vectors and future verifier work.
 - **G12 — real-Filigree bind + closure-gate test scaffold.** A live-daemon
   integration test (skipped unless `LEGIS_FILIGREE_TEST_URL` + `LEGIS_FILIGREE_TEST_ISSUE`
   are set) asserts the bind *persists* (reads the association back — something the
@@ -471,16 +472,14 @@ listed as not-yet-built.
   direct resolver call can no longer silently ignore its override. No change to
   the resolved URLs for existing deployments.
 - **Weft-component transport-HMAC seam extracted to `weft_signing`** — the
-  Loomweave SEI client and the Filigree association client signed their requests
-  with byte-for-byte copies of the same `X-Weft-Component` scheme
-  (`_json_body_bytes` / `_path_and_query` / `sign_*_request` /
-  `*_hmac_key_from_env`). The wire format now has a single definition; both
-  clients delegate to it (component name and channel env var parameterised), so
-  a future canonicalization or header change can no longer touch one channel and
-  silently diverge the other. The shared serializer deliberately stays off
-  `canonical.canonical_json` (whose `ensure_ascii=False` would change the signed
-  bytes). Behavior-preserving — existing per-channel golden vectors unchanged,
-  plus a new cross-channel anti-drift test. No change to signatures on the wire.
+  Loomweave SEI client and legacy Filigree request-signing helper had byte-for-byte
+  copies of the same `X-Weft-Component` scheme (`_json_body_bytes` /
+  `_path_and_query` / `sign_*_request` / `*_hmac_key_from_env`). The formula now has
+  a single definition for Loomweave signing plus Filigree historical vectors. The
+  live Filigree association client no longer emits those headers; its app-level
+  `binding_signature` remains in the JSON body. The shared serializer deliberately
+  stays off `canonical.canonical_json` (whose `ensure_ascii=False` would change the
+  signed bytes).
 - **Wardline scan-routing validation centralised in the service layer** — "is
   request-side routing allowed, and is the cell-spec well-formed?" is a
   governance decision that was hand-copied into both the HTTP

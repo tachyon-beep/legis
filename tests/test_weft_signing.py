@@ -1,8 +1,8 @@
 """The shared Weft-component transport-HMAC seam.
 
-These pin the single wire definition that ``identity/loomweave_client`` and
-``filigree/client`` both delegate to, and guard against the two channels
-silently re-diverging (the duplication this module was extracted to remove).
+These pin the live Loomweave wire definition and the legacy Filigree formula
+helper. Filigree classic binds are transport-open after G11, so
+``filigree/client`` no longer emits these headers.
 """
 
 from __future__ import annotations
@@ -54,10 +54,10 @@ def test_sign_weft_request_matches_explicit_hmac_contract():
     }
 
 
-def test_both_channels_share_one_seam_differing_only_by_component():
-    # Anti-drift guard: for identical inputs the Loomweave and Filigree channels
-    # must produce the SAME signature — only the component namespace differs. If
-    # a future change to one channel's canonicalization slips in, this fails.
+def test_legacy_filigree_formula_matches_loomweave_except_component():
+    # Historical/conformance guard: for identical inputs the Loomweave live
+    # signer and Filigree legacy formula helper produce the SAME signature — only
+    # the component namespace differs. HttpFiligreeClient does not emit it.
     key, method, url = b"weft-key", "POST", "https://h/api/issue/I-1/x?q=1"
     body = {"entity_id": "loomweave:eid:abc", "content_hash": "h"}
     kwargs = dict(timestamp=1_700_000_000, nonce="cafef00d")

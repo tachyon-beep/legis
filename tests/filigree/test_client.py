@@ -127,47 +127,46 @@ def test_filigree_hmac_key_from_env(monkeypatch):
     monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
     assert filigree_hmac_key_from_env() is None
     monkeypatch.setenv("LEGIS_HMAC_KEY", "shared")
-    assert filigree_hmac_key_from_env() == b"shared"
+    assert filigree_hmac_key_from_env() is None
     monkeypatch.setenv("LEGIS_FILIGREE_HMAC_KEY", "channel")
-    assert filigree_hmac_key_from_env() == b"channel"  # channel-specific wins
+    assert filigree_hmac_key_from_env() is None
 
 
-def test_real_transport_signs_when_key_present(monkeypatch):
-    # The default (non-injected) transport path attaches Weft-component HMAC
-    # headers when a key is configured, and none when it is not.
+def test_real_transport_does_not_emit_dead_hmac_headers(monkeypatch):
+    # G11: Filigree's classic entity-association route is transport-open, so the
+    # default transport must not emit X-Weft-* headers even if old key knobs are
+    # present. The app-level binding_signature still travels in the JSON body.
     import legis.filigree.client as client_mod
 
     captured = {}
 
     def capture(method, url, body, headers=None):
         captured["headers"] = headers or {}
+        captured["body"] = body or {}
         return {"ok": True}
 
     monkeypatch.setattr(client_mod, "_urllib_fetch", capture)
+    monkeypatch.setenv("LEGIS_FILIGREE_HMAC_KEY", "legacy-channel")
+    monkeypatch.setenv("LEGIS_HMAC_KEY", "shared")
 
-    signed = HttpFiligreeClient("https://filigree.example", hmac_key=b"weft-key")
-    signed.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
-    assert captured["headers"].get("X-Weft-Component", "").startswith("filigree:")
-
-    captured.clear()
-    # With no key configured (neither injected nor in env), the transport is
-    # unsigned — backward compatible.
-    monkeypatch.delenv("LEGIS_FILIGREE_HMAC_KEY", raising=False)
-    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
-    unsigned = HttpFiligreeClient("https://filigree.example")
-    unsigned.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
+    client = HttpFiligreeClient("https://filigree.example", hmac_key=b"weft-key")
+    client.attach(
+        "ISSUE-1",
+        "loomweave:eid:abc",
+        "h",
+        actor="legis",
+        signoff_seq=7,
+        signature="hmac-sha256:v2:abc",
+    )
     assert "X-Weft-Component" not in captured["headers"]
+    assert captured["body"]["signature"] == "hmac-sha256:v2:abc"
+    assert captured["body"]["signoff_seq"] == 7
 
 
-def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
-    # Q-M4 regression: the bytes put on the wire MUST equal the bytes the
-    # X-Weft signature commits to. If _urllib_fetch re-serialised the body with
-    # default json.dumps (spaces / source key order), a Filigree verifier
-    # checking the body hash against the actual request bytes would reject every
-    # signed POST. Drive the real transport end to end and verify the captured
-    # request body verifies against the captured signature.
-    import hashlib
-    import hmac
+def test_wire_body_is_stable_compact_json_but_unsigned(monkeypatch):
+    # G11 keeps the transport unsigned, but still sends stable compact JSON so
+    # body-level binding_signature fixtures do not drift with dict insertion
+    # order or json.dumps spacing.
     import legis.filigree.client as client_mod
 
     captured = {}
@@ -191,27 +190,16 @@ def test_signed_wire_body_is_byte_identical_to_signed_bytes(monkeypatch):
 
     monkeypatch.setattr(client_mod, "_open_no_redirect", fake_open_no_redirect)
 
-    key = b"weft-key"
-    c = HttpFiligreeClient("https://filigree.example", hmac_key=key)
+    c = HttpFiligreeClient("https://filigree.example", hmac_key=b"ignored")
     c.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
 
-    # The wire body is exactly the canonical signed bytes.
     assert captured["data"] == client_mod._json_body_bytes(
         {"entity_id": "loomweave:eid:abc", "content_hash": "h", "actor": "legis"}
     )
-
-    # And that body verifies against the transmitted signature.
     headers = {k.lower(): v for k, v in captured["headers"].items()}
-    component = headers["x-weft-component"]
-    assert component.startswith("filigree:")
-    signature = component.split(":", 1)[1]
-    body_hash = hashlib.sha256(captured["data"]).hexdigest()
-    message = (
-        f"POST\n/api/issue/ISSUE-1/entity-associations\n"
-        f"{body_hash}\n{headers['x-weft-timestamp']}\n{headers['x-weft-nonce']}"
-    ).encode("utf-8")
-    expected = hmac.new(key, message, hashlib.sha256).hexdigest()
-    assert signature == expected
+    assert "x-weft-component" not in headers
+    assert "x-weft-timestamp" not in headers
+    assert "x-weft-nonce" not in headers
 
 
 # --- roadmap 13: transport / error-path branches (the surface a security

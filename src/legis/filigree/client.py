@@ -1,9 +1,15 @@
 """Filigree entity-association client — legis binds governance to issues.
 
-Same transport posture as ``identity/loomweave_client.py``: stdlib ``urllib`` with
-an injectable ``fetch`` so tests run offline; no new dependency. legis binds the
-opaque SEI as ``entity_id`` (Filigree never parses it) and hands the entity's
-content hash for Filigree to store verbatim; drift comparison stays legis's job.
+Stdlib ``urllib`` with an injectable ``fetch`` so tests run offline; no new
+dependency. legis binds the opaque SEI as ``entity_id`` (Filigree never parses
+it) and hands the entity's content hash for Filigree to store verbatim; drift
+comparison stays legis's job.
+
+The Filigree classic entity-association route is intentionally transport-open:
+Legis sends the app-level ``binding_signature`` in the JSON body when a governed
+sign-off exists, but this client does not emit ``X-Weft-*`` transport HMAC
+headers. That avoids a dead handshake where Legis appears to authenticate a
+route Filigree has deliberately documented as non-verifying.
 """
 
 from __future__ import annotations
@@ -13,8 +19,6 @@ import http.client
 import ipaddress
 import logging
 import os
-import secrets
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,7 +27,6 @@ from typing import Any, Callable, Protocol, runtime_checkable
 from legis.weft_signing import (
     sign_weft_request,
     weft_body_bytes,
-    weft_hmac_key_from_env,
     weft_path_and_query,
 )
 
@@ -39,11 +42,10 @@ class FiligreeError(RuntimeError):
 MAX_RESPONSE_BYTES = 1_000_000
 
 
-# The Weft-component transport-HMAC scheme is shared with the Loomweave channel;
-# both delegate to ``weft_signing`` so the wire format (canonicalization +
-# ``X-Weft-*`` headers) has a single definition and cannot silently diverge. The
-# module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
-# internal transport and existing call sites stable.
+# The module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
+# internal transport and existing call sites stable. Filigree does not emit
+# ``X-Weft-*`` headers by default (G11), but the helper below is retained as a
+# legacy/conformance seam for the shared HMAC formula.
 _json_body_bytes = weft_body_bytes
 _path_and_query = weft_path_and_query
 
@@ -57,13 +59,11 @@ def sign_filigree_request(
     timestamp: int,
     nonce: str,
 ) -> dict[str, str]:
-    """Weft-component HMAC headers for a legis->Filigree request (Q-M4).
+    """Legacy Weft-component HMAC headers for a legis->Filigree request.
 
-    Delegates to the shared ``weft_signing`` seam (same scheme as the Loomweave
-    channel). The attach ``signature`` is an app-level attestation about WHAT is
-    bound; this proves WHO is calling. ``timestamp`` and ``nonce`` are injected
-    (not generated here) so the signature is deterministically testable. See
-    ``weft_signing`` for the canonicalization contract and ADR-0003.
+    The live ``HttpFiligreeClient`` intentionally does not call this helper
+    because Filigree's classic route does not verify ``X-Weft-*``. It remains a
+    deterministic formula helper for historical vectors and future verifier work.
     """
     return sign_weft_request(
         "filigree", key, method, url, body, timestamp=timestamp, nonce=nonce
@@ -71,12 +71,12 @@ def sign_filigree_request(
 
 
 def filigree_hmac_key_from_env() -> bytes | None:
-    """Resolve the Filigree HMAC key without making it mandatory.
+    """Retired Filigree transport-HMAC resolver.
 
-    Absent key -> unsigned (backward compatible with deployments that have not
-    provisioned the channel key yet), mirroring ``loomweave_hmac_key_from_env``.
+    Kept as a compatibility shim for callers that imported it before G11. The
+    Filigree bind route is transport-open, so no env var enables request signing.
     """
-    return weft_hmac_key_from_env("LEGIS_FILIGREE_HMAC_KEY")
+    return None
 
 
 @runtime_checkable
@@ -90,12 +90,9 @@ class FiligreeClient(Protocol):
 def _urllib_fetch(
     method: str, url: str, body: dict | None, headers: dict[str, str] | None = None
 ) -> dict:
-    # Send the SAME canonical bytes that sign_filigree_request hashes
-    # (_json_body_bytes: sorted keys, compact separators). The Weft signature
-    # commits to that body hash, so a verifier checking the hash against the
-    # actual request bytes only matches if the wire body is byte-identical to
-    # the signed body (Q-M4). Default json.dumps spacing/ordering would diverge
-    # and every signed POST would fail verification. Mirrors loomweave_client.
+    # Send stable compact JSON bytes. Even though the Filigree transport is not
+    # signed, keeping a canonical body avoids needless fixture drift and preserves
+    # compatibility with the app-level binding_signature payload.
     data = _json_body_bytes(body) if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
@@ -180,29 +177,16 @@ class HttpFiligreeClient:
         hmac_key: bytes | None = None,
     ) -> None:
         self._base = _validate_base_url(base_url)
-        # An injected fetch (tests) is used verbatim and never signs, so resolve
-        # the key only when the real signing transport is in play — otherwise an
-        # ambient LEGIS_*_HMAC_KEY would be read but never used. Absent key ->
-        # unsigned, backward compatible.
         if fetch is not None:
-            self._hmac_key = hmac_key
             self._fetch = fetch
         else:
-            self._hmac_key = hmac_key if hmac_key is not None else filigree_hmac_key_from_env()
-            self._fetch = self._signing_fetch
+            # ``hmac_key`` is accepted for backward-compatible constructor shape
+            # but deliberately ignored: Filigree classic HTTP is transport-open.
+            _ = hmac_key
+            self._fetch = self._transport_fetch
 
-    def _signing_fetch(self, method: str, url: str, body: dict | None) -> dict:
-        headers: dict[str, str] = {}
-        if self._hmac_key is not None:
-            headers = sign_filigree_request(
-                self._hmac_key,
-                method,
-                url,
-                body,
-                timestamp=int(time.time()),
-                nonce=secrets.token_hex(16),
-            )
-        return _urllib_fetch(method, url, body, headers)
+    def _transport_fetch(self, method: str, url: str, body: dict | None) -> dict:
+        return _urllib_fetch(method, url, body, {})
 
     def attach(self, issue_id: str, entity_id: str, content_hash: str,
                *, actor: str, signoff_seq: int | None = None,

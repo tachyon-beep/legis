@@ -730,8 +730,8 @@ def create_app(
 
     # --- wardline suite-combination surface (WP-6.1) ---
 
-    @app.post("/wardline/scan-results")
-    def wardline_scan_results(body: ScanResultsIn, actor: str = Depends(verify_writer)) -> dict:
+    @app.post("/wardline/scan-results", response_model=None)
+    def wardline_scan_results(body: ScanResultsIn, actor: str = Depends(verify_writer)) -> dict[str, Any] | JSONResponse:
         try:
             routing = resolve_scan_routing(
                 server_cell=os.environ.get("LEGIS_WARDLINE_CELL"),

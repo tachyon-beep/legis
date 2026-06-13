@@ -1,13 +1,10 @@
 """Shared Weft-component transport-HMAC seam.
 
-The Loomweave SEI client (``identity/loomweave_client.py``) and the Filigree
-association client (``filigree/client.py``) authenticate their requests to a
-sibling Weft component with the *same* wire scheme: an
-``X-Weft-Component: <name>:<hmac>`` header alongside ``X-Weft-Timestamp`` and
-``X-Weft-Nonce``, where the HMAC is computed over
+The Loomweave SEI client (``identity/loomweave_client.py``) authenticates
+protected requests with ``X-Weft-Component: <name>:<hmac>`` plus
+``X-Weft-Timestamp`` and ``X-Weft-Nonce``, where the HMAC is computed over
 ``METHOD\\npath?query\\nsha256(body)\\ntimestamp\\nnonce``. This module is the
-single definition of that scheme so the two channels cannot silently diverge —
-a change to the canonicalization or header shape now happens in one place.
+single definition of that scheme for live HMAC transports and historical vectors.
 
 Canonicalization contract: the signed body bytes are
 ``json.dumps(body, sort_keys=True, separators=(",", ":"))`` with the default
@@ -17,21 +14,13 @@ Wardline; routing a transport body through it would change every signed
 request's bytes. The wire transport MUST send exactly ``weft_body_bytes(body)``
 and a verifier MUST recanonicalize identically before hashing.
 
-Verification posture (G11, weft-c7e3486246) — stated plainly so the emitted
-headers are never mistaken for an enforced control: legis EMITS these
-``X-Weft-*`` headers on every signed Filigree/Loomweave request, but the current
-Filigree *classic* route does NOT verify them — it stores the app-level
-``binding_signature`` verbatim and ignores the transport HMAC (issue
-legis-d5783eacff). So today the bind is **transport-open**: integrity rests on
-the loopback transport and on legis's own ``BindingLedger`` (the authoritative,
-locally-verifiable record), NOT on a sibling checking this signature. The headers
-are kept deliberately — the scheme is shared with the Loomweave channel, the HMAC
-is cheap, and the emit is *forward-compatible*: the moment a verifier checks them
-they become live with no producer change. Whether to verify, or to formally
-declare the route transport-open and stop emitting, is **Filigree's decision to
-make** (it owns the verifying end); legis emits honestly-labelled rather than
-ripping out a cross-component contract unilaterally. The live evidence behind this
-posture is asserted in ``tests/governance/test_signoff_binding_real_filigree.py``.
+Verification posture (G11, weft-c7e3486246): the Filigree *classic*
+entity-association route is transport-open and does not verify ``X-Weft-*``.
+Legis therefore does **not** emit transport-HMAC headers on Filigree binds. The
+app-level ``binding_signature`` still travels in the JSON body and remains the
+governance attestation; integrity rests on loopback/TLS transport and on legis's
+own ``BindingLedger`` (the authoritative, locally-verifiable record), not on a
+sibling checking a transport signature.
 """
 
 from __future__ import annotations
