@@ -34,9 +34,10 @@ CLAUDE.md
 # Loomweave — code-archaeology index/cache + config
 .loomweave/
 loomweave.yaml
-# Wardline — scanner cache + config
+# Wardline — scanner cache + config + transient scan output
 .wardline/
 wardline.yaml
+findings.jsonl
 # Legis — local audit/scratch databases + their SQLite WAL sidecars
 # (audit data is never committed) and local working dir / config
 *.db
