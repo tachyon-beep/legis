@@ -58,8 +58,11 @@ class LoomweaveIdentity(Protocol):
     def lineage(self, sei: str) -> list[dict[str, Any]]: ...
 
 
-# The Weft-component transport-HMAC scheme is shared with the Filigree channel;
-# both delegate to ``weft_signing`` so the wire format has a single definition
+# The Weft-component transport-HMAC scheme is used by the LIVE Loomweave
+# channel only — it delegates to ``weft_signing`` so the wire format has a
+# single definition. The Filigree channel is transport-open since G11 (it no
+# longer signs requests; its governance attestation rides the JSON body and is
+# verified by the local BindingLedger), so it does NOT share this scheme.
 # (the module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
 # internal transport and existing call sites stable).
 _json_body_bytes = weft_body_bytes

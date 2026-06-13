@@ -92,45 +92,7 @@ def test_client_rejects_unsafe_base_urls():
             HttpFiligreeClient(url)
 
 
-# --- Q-M4: Weft-component HMAC on the Filigree transport ---
-
-def test_sign_filigree_request_is_deterministic_and_namespaced():
-    from legis.filigree.client import sign_filigree_request
-
-    headers = sign_filigree_request(
-        b"weft-key", "POST", "https://filigree/api/issue/ISSUE-1/entity-associations",
-        {"entity_id": "loomweave:eid:abc", "content_hash": "h", "actor": "legis"},
-        timestamp=1_700_000_000, nonce="cafef00d",
-    )
-    assert headers["X-Weft-Component"].startswith("filigree:")
-    assert headers["X-Weft-Timestamp"] == "1700000000"
-    assert headers["X-Weft-Nonce"] == "cafef00d"
-    # Stable for the same inputs; sensitive to the body.
-    again = sign_filigree_request(
-        b"weft-key", "POST", "https://filigree/api/issue/ISSUE-1/entity-associations",
-        {"entity_id": "loomweave:eid:abc", "content_hash": "h", "actor": "legis"},
-        timestamp=1_700_000_000, nonce="cafef00d",
-    )
-    assert again == headers
-    tampered = sign_filigree_request(
-        b"weft-key", "POST", "https://filigree/api/issue/ISSUE-1/entity-associations",
-        {"entity_id": "loomweave:eid:abc", "content_hash": "TAMPERED", "actor": "legis"},
-        timestamp=1_700_000_000, nonce="cafef00d",
-    )
-    assert tampered["X-Weft-Component"] != headers["X-Weft-Component"]
-
-
-def test_filigree_hmac_key_from_env(monkeypatch):
-    from legis.filigree.client import filigree_hmac_key_from_env
-
-    monkeypatch.delenv("LEGIS_FILIGREE_HMAC_KEY", raising=False)
-    monkeypatch.delenv("LEGIS_HMAC_KEY", raising=False)
-    assert filigree_hmac_key_from_env() is None
-    monkeypatch.setenv("LEGIS_HMAC_KEY", "shared")
-    assert filigree_hmac_key_from_env() is None
-    monkeypatch.setenv("LEGIS_FILIGREE_HMAC_KEY", "channel")
-    assert filigree_hmac_key_from_env() is None
-
+# --- G11: the Filigree transport is open (unsigned) ---
 
 def test_real_transport_does_not_emit_dead_hmac_headers(monkeypatch):
     # G11: Filigree's classic entity-association route is transport-open, so the
@@ -149,7 +111,7 @@ def test_real_transport_does_not_emit_dead_hmac_headers(monkeypatch):
     monkeypatch.setenv("LEGIS_FILIGREE_HMAC_KEY", "legacy-channel")
     monkeypatch.setenv("LEGIS_HMAC_KEY", "shared")
 
-    client = HttpFiligreeClient("https://filigree.example", hmac_key=b"weft-key")
+    client = HttpFiligreeClient("https://filigree.example")
     client.attach(
         "ISSUE-1",
         "loomweave:eid:abc",
@@ -190,7 +152,7 @@ def test_wire_body_is_stable_compact_json_but_unsigned(monkeypatch):
 
     monkeypatch.setattr(client_mod, "_open_no_redirect", fake_open_no_redirect)
 
-    c = HttpFiligreeClient("https://filigree.example", hmac_key=b"ignored")
+    c = HttpFiligreeClient("https://filigree.example")
     c.attach("ISSUE-1", "loomweave:eid:abc", "h", actor="legis")
 
     assert captured["data"] == client_mod._json_body_bytes(
@@ -206,20 +168,8 @@ def test_wire_body_is_stable_compact_json_but_unsigned(monkeypatch):
 # reviewer cares about, and the unsigned-transport seam tied to Q-M4) ---
 
 def test_json_body_bytes_none_is_empty():
-    # A None body signs and sends zero bytes (the body-hash is over b"").
+    # A None body sends zero bytes (the stable-compact-JSON helper maps None->b"").
     assert client_mod._json_body_bytes(None) == b""
-
-
-def test_path_and_query_includes_query_string():
-    # The signed message commits to path AND query; a verifier that dropped the
-    # query would compute a different signature, so the query must be carried.
-    assert (
-        client_mod._path_and_query("https://filigree/api/entity-associations?entity_id=x")
-        == "/api/entity-associations?entity_id=x"
-    )
-    # No query -> bare path; empty path -> "/".
-    assert client_mod._path_and_query("https://filigree/api/x") == "/api/x"
-    assert client_mod._path_and_query("https://filigree") == "/"
 
 
 def test_urllib_fetch_wraps_transport_error(monkeypatch):

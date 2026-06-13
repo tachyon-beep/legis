@@ -14,13 +14,16 @@ Wardline; routing a transport body through it would change every signed
 request's bytes. The wire transport MUST send exactly ``weft_body_bytes(body)``
 and a verifier MUST recanonicalize identically before hashing.
 
-Verification posture (G11, weft-c7e3486246): the Filigree *classic*
-entity-association route is transport-open and does not verify ``X-Weft-*``.
-Legis therefore does **not** emit transport-HMAC headers on Filigree binds. The
-app-level ``binding_signature`` still travels in the JSON body and remains the
-governance attestation; integrity rests on loopback/TLS transport and on legis's
-own ``BindingLedger`` (the authoritative, locally-verifiable record), not on a
-sibling checking a transport signature.
+Per-channel posture (the one place a future third channel reads before deciding
+signed-vs-open):
+  * Loomweave SEI channel — **signed**: emits + (server-side) verifies X-Weft-*.
+  * Filigree classic entity-association channel — **transport-open** since G11
+    (weft-c7e3486246): the route does not verify X-Weft-*, so Legis does **not**
+    emit transport-HMAC headers on Filigree binds. The app-level
+    ``binding_signature`` still travels in the JSON body and remains the
+    governance attestation; integrity rests on loopback/TLS transport and on
+    legis's own ``BindingLedger`` (the authoritative, locally-verifiable
+    record), not on a sibling checking a transport signature.
 """
 
 from __future__ import annotations

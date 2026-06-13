@@ -24,11 +24,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from legis.weft_signing import (
-    sign_weft_request,
-    weft_body_bytes,
-    weft_path_and_query,
-)
+from legis.weft_signing import weft_body_bytes
 
 Fetch = Callable[[str, str, "dict | None"], dict]
 
@@ -42,41 +38,11 @@ class FiligreeError(RuntimeError):
 MAX_RESPONSE_BYTES = 1_000_000
 
 
-# The module-level ``_json_body_bytes`` / ``_path_and_query`` aliases keep the
-# internal transport and existing call sites stable. Filigree does not emit
-# ``X-Weft-*`` headers by default (G11), but the helper below is retained as a
-# legacy/conformance seam for the shared HMAC formula.
+# The ``_json_body_bytes`` alias keeps the internal transport call site stable.
+# Filigree's classic entity-association route is transport-open (G11): this
+# client does not sign requests, so the X-Weft-* HMAC formula lives solely in
+# ``weft_signing`` for the LIVE Loomweave channel.
 _json_body_bytes = weft_body_bytes
-_path_and_query = weft_path_and_query
-
-
-def sign_filigree_request(
-    key: bytes,
-    method: str,
-    url: str,
-    body: dict | None,
-    *,
-    timestamp: int,
-    nonce: str,
-) -> dict[str, str]:
-    """Legacy Weft-component HMAC headers for a legis->Filigree request.
-
-    The live ``HttpFiligreeClient`` intentionally does not call this helper
-    because Filigree's classic route does not verify ``X-Weft-*``. It remains a
-    deterministic formula helper for historical vectors and future verifier work.
-    """
-    return sign_weft_request(
-        "filigree", key, method, url, body, timestamp=timestamp, nonce=nonce
-    )
-
-
-def filigree_hmac_key_from_env() -> bytes | None:
-    """Retired Filigree transport-HMAC resolver.
-
-    Kept as a compatibility shim for callers that imported it before G11. The
-    Filigree bind route is transport-open, so no env var enables request signing.
-    """
-    return None
 
 
 @runtime_checkable
@@ -174,16 +140,11 @@ class HttpFiligreeClient:
         base_url: str,
         *,
         fetch: Fetch | None = None,
-        hmac_key: bytes | None = None,
     ) -> None:
         self._base = _validate_base_url(base_url)
-        if fetch is not None:
-            self._fetch = fetch
-        else:
-            # ``hmac_key`` is accepted for backward-compatible constructor shape
-            # but deliberately ignored: Filigree classic HTTP is transport-open.
-            _ = hmac_key
-            self._fetch = self._transport_fetch
+        # Filigree's classic entity-association route is transport-open (G11):
+        # there is no request-signing key, so none is accepted.
+        self._fetch = fetch if fetch is not None else self._transport_fetch
 
     def _transport_fetch(self, method: str, url: str, body: dict | None) -> dict:
         return _urllib_fetch(method, url, body, {})
