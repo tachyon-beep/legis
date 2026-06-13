@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,10 @@ from legis.store.audit_store import AuditStore
 ORACLE_PATH = Path(__file__).parent / "fixtures" / "sei-conformance-oracle.json"
 
 
+@lru_cache(maxsize=1)
 def _load_oracle() -> dict:
+    # Read+parse once per run: _scenario() calls this ~8x and the fixture is
+    # immutable for the session.
     return json.loads(ORACLE_PATH.read_text(encoding="utf-8"))
 
 
