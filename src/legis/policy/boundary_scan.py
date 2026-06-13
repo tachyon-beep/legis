@@ -41,6 +41,17 @@ def scan_policy_boundaries(
 
     for file_path in sorted(scan_root.rglob("*.py")):
         display_path = _display_path(file_path, repo)
+        # Fail-degraded, never fail-dead (dogfood-4 A2 / federation rec #3): one
+        # hostile file (e.g. lacuna's nesting_bomb.py — a deep BinOp chain that
+        # exhausts the parser stack, or a deep attribute/expression tree that
+        # parses but exhausts the NodeVisitor walk) must not kill the whole run.
+        # Skip it, flag it as a finding so the gate still sees it, and keep
+        # scanning. Same posture as loomweave's LMWV-PY-TOO-COMPLEX. We guard the
+        # whole resource-exhaustion class (RecursionError on the C stack,
+        # MemoryError on a pathological literal) across read/parse/walk in one
+        # place — _coerce_literal at line ~225 already catches MemoryError, so a
+        # memory-bomb specimen must degrade here the same way rather than
+        # fail-dead the gate.
         try:
             source = file_path.read_text(encoding="utf-8")
             module = ast.parse(source, filename=str(file_path))
@@ -55,19 +66,14 @@ def scan_policy_boundaries(
                 )
             )
             continue
-        except RecursionError:
+        except (RecursionError, MemoryError):
             findings.append(_too_complex_finding(display_path))
             continue
 
-        # Fail-degraded, never fail-dead (dogfood-4 A2 / federation rec #3): one
-        # hostile file (e.g. lacuna's nesting_bomb.py) must not kill the whole
-        # run with a RecursionError — skip it, flag it as a finding so the gate
-        # sees it, and keep scanning. Same posture as loomweave's
-        # LMWV-PY-TOO-COMPLEX.
         try:
             visitor = _BoundaryVisitor(source, file_path, display_path, repo, repo_resolved)
             visitor.visit(module)
-        except RecursionError:
+        except (RecursionError, MemoryError):
             findings.append(_too_complex_finding(display_path))
             continue
         findings.extend(visitor.findings)

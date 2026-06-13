@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 from legis.policy.boundary_scan import scan_policy_boundaries
@@ -560,18 +561,25 @@ def test_scan_and_runtime_gate_agree_on_a_shared_corpus(tmp_path: Path) -> None:
         )
 
 
-def test_hostile_nesting_degrades_per_file_and_scan_continues(tmp_path: Path) -> None:
-    """Dogfood-4 A2 / federation rec #3 (fail-degraded, never fail-dead): one
-    hostile file (lacuna's nesting_bomb class) must not kill the whole run with
-    a RecursionError. It becomes a POLICY_BOUNDARY_FILE_TOO_COMPLEX finding and
-    the sibling file is still scanned."""
-    src = tmp_path / "src"
-    src.mkdir()
-    # Same shape as lacuna's specimen: a deep left-leaning BinOp chain PARSES
-    # fine but blows the recursive NodeVisitor walk.
+def _write_sibling_boundary(src: Path) -> None:
+    """A detectable sibling: a @policy_boundary with no test_ref yields a
+    POLICY_BOUNDARY_TEST_REF_MISSING finding *iff* the file is actually scanned.
+    Used to prove the scan continued past a hostile file (G4)."""
+    _write_boundary_subject(src, test_ref=None, test_fingerprint="pinned")
+
+
+def test_parse_bomb_degrades_per_file_and_scan_continues(tmp_path: Path) -> None:
+    """Dogfood-4 A2 / federation rec #3 (fail-degraded, never fail-dead): a deep
+    left-leaning BinOp chain exhausts the *parser* stack (ast.parse raises
+    RecursionError). It must become a POLICY_BOUNDARY_FILE_TOO_COMPLEX finding,
+    not kill the run — and the sibling @policy_boundary file is still scanned
+    and reported (proves the scan continued past the bomb)."""
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    # A deep BinOp chain blows ast.parse at the default recursion limit.
     bomb = "BOMB = " + "+".join(["1"] * 20000) + "\n"
     (src / "nesting_bomb.py").write_text(bomb, encoding="utf-8")
-    (src / "ordinary.py").write_text("def fine():\n    return 1\n", encoding="utf-8")
+    _write_sibling_boundary(src)
 
     findings = scan_policy_boundaries(src, repo_root=tmp_path)
 
@@ -580,3 +588,70 @@ def test_hostile_nesting_degrades_per_file_and_scan_continues(tmp_path: Path) ->
     assert len(too_complex) == 1, f"expected exactly one degrade finding, got {rule_ids}"
     assert too_complex[0].file_path.endswith("nesting_bomb.py")
     assert "skipped" in too_complex[0].reason
+    # Scan must have continued: the sibling boundary was actually scanned.
+    sibling = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_TEST_REF_MISSING"]
+    assert len(sibling) == 1, f"sibling file was not scanned; got {rule_ids}"
+    assert sibling[0].file_path.endswith("subject.py")
+
+
+def test_visitor_walk_bomb_degrades_per_file_and_scan_continues(tmp_path: Path) -> None:
+    """Drives the *visitor-walk* degrade path (boundary_scan.py lines after the
+    parse guard), distinct from the parse-stack path above. A deep attribute
+    chain (a.b.b.b…) PARSES fine but blows the recursive NodeVisitor walk; the
+    file must degrade to POLICY_BOUNDARY_FILE_TOO_COMPLEX and the sibling
+    @policy_boundary is still scanned and reported."""
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    # Sanity-check the shape: this source parses but blows the visitor walk.
+    walk_bomb = "BOMB = a" + ".b" * 5000 + "\n"
+    ast.parse(walk_bomb)  # parses fine at the default recursion limit
+    (src / "walk_bomb.py").write_text(walk_bomb, encoding="utf-8")
+    _write_sibling_boundary(src)
+
+    findings = scan_policy_boundaries(src, repo_root=tmp_path)
+
+    rule_ids = {f.rule_id for f in findings}
+    too_complex = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_FILE_TOO_COMPLEX"]
+    assert len(too_complex) == 1, f"expected exactly one degrade finding, got {rule_ids}"
+    assert too_complex[0].file_path.endswith("walk_bomb.py")
+    assert "skipped" in too_complex[0].reason
+    # Scan must have continued past the walk-bomb: sibling boundary was scanned.
+    sibling = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_TEST_REF_MISSING"]
+    assert len(sibling) == 1, f"sibling file was not scanned; got {rule_ids}"
+    assert sibling[0].file_path.endswith("subject.py")
+
+
+def test_memory_exhaustion_degrades_per_file_and_scan_continues(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """G2: a memory-exhausting specimen (MemoryError on read/parse/walk) must
+    degrade the same way a RecursionError does, not fail-dead the whole gate
+    (_coerce_literal already catches MemoryError; the per-file guard must too).
+    We inject MemoryError at ast.parse for the bomb file only and assert the
+    sibling is still scanned."""
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    (src / "mem_bomb.py").write_text("X = 1\n", encoding="utf-8")
+    _write_sibling_boundary(src)
+
+    import legis.policy.boundary_scan as bscan
+
+    real_parse = bscan.ast.parse
+
+    def fake_parse(source, *args, **kwargs):
+        filename = kwargs.get("filename") or (args[0] if args else "")
+        if "mem_bomb.py" in str(filename):
+            raise MemoryError("simulated literal blowup")
+        return real_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(bscan.ast, "parse", fake_parse)
+
+    findings = scan_policy_boundaries(src, repo_root=tmp_path)
+
+    rule_ids = {f.rule_id for f in findings}
+    too_complex = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_FILE_TOO_COMPLEX"]
+    assert len(too_complex) == 1, f"MemoryError should degrade, not fail-dead; got {rule_ids}"
+    assert too_complex[0].file_path.endswith("mem_bomb.py")
+    # Scan must have continued past the memory bomb.
+    sibling = [f for f in findings if f.rule_id == "POLICY_BOUNDARY_TEST_REF_MISSING"]
+    assert len(sibling) == 1, f"sibling file was not scanned; got {rule_ids}"
