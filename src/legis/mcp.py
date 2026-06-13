@@ -274,6 +274,20 @@ def _schema(required: list[str], properties: dict[str, dict[str, Any]]) -> dict[
     }
 
 
+def _one_of(variants: list[dict[str, Any]]) -> dict[str, Any]:
+    """A discriminated-outcome outputSchema.
+
+    MCP requires every tool's outputSchema to declare ``"type": "object"`` at the
+    top level — Claude Code's zod validator rejects the ENTIRE tools/list (all 21
+    tools vanish from the session) when any tool omits it (dogfood-4 A6). A bare
+    ``{"oneOf": [...]}`` omits it. Routing every discriminated schema through this
+    helper makes the bug unrepresentable: the top-level ``"type": "object"`` is
+    injected here, in one place, instead of being a literal line each call site
+    must remember. The variants all describe objects, so the type is sound.
+    """
+    return {"type": "object", "oneOf": variants}
+
+
 # The uniform error envelope (structuredContent of every isError:true result,
 # built by _tool_error). One shared definition rather than a per-tool clause:
 # tools' outputSchema declarations describe SUCCESS payloads only; clients
@@ -358,13 +372,10 @@ def tool_definitions() -> list[dict[str, Any]]:
         "judge_model": nullable_string,
         "judge_rationale": nullable_string,
     }
-    # MCP requires outputSchema's top level to declare "type": "object" — clients
-    # (Claude Code's zod validator) reject the ENTIRE tools/list when any tool
-    # omits it, vanishing all 21 tools from the session (dogfood-4 A6). The oneOf
-    # variants below all describe objects, so the top-level type is sound.
-    override_submit_out = {
-        "type": "object",
-        "oneOf": [
+    # Discriminated-outcome schema: _one_of injects the mandatory top-level
+    # "type": "object" (see its docstring / dogfood-4 A6).
+    override_submit_out = _one_of(
+        [
             _schema(
                 ["outcome", "cell", "seq", "note"],
                 {
@@ -433,7 +444,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 },
             ),
         ]
-    }
+    )
     routed_item = {
         "type": "object",
         "additionalProperties": False,
@@ -450,10 +461,9 @@ def tool_definitions() -> list[dict[str, Any]]:
             "surfaced": boolean,
         },
     }
-    # Top-level "type": "object" required — see override_submit_out note (A6).
-    scan_route_out = {
-        "type": "object",
-        "oneOf": [
+    # Discriminated-outcome schema: _one_of injects the top-level type (A6).
+    scan_route_out = _one_of(
+        [
             _schema(
                 ["outcome", "routed", "artifact_status"],
                 {
@@ -466,7 +476,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                 },
             ),
         ]
-    }
+    )
     rename_item = _schema(
         ["commit_sha", "old_path", "new_path", "similarity", "old_blob", "new_blob"],
         {

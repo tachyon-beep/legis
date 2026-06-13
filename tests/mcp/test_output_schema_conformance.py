@@ -112,6 +112,29 @@ def test_every_output_schema_declares_top_level_object_type():
         )
 
 
+def test_one_of_helper_always_injects_top_level_object_type():
+    """G9: the _one_of helper makes the dogfood-4 A6 bug unrepresentable — a
+    discriminated-outcome schema cannot omit the top-level ``"type": "object"``
+    because the helper injects it. Every tool whose outputSchema carries a
+    ``oneOf`` must be built through _one_of (not a bare dict literal), so a future
+    discriminated-outcome tool inherits the fix automatically."""
+    from legis.mcp import _one_of, tool_definitions
+
+    # The helper unconditionally injects the type, whatever variants it is given.
+    assert _one_of([{"type": "object"}])["type"] == "object"
+    assert _one_of([])["type"] == "object"
+
+    # And every oneOf outputSchema in the live catalog carries it (i.e. none was
+    # hand-rolled as a bare {"oneOf": [...]} that could regress).
+    for tool in tool_definitions():
+        schema = tool["outputSchema"]
+        if "oneOf" in schema:
+            assert schema.get("type") == "object", (
+                f"{tool['name']} has a oneOf outputSchema without top-level "
+                f"type 'object' — route it through _one_of()"
+            )
+
+
 def test_error_envelope_is_a_shared_schema_and_errors_conform():
     from legis.mcp import ERROR_ENVELOPE_SCHEMA, _tool_error
 
