@@ -2,7 +2,7 @@
 
 ## Summary
 
-Legis is the planned fourth Weft product. It is responsible for project change provenance and the git/CI common operating picture. (The authoritative federation roster and axiom live in the Weft hub at `~/weft/doctrine.md`; this "fourth product" framing is Legis's own self-description, consistent with the hub's roster ruling.)
+Legis is a shipped, admitted Weft product (`1.0.0`). It is responsible for project change provenance and the git/CI common operating picture. (The authoritative federation roster and axiom live in the Weft hub at `~/weft/doctrine.md`; this charter is Legis's own self-description, consistent with the hub's roster ruling.)
 
 ## Authority boundary
 
@@ -65,6 +65,6 @@ Legis becomes the common operating picture for project change and governance whi
   plainly `agent_id`, so this is an honesty/documentation gap, not a false
   assertion. (Surfaced in the 2026-06 lacuna dogfood as finding C3.)
 
-## Near-term scope
+## Status
 
-The initial repository is documentation-first. It should make the intended role reviewable before runtime implementation starts.
+Legis is at `1.0.0` — shipped, admitted to the federation, and runtime-implemented (`serve`, the MCP surface, and the CI gates are all live). This charter records the role the implementation fills; it is no longer a pre-implementation design sketch. For what Legis does *not* yet guarantee, see the **Known governance gaps** above — the open item there (verified write authorship) is the honest limit on the current `1.0.0` story, not a closed one.

@@ -84,10 +84,6 @@ preloaded fonts resolve under a normal origin.
   doctrine) link to blobs under `foundryside-dev/weft/blob/main/`.
 - External links carry an `↗` affordance and open in a new tab.
 
-**Caveat:** `legis` lives under the `tachyon-beep` org today; the
-`foundryside-dev/legis` links 404 until the repo migrates (as intended) — the
-same migration caveat the hub site carries.
-
 ## Notes
 
 - Content-complete with JavaScript disabled: every section, all four 2×2 cells,
